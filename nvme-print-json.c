@@ -229,7 +229,10 @@ static void json_nvme_id_ns(struct nvme_id_ns *ns, unsigned int nsid,
 
 		json_object_add_value_int(psd, "max_power",
 			le16_to_cpu(ctrl->psd[i].mp));
-		json_object_add_value_int(psd, "flags", ctrl->psd[i].flags);
+		json_object_add_value_int(psd, "max_power_scale",
+			ctrl->psd[i].flags & 0x1);
+		json_object_add_value_int(psd, "non-operational_state",
+			(ctrl->psd[i].flags & 0x2) >> 1);
 		json_object_add_value_uint(psd, "entry_lat",
 			le32_to_cpu(ctrl->psd[i].enlat));
 		json_object_add_value_uint(psd, "exit_lat",
@@ -2378,8 +2381,8 @@ static void json_nvme_id_uuid_list(const struct nvme_id_uuid_list *uuid_list)
 
 	root = json_create_object();
 	entries = json_create_array();
-	/* The 0th entry is reserved */
-	for (i = 1; i < NVME_ID_UUID_LIST_MAX; i++) {
+
+	for (i = 0; i < NVME_ID_UUID_LIST_MAX; i++) {
 		__u8 uuid[NVME_UUID_LEN];
 		struct json_object *entry = json_create_object();
 

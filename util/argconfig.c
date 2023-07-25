@@ -41,6 +41,7 @@
 #include <stdarg.h>
 #include <string.h>
 #include <stdbool.h>
+#include <locale.h>
 
 static const char *append_usage_str = "";
 
@@ -177,15 +178,6 @@ static int argconfig_parse_type(struct argconfig_commandline_options *s, struct 
 		if (errno || optarg == endptr)
 			ret = argconfig_error("integer", option[index].name, optarg);
 		break;
-	case CFG_BOOL: {
-		int tmp = strtol(optarg, &endptr, 0);
-
-		if (errno || tmp < 0 || tmp > 1 || optarg == endptr)
-			ret = argconfig_error("0 or 1", option[index].name, optarg);
-		else
-			*((int *)value) = tmp;
-		break;
-	}
 	case CFG_BYTE:
 		ret = argconfig_parse_byte(option[index].name, optarg, (uint8_t *)value);
 		break;
@@ -335,6 +327,16 @@ static bool argconfig_check_output_format_json(struct argconfig_commandline_opti
 	return false;
 }
 
+static bool argconfig_check_human_readable(struct argconfig_commandline_options *s)
+{
+	for (; s && s->option; s++) {
+		if (!strcmp(s->option, "human-readable") && s->config_type == CFG_FLAG)
+			return s->seen;
+	}
+
+	return false;
+}
+
 int argconfig_parse(int argc, char *argv[], const char *program_desc,
 		    struct argconfig_commandline_options *options)
 {
@@ -418,6 +420,9 @@ int argconfig_parse(int argc, char *argv[], const char *program_desc,
 
 	if (argconfig_check_output_format_json(options))
 		argconfig_output_format_json(true);
+
+	if (!argconfig_check_human_readable(options))
+		setlocale(LC_ALL, "C");
 
 out:
 	free(short_opts);

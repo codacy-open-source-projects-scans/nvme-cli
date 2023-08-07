@@ -980,6 +980,8 @@ static void stdout_subsystem(nvme_root_t r, bool show_ana)
 			       nvme_subsystem_get_nqn(s));
 			printf("%*s   hostnqn=%s\n", len, " ",
 			       nvme_host_get_hostnqn(nvme_subsystem_get_host(s)));
+			printf("%*s   iopolicy=%s\n", len, " ",
+			       nvme_subsystem_get_iopolicy(s));
 			printf("\\\n");
 
 			if (!show_ana || !stdout_subsystem_multipath(s))
@@ -2993,7 +2995,7 @@ static void stdout_nvm_id_ns(struct nvme_nvm_id_ns *nvm_ns, unsigned int nsid,
 					pif == 1 ? "32b Guard" : "16b Guard",
 					pif, sts, i == (ns->flbas & 0xf) ? in_use : "");
 		else
-			printf("elbaf %2d : pif:%d lbads:%-2d %s\n", i,
+			printf("elbaf %2d : pif:%d sts:%-2d %s\n", i,
 				pif, sts, i == (ns->flbas & 0xf) ? in_use : "");
 	}
 }
@@ -4764,6 +4766,9 @@ static void stdout_subsystem_topology_multipath(nvme_subsystem_t s,
 
 	if (ranking == NVME_CLI_TOPO_NAMESPACE) {
 		nvme_subsystem_for_each_ns(s, n) {
+			if (!nvme_namespace_first_path(n))
+				continue;
+
 			printf(" +- ns %d\n", nvme_ns_get_nsid(n));
 			printf(" \\\n");
 
@@ -4856,6 +4861,8 @@ static void stdout_simple_topology(nvme_root_t r,
 			       nvme_subsystem_get_nqn(s));
 			printf("%*s   hostnqn=%s\n", len, " ",
 			       nvme_host_get_hostnqn(nvme_subsystem_get_host(s)));
+			printf("%*s   iopolicy=%s\n", len, " ",
+			       nvme_subsystem_get_iopolicy(s));
 			printf("\\\n");
 
 			if (nvme_is_multipath(s))

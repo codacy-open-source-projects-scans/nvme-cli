@@ -302,6 +302,12 @@ int nvme_cli_get_log_boot_partition(struct nvme_dev *dev, bool rae, __u8 lsp,
 	return do_admin_op(get_log_boot_partition, dev, rae, lsp, len, part);
 }
 
+int nvme_cli_get_log_phy_rx_eom(struct nvme_dev *dev, __u8 lsp, __u16 controller,
+				__u32 len, struct nvme_phy_rx_eom_log *part)
+{
+	return do_admin_op(get_log_phy_rx_eom, dev, lsp, controller, len, part);
+}
+
 int nvme_cli_get_log_discovery(struct nvme_dev *dev, bool rae,
 			       __u32 offset, __u32 len, void *log)
 {
@@ -423,3 +429,8 @@ int nvme_cli_security_receive(struct nvme_dev *dev,
 	return -ENODEV;
 }
 
+void nvme_cli_set_debug(struct nvme_dev *dev, bool set)
+{
+	if (dev->type == NVME_DEV_DIRECT)
+		nvme_set_debug(set);
+}

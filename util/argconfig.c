@@ -307,28 +307,6 @@ static int argconfig_parse_val(struct argconfig_commandline_options *s, struct o
 	return argconfig_parse_type(s, option, index);
 }
 
-bool argconfig_output_format_json(bool set)
-{
-	static bool output_format_json;
-
-	if (set)
-		output_format_json = true;
-
-	return output_format_json;
-}
-
-static bool argconfig_check_output_format_json(struct argconfig_commandline_options *s)
-{
-	for (; s && s->option; s++) {
-		if (strcmp(s->option, "output-format") || s->config_type != CFG_STRING)
-			continue;
-		if (!strcmp(*(char **)s->default_value, "json"))
-			return true;
-	}
-
-	return false;
-}
-
 static bool argconfig_check_human_readable(struct argconfig_commandline_options *s)
 {
 	for (; s && s->option; s++) {
@@ -379,14 +357,10 @@ int argconfig_parse(int argc, char *argv[], const char *program_desc,
 	}
 
 	long_opts[option_index].name = "help";
-	long_opts[option_index++].val = 'h';
-
-	long_opts[option_index].name = "json";
-	long_opts[option_index].val = 'j';
+	long_opts[option_index].val = 'h';
 
 	short_opts[short_index++] = '?';
-	short_opts[short_index++] = 'h';
-	short_opts[short_index] = 'j';
+	short_opts[short_index] = 'h';
 
 	optind = 0;
 	while ((c = getopt_long_only(argc, argv, short_opts, long_opts, &option_index)) != -1) {
@@ -396,8 +370,6 @@ int argconfig_parse(int argc, char *argv[], const char *program_desc,
 				ret = -EINVAL;
 				break;
 			}
-			if (c == 'j')
-				argconfig_output_format_json(true);
 			for (option_index = 0; option_index < options_count; option_index++) {
 				if (c == options[option_index].short_option)
 					break;
@@ -419,9 +391,6 @@ int argconfig_parse(int argc, char *argv[], const char *program_desc,
 		if (ret)
 			break;
 	}
-
-	if (argconfig_check_output_format_json(options))
-		argconfig_output_format_json(true);
 
 	if (!argconfig_check_human_readable(options))
 		setlocale(LC_ALL, "C");

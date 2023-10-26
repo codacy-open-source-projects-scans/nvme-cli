@@ -4,7 +4,7 @@ project(
     'nvme-cli', ['c'],
     meson_version: '>= 0.50.0',
     license: 'GPL-2.0-only',
-    version: '2.5',
+    version: '2.6',
     default_options: [
       'c_std=gnu99',
       'buildtype=debug',
@@ -48,7 +48,7 @@ conf.set('SYSCONFDIR', '"@0@"'.format(sysconfdir))
 conf.set('RUNDIR', '"@0@"'.format(rundir))
 
 # Check for libnvme availability
-libnvme_dep = dependency('libnvme', version: '>=1.5', required: true,
+libnvme_dep = dependency('libnvme', version: '>=1.6', required: true,
                          fallback : ['libnvme', 'libnvme_dep'])
 libnvme_mi_dep = dependency('libnvme-mi', required: true,
                          fallback : ['libnvme', 'libnvme_mi_dep'])
@@ -69,7 +69,7 @@ endif
 conf.set('CONFIG_JSONC', json_c_dep.found(), description: 'Is json-c available?')
 
 # Check for libhugetlbfs availability (optional)
-if cc.has_header('hugetlbfs.h')
+if not get_option('libhugetlbfs').disabled() and cc.has_header('hugetlbfs.h')
   libhugetlbfs_dep = cc.find_library('hugetlbfs',
                                      required : false)
 else
@@ -236,7 +236,7 @@ endforeach
 
 udev_files = [
   '70-nvmf-autoconnect.rules',
-  '71-nvmf-iopolicy-netapp.rules',
+  '71-nvmf-netapp.rules',
 ]
 
 foreach file : udev_files

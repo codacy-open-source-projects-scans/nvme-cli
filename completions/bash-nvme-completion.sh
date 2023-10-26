@@ -1342,7 +1342,7 @@ plugin_ocp_opts () {
 		"clear-pcie-correctable-error-counters")
 		opts+=" --no-uuid -n"
 			;;
-		"vs-fw-activate-history")
+		"fw-activate-history")
 		opts+=" --output-format= -o"
 			;;
 		"device-capability-log")
@@ -1477,7 +1477,7 @@ _nvme_subcmds () {
 		_cmds+=" $plugin"
 	done
 
-	cmds+=" version help"
+	_cmds+=" version help"
 
 	if [[ ${#words[*]} -lt 3 ]]; then
 		COMPREPLY+=( $(compgen -W "$_cmds" -- $cur ) )

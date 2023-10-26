@@ -8,8 +8,8 @@
 #include <ccan/list/list.h>
 
 typedef struct nvme_effects_log_node {
+	struct nvme_cmd_effects_log effects; /* needs to be first member because of alignment requirement. */
 	enum nvme_csi csi;
-	struct nvme_cmd_effects_log effects;
 	struct list_node node;
 } nvme_effects_log_node_t;
 
@@ -23,6 +23,7 @@ struct print_ops {
 	/* libnvme types.h print functions */
 	void (*ana_log)(struct nvme_ana_log *ana_log, const char *devname, size_t len);
 	void (*boot_part_log)(void *bp_log, const char *devname, __u32 size);
+	void (*phy_rx_eom_log)(struct nvme_phy_rx_eom_log *log, __u16 controller);
 	void (*ctrl_list)(struct nvme_ctrl_list *ctrl_list);
 	void (*ctrl_registers)(void *bar, bool fabrics);
 	void (*directive)(__u8 type, __u8 oper, __u16 spec, __u32 nsid, __u32 result, void *buf, __u32 len);
@@ -70,6 +71,7 @@ struct print_ops {
 	void (*smart_log)(struct nvme_smart_log *smart, unsigned int nsid, const char *devname);
 	void (*supported_cap_config_list_log)(struct nvme_supported_cap_config_list_log *cap_log);
 	void (*supported_log_pages)(struct nvme_supported_log_pages *support_log, const char *devname);
+	void (*zns_start_zone_list)(__u64 nr_zones, struct json_object **zone_list);
 	void (*zns_changed_zone_log)(struct nvme_zns_changed_zone_log *log);
 	void (*zns_finish_zone_list)(__u64 nr_zones, struct json_object *zone_list);
 	void (*zns_id_ctrl)(struct nvme_zns_id_ctrl *ctrl);
@@ -166,6 +168,8 @@ void nvme_show_resv_notif_log(struct nvme_resv_notification_log *resv,
 	const char *devname, enum nvme_print_flags flags);
 void nvme_show_boot_part_log(void *bp_log, const char *devname,
 	__u32 size, enum nvme_print_flags flags);
+void nvme_show_phy_rx_eom_log(struct nvme_phy_rx_eom_log *log,
+	__u16 controller, enum nvme_print_flags flags);
 void nvme_show_fid_support_effects_log(struct nvme_fid_supported_effects_log *fid_log,
 	const char *devname, enum nvme_print_flags flags);
 void nvme_show_mi_cmd_support_effects_log(struct nvme_mi_cmd_supported_effects_log *mi_cmd_log,
@@ -218,8 +222,12 @@ void nvme_show_nvm_id_ns(struct nvme_nvm_id_ns *nvm_ns, unsigned int nsid,
 						bool cap_only, enum nvme_print_flags flags);
 void nvme_show_zns_id_ns(struct nvme_zns_id_ns *ns,
 			 struct nvme_id_ns *id_ns, enum nvme_print_flags flags);
+void nvme_zns_start_zone_list(__u64 nr_zones, struct json_object **zone_list,
+			      enum nvme_print_flags flags);
 void nvme_show_zns_changed(struct nvme_zns_changed_zone_log *log,
 			   enum nvme_print_flags flags);
+void nvme_zns_finish_zone_list(__u64 nr_zones, struct json_object *zone_list,
+			       enum nvme_print_flags flags);
 void nvme_show_zns_report_zones(void *report, __u32 descs,
 				__u8 ext_size, __u32 report_size,
 				struct json_object *zone_list,

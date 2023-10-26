@@ -846,7 +846,7 @@ static int report_zones(int argc, char **argv, struct command *cmd, struct plugi
 	struct nvme_id_ns id_ns;
 	uint8_t lbaf;
 	__le64	zsze;
-	struct json_object *zone_list = 0;
+	struct json_object *zone_list = NULL;
 
 	struct config {
 		char *output_format;
@@ -949,7 +949,7 @@ static int report_zones(int argc, char **argv, struct command *cmd, struct plugi
 	log_len = sizeof(struct nvme_zone_report) + ((sizeof(struct nvme_zns_desc) * nr_zones_chunks) + (nr_zones_chunks * zdes));
 	report_size = log_len;
 
-	report = nvme_alloc(report_size, &huge);
+	report = nvme_alloc_huge(report_size, &huge);
 	if (!report) {
 		perror("alloc");
 		err = -ENOMEM;
@@ -957,10 +957,8 @@ static int report_zones(int argc, char **argv, struct command *cmd, struct plugi
 	}
 
 	offset = cfg.zslba;
-	if (flags & JSON)
-		zone_list = json_create_array();
-	else
-		printf("nr_zones: %"PRIu64"\n", (uint64_t)le64_to_cpu(total_nr_zones));
+
+	nvme_zns_start_zone_list(total_nr_zones, &zone_list, flags);
 
 	while (nr_zones_retrieved < nr_zones) {
 		if (nr_zones_retrieved >= nr_zones)
@@ -989,15 +987,9 @@ static int report_zones(int argc, char **argv, struct command *cmd, struct plugi
 		offset = le64_to_cpu(report->entries[nr_zones_chunks-1].zslba) + zsze;
 	}
 
-	if (flags & JSON) {
-		struct print_ops *ops;
+	nvme_zns_finish_zone_list(total_nr_zones, zone_list, flags);
 
-		ops = nvme_get_json_print_ops(flags);
-		if (ops)
-			ops->zns_finish_zone_list(total_nr_zones, zone_list);
-	}
-
-	nvme_free(report, huge);
+	nvme_free_huge(report, huge);
 
 free_buff:
 	free(buff);

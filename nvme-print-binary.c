@@ -63,6 +63,18 @@ static void binary_boot_part_log(void *bp_log, const char *devname,
 	d_raw((unsigned char *)bp_log, size);
 }
 
+static void binary_phy_rx_eom_log(struct nvme_phy_rx_eom_log *log,
+	__u16 controller)
+{
+	size_t len;
+	if (log->eomip == NVME_PHY_RX_EOM_COMPLETED)
+		len = log->hsize + log->dsize * log->nd;
+	else
+		len = log->hsize;
+
+	d_raw((unsigned char *)log, len);
+}
+
 static void binary_media_unit_stat_log(struct nvme_media_unit_stat_log *mus_log)
 {
 	 d_raw((unsigned char *)mus_log, sizeof(*mus_log));
@@ -286,13 +298,17 @@ static void binary_discovery_log(struct nvmf_discovery_log *log, int numrec)
 }
 
 static struct print_ops binary_print_ops = {
+	/* libnvme types.h print functions */
 	.ana_log			= binary_ana_log,
 	.boot_part_log			= binary_boot_part_log,
+	.phy_rx_eom_log			= binary_phy_rx_eom_log,
 	.ctrl_list			= binary_list_ctrl,
 	.ctrl_registers			= binary_ctrl_registers,
 	.directive			= binary_directive,
 	.discovery_log			= binary_discovery_log,
+	.effects_log_list		= NULL,
 	.endurance_group_event_agg_log	= binary_endurance_group_event_agg_log,
+	.endurance_group_list		= NULL,
 	.endurance_log			= binary_endurance_log,
 	.error_log			= binary_error_log,
 	.fdp_config_log			= binary_fdp_configs,
@@ -306,6 +322,7 @@ static struct print_ops binary_print_ops = {
 	.id_ctrl_nvm			= binary_id_ctrl_nvm,
 	.id_domain_list			= binary_id_domain_list,
 	.id_independent_id_ns		= binary_cmd_set_independent_id_ns,
+	.id_iocs			= NULL,
 	.id_ns				= binary_id_ns,
 	.id_ns_descs			= binary_id_ns_descs,
 	.id_ns_granularity_list		= binary_id_ns_granularity_list,
@@ -315,6 +332,7 @@ static struct print_ops binary_print_ops = {
 	.lba_status_log			= binary_lba_status_log,
 	.media_unit_stat_log		= binary_media_unit_stat_log,
 	.mi_cmd_support_effects_log	= binary_mi_cmd_support_effects_log,
+	.ns_list			= NULL,
 	.ns_list_log			= binary_changed_ns_list_log,
 	.nvm_id_ns			= binary_nvm_id_ns,
 	.persistent_event_log		= binary_persistent_event_log,
@@ -325,14 +343,35 @@ static struct print_ops binary_print_ops = {
 	.resv_report			= binary_resv_report,
 	.sanitize_log_page		= binary_sanitize_log,
 	.secondary_ctrl_list		= binary_list_secondary_ctrl,
+	.select_result			= NULL,
 	.self_test_log 			= binary_self_test_log,
+	.single_property		= NULL,
 	.smart_log			= binary_smart_log,
 	.supported_cap_config_list_log	= binary_supported_cap_config_log,
 	.supported_log_pages		= binary_supported_log,
+	.zns_start_zone_list		= NULL,
 	.zns_changed_zone_log		= binary_zns_changed,
+	.zns_finish_zone_list		= NULL,
 	.zns_id_ctrl			= binary_zns_id_ctrl,
 	.zns_id_ns			= binary_zns_id_ns,
 	.zns_report_zones		= binary_zns_report_zones,
+	.show_feature_fields		= NULL,
+	.id_ctrl_rpmbs			= NULL,
+	.lba_range			= NULL,
+	.lba_status_info		= NULL,
+
+	/* libnvme tree print functions */
+	.list_item			= NULL,
+	.list_items			= NULL,
+	.print_nvme_subsystem_list	= NULL,
+	.topology_ctrl			= NULL,
+	.topology_namespace		= NULL,
+
+	/* status and error messages */
+	.connect_msg			= NULL,
+	.show_message			= NULL,
+	.show_perror			= NULL,
+	.show_status			= NULL,
 };
 
 struct print_ops *nvme_get_binary_print_ops(enum nvme_print_flags flags)

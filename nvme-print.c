@@ -29,7 +29,7 @@ static struct print_ops *nvme_print_ops(enum nvme_print_flags flags)
 {
 	struct print_ops *ops = NULL;
 
-	if (flags & JSON)
+	if (flags & JSON || nvme_is_output_format_json())
 		ops = nvme_get_json_print_ops(flags);
 	else if (flags & BINARY)
 		ops = nvme_get_binary_print_ops(flags);
@@ -258,6 +258,12 @@ void nvme_show_boot_part_log(void *bp_log, const char *devname,
 	nvme_print(boot_part_log, flags, bp_log, devname, size);
 }
 
+void nvme_show_phy_rx_eom_log(struct nvme_phy_rx_eom_log *log, __u16 controller,
+	enum nvme_print_flags flags)
+{
+	nvme_print(phy_rx_eom_log, flags, log, controller);
+}
+
 void nvme_show_media_unit_stat_log(struct nvme_media_unit_stat_log *mus_log,
 				   enum nvme_print_flags flags)
 {
@@ -420,7 +426,7 @@ void nvme_show_status(int status)
 {
 	struct print_ops *ops;
 
-	if (argconfig_output_format_json(false))
+	if (nvme_is_output_format_json())
 		ops = nvme_print_ops(JSON);
 	else
 		ops =nvme_print_ops(0);
@@ -495,10 +501,22 @@ void nvme_show_list_ns(struct nvme_ns_list *ns_list, enum nvme_print_flags flags
 	nvme_print(ns_list, flags, ns_list);
 }
 
+void nvme_zns_start_zone_list(__u64 nr_zones, struct json_object **zone_list,
+			      enum nvme_print_flags flags)
+{
+	nvme_print(zns_start_zone_list, flags, nr_zones, zone_list);
+}
+
 void nvme_show_zns_changed(struct nvme_zns_changed_zone_log *log,
 			   enum nvme_print_flags flags)
 {
 	nvme_print(zns_changed_zone_log, flags, log);
+}
+
+void nvme_zns_finish_zone_list(__u64 nr_zones, struct json_object *zone_list,
+			       enum nvme_print_flags flags)
+{
+	nvme_print(zns_finish_zone_list, flags, nr_zones, zone_list);
 }
 
 const char *nvme_zone_type_to_string(__u8 cond)
@@ -658,12 +676,19 @@ const char *nvme_log_to_string(__u8 lid)
 	case NVME_LOG_LID_ENDURANCE_GROUP:		return "Endurance Group Information";
 	case NVME_LOG_LID_PREDICTABLE_LAT_NVMSET:	return "Predictable Latency Per NVM Set";
 	case NVME_LOG_LID_PREDICTABLE_LAT_AGG:		return "Predictable Latency Event Aggregate";
+	case NVME_LOG_LID_MEDIA_UNIT_STATUS:		return "Media Unit Status";
+	case NVME_LOG_LID_SUPPORTED_CAP_CONFIG_LIST:	return "Supported Capacity Configuration List";
 	case NVME_LOG_LID_ANA:				return "Asymmetric Namespace Access";
 	case NVME_LOG_LID_PERSISTENT_EVENT:		return "Persistent Event Log";
 	case NVME_LOG_LID_LBA_STATUS:			return "LBA Status Information";
 	case NVME_LOG_LID_ENDURANCE_GRP_EVT:		return "Endurance Group Event Aggregate";
 	case NVME_LOG_LID_FID_SUPPORTED_EFFECTS:	return "Feature Identifiers Supported and Effects";
+	case NVME_LOG_LID_MI_CMD_SUPPORTED_EFFECTS:	return "NVMe-MI Commands Supported and Effects";
 	case NVME_LOG_LID_BOOT_PARTITION:		return "Boot Partition";
+	case NVME_LOG_LID_FDP_CONFIGS:			return "FDP Configurations";
+	case NVME_LOG_LID_FDP_RUH_USAGE:		return "Reclaim Unit Handle Usage";
+	case NVME_LOG_LID_FDP_STATS:			return "FDP Statistics";
+	case NVME_LOG_LID_FDP_EVENTS:			return "FDP Events";
 	case NVME_LOG_LID_DISCOVER:			return "Discovery";
 	case NVME_LOG_LID_RESERVATION:			return "Reservation Notification";
 	case NVME_LOG_LID_SANITIZE:			return "Sanitize Status";
@@ -1029,7 +1054,7 @@ void nvme_show_message(bool error, const char *msg, ...)
 	va_list ap;
 	va_start(ap, msg);
 
-	if (argconfig_output_format_json(false))
+	if (nvme_is_output_format_json())
 		ops = nvme_print_ops(JSON);
 	else
 		ops = nvme_print_ops(0);
@@ -1048,7 +1073,7 @@ void nvme_show_perror(const char *msg)
 {
 	struct print_ops *ops;
 
-	if (argconfig_output_format_json(false))
+	if (nvme_is_output_format_json())
 		ops = nvme_print_ops(JSON);
 	else
 		ops = nvme_print_ops(0);

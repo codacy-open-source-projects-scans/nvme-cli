@@ -28,11 +28,23 @@ static struct print_ops stdout_print_ops;
 
 struct nvme_bar_cap {
 	__u16	mqes;
-	__u8	ams_cqr;
+	__u8	cqr:1;
+	__u8	ams:2;
+	__u8	rsvd19:5;
 	__u8	to;
-	__u16	bps_css_nssrs_dstrd;
-	__u8	mpsmax_mpsmin;
-	__u8	rsvd_crms_nsss_cmbs_pmrs;
+	__u16	dstrd:4;
+	__u16	nssrs:1;
+	__u16	css:8;
+	__u16	bps:1;
+	__u8	cps:2;
+	__u8	mpsmin:4;
+	__u8	mpsmax:4;
+	__u8	pmrs:1;
+	__u8	cmbs:1;
+	__u8	nsss:1;
+	__u8	crwms:1;
+	__u8	crims:1;
+	__u8	rsvd61:3;
 };
 
 static const char *subsys_key(const struct nvme_subsystem *s)
@@ -526,6 +538,7 @@ static void stdout_persistent_event_log(void *pevent_log_info,
 			break;
 		default:
 			printf("Reserved Event\n\n");
+			break;
 		}
 		offset += le16_to_cpu(pevent_entry_head->el);
 		printf("\n");
@@ -705,6 +718,112 @@ static void stdout_boot_part_log(void *bp_log, const char *devname,
 	printf("Active BPID: %u\n", (le32_to_cpu(hdr->bpinfo) >> 31) & 0x1);
 }
 
+static const char *eomip_to_string(__u8 eomip)
+{
+	const char *string;
+	switch (eomip) {
+	case NVME_PHY_RX_EOM_NOT_STARTED:
+		string = "Not Started";
+		break;
+	case NVME_PHY_RX_EOM_IN_PROGRESS:
+		string = "In Progress";
+		break;
+	case NVME_PHY_RX_EOM_COMPLETED:
+		string = "Completed";
+		break;
+	default:
+		string = "Unknown";
+		break;
+	}
+	return string;
+}
+
+static void stdout_phy_rx_eom_odp(uint8_t odp)
+{
+	__u8 rsvd = (odp >> 2) & 0x3F;
+	__u8 edfp = (odp >> 1) & 0x1;
+	__u8 pefp = odp & 0x1;
+
+	if (rsvd)
+		printf("  [7:2] : %#x\tReserved\n", rsvd);
+	printf("  [1:1] : %#x\tEye Data Field %sPresent\n",
+		edfp, edfp ? "" : "Not ");
+	printf("  [0:0] : %#x\tPrintable Eye Field %sPresent\n",
+		pefp, pefp ? "" : "Not ");
+}
+
+static void stdout_eom_printable_eye(struct nvme_eom_lane_desc *lane)
+{
+	char *eye = (char *)lane->eye_desc;
+	int i, j;
+	for (i = 0; i < lane->nrows; i++) {
+		for (j = 0; j < lane->ncols; j++)
+			printf("%c", eye[i * lane->ncols + j]);
+		printf("\n");
+	}
+}
+
+static void stdout_phy_rx_eom_descs(struct nvme_phy_rx_eom_log *log)
+{
+	void *p = log->descs;
+	int i;
+
+	for (i = 0; i < log->nd; i++) {
+		struct nvme_eom_lane_desc *desc = p;
+
+		printf("Measurement Status: %s\n",
+			desc->mstatus ? "Successful" : "Not Successful");
+		printf("Lane: %u\n", desc->lane);
+		printf("Eye: %u\n", desc->eye);
+		printf("Top: %u\n", le16_to_cpu(desc->top));
+		printf("Bottom: %u\n", le16_to_cpu(desc->bottom));
+		printf("Left: %u\n", le16_to_cpu(desc->left));
+		printf("Right: %u\n", le16_to_cpu(desc->right));
+		printf("Number of Rows: %u\n", le16_to_cpu(desc->nrows));
+		printf("Number of Columns: %u\n", le16_to_cpu(desc->ncols));
+		printf("Eye Data Length: %u\n", le16_to_cpu(desc->edlen));
+
+		if (log->odp & NVME_EOM_PRINTABLE_EYE_PRESENT)
+			stdout_eom_printable_eye(desc);
+
+		/* Eye Data field is vendor specific */
+
+		p += log->dsize;
+	}
+}
+
+static void stdout_phy_rx_eom_log(struct nvme_phy_rx_eom_log *log, __u16 controller)
+{
+	int human = stdout_print_ops.flags & VERBOSE;
+
+	printf("Physical Interface Receiver Eye Opening Measurement Log for controller ID: %u\n", controller);
+	printf("Log ID: %u\n", log->lid);
+	printf("EOM In Progress: %s\n", eomip_to_string(log->eomip));
+	printf("Header Size: %u\n", le16_to_cpu(log->hsize));
+	printf("Result Size: %u\n", le32_to_cpu(log->rsize));
+	printf("EOM Data Generation Number: %u\n", log->eomdgn);
+	printf("Log Revision: %u\n", log->lr);
+	printf("Optional Data Present: %u\n", log->odp);
+	if (human)
+		stdout_phy_rx_eom_odp(log->odp);
+	printf("Lanes: %u\n", log->lanes);
+	printf("Eyes Per Lane: %u\n", log->epl);
+	printf("Log Specific Parameter Field Copy: %u\n", log->lspfc);
+	printf("Link Information: %u\n", log->li);
+	printf("Log Specific Identifier Copy: %u\n", le16_to_cpu(log->lsic));
+	printf("Descriptor Size: %u\n", le32_to_cpu(log->dsize));
+	printf("Number of Descriptors: %u\n", le16_to_cpu(log->nd));
+	printf("Maximum Top Bottom: %u\n", le16_to_cpu(log->maxtb));
+	printf("Maximum Left Right: %u\n", le16_to_cpu(log->maxlr));
+	printf("Estimated Time for Good Quality: %u\n", le16_to_cpu(log->etgood));
+	printf("Estimated Time for Better Quality: %u\n", le16_to_cpu(log->etbetter));
+	printf("Estimated Time for Best Quality: %u\n", le16_to_cpu(log->etbest));
+
+	if (log->eomip == NVME_PHY_RX_EOM_COMPLETED) {
+		stdout_phy_rx_eom_descs(log);
+	}
+}
+
 static void stdout_media_unit_stat_log(struct nvme_media_unit_stat_log *mus_log)
 {
 	int i;
@@ -735,7 +854,7 @@ static void stdout_media_unit_stat_log(struct nvme_media_unit_stat_log *mus_log)
 static void stdout_fdp_config_fdpa(uint8_t fdpa)
 {
 	__u8 valid = (fdpa >> 7) & 0x1;
-	__u8 rsvd = (fdpa >> 5) >> 0x3;
+	__u8 rsvd = (fdpa >> 5) & 0x3;
 	__u8 fdpvwc = (fdpa >> 4) & 0x1;
 	__u8 rgif = fdpa & 0xf;
 
@@ -998,39 +1117,33 @@ static void stdout_subsystem_list(nvme_root_t r, bool show_ana)
 static void stdout_registers_cap(struct nvme_bar_cap *cap)
 {
 	printf("\tController Ready With Media Support (CRWMS): %s\n",
-		((cap->rsvd_crms_nsss_cmbs_pmrs & 0x08) >> 3) ? "Supported" : "Not Supported");
+	       cap->crwms ? "Supported" : "Not Supported");
 	printf("\tController Ready Independent of Media Support (CRIMS): %s\n",
-		((cap->rsvd_crms_nsss_cmbs_pmrs & 0x10) >> 4) ? "Supported" : "Not Supported");
+	       cap->crims ? "Supported" : "Not Supported");
+	printf("\tNVM Subsystem Shutdown Supported   (NSSS): %s\n", cap->nsss ? "Supported" : "Not Supported");
 	printf("\tController Memory Buffer Supported (CMBS): The Controller Memory Buffer is %s\n",
-		((cap->rsvd_crms_nsss_cmbs_pmrs & 0x02) >> 1) ? "Supported" :
-			"Not Supported");
+	       cap->cmbs ? "Supported" : "Not Supported");
 	printf("\tPersistent Memory Region Supported (PMRS): The Persistent Memory Region is %s\n",
-		(cap->rsvd_crms_nsss_cmbs_pmrs & 0x01) ? "Supported" : "Not Supported");
-	printf("\tMemory Page Size Maximum         (MPSMAX): %u bytes\n",
-		1 <<  (12 + ((cap->mpsmax_mpsmin & 0xf0) >> 4)));
-	printf("\tMemory Page Size Minimum         (MPSMIN): %u bytes\n",
-		1 <<  (12 + (cap->mpsmax_mpsmin & 0x0f)));
-	printf("\tBoot Partition Support              (BPS): %s\n",
-		(cap->bps_css_nssrs_dstrd & 0x2000) ? "Yes":"No");
+	       cap->pmrs ? "Supported" : "Not Supported");
+	printf("\tMemory Page Size Maximum         (MPSMAX): %u bytes\n", 1 << (12 + cap->mpsmax));
+	printf("\tMemory Page Size Minimum         (MPSMIN): %u bytes\n", 1 << (12 + cap->mpsmin));
+	printf("\tController Power Scope              (CPS): %s\n",
+	       !cap->cps ? "Not Reported" : cap->cps == 1 ? "Controller scope" :
+	       cap->cps == 2 ? "Domain scope" : "NVM subsystem scope");
+	printf("\tBoot Partition Support              (BPS): %s\n", cap->bps ? "Yes" : "No");
 	printf("\tCommand Sets Supported              (CSS): NVM command set is %s\n",
-		(cap->bps_css_nssrs_dstrd & 0x0020) ? "Supported" : "Not Supported");
+	       cap->css & 0x01 ? "Supported" : "Not Supported");
 	printf("\t                                           One or more I/O Command Sets are %s\n",
-		(cap->bps_css_nssrs_dstrd & 0x0800) ? "Supported" : "Not Supported");
+	       cap->css & 0x40 ? "Supported" : "Not Supported");
 	printf("\t                                           %s\n",
-		(cap->bps_css_nssrs_dstrd & 0x1000) ? "Only Admin Command Set Supported" :
-		"I/O Command Set is Supported");
-	printf("\tNVM Subsystem Reset Supported     (NSSRS): %s\n",
-		(cap->bps_css_nssrs_dstrd & 0x0010) ? "Yes":"No");
-	printf("\tDoorbell Stride                   (DSTRD): %u bytes\n",
-		1 << (2 + (cap->bps_css_nssrs_dstrd & 0x000f)));
-	printf("\tTimeout                              (TO): %u ms\n",
-		cap->to * 500);
+	       cap->css & 0x80 ? "Only Admin Command Set Supported" : "I/O Command Set is Supported");
+	printf("\tNVM Subsystem Reset Supported     (NSSRS): %s\n", cap->nssrs ? "Yes" : "No");
+	printf("\tDoorbell Stride                   (DSTRD): %u bytes\n", 1 << (2 + cap->dstrd));
+	printf("\tTimeout                              (TO): %u ms\n", cap->to * 500);
 	printf("\tArbitration Mechanism Supported     (AMS): Weighted Round Robin with Urgent Priority Class is %s\n",
-		(cap->ams_cqr & 0x02) ? "supported":"not supported");
-	printf("\tContiguous Queues Required          (CQR): %s\n",
-		(cap->ams_cqr & 0x01) ? "Yes":"No");
-	printf("\tMaximum Queue Entries Supported    (MQES): %u\n\n",
-		cap->mqes + 1);
+	       cap->ams & 0x02 ? "Supported" : "Not supported");
+	printf("\tContiguous Queues Required          (CQR): %s\n", cap->cqr ? "Yes" : "No");
+	printf("\tMaximum Queue Entries Supported    (MQES): %u\n\n", cap->mqes + 1);
 }
 
 static void stdout_registers_version(__u32 vs)
@@ -1054,6 +1167,7 @@ static void stdout_registers_cc_ams (__u8 ams)
 		break;
 	default:
 		printf("Reserved\n");
+		break;
 	}
 }
 
@@ -1072,13 +1186,14 @@ static void stdout_registers_cc_shn (__u8 shn)
 		break;
 	default:
 		printf("Reserved\n");
+		break;
 	}
 }
 
 static void stdout_registers_cc(__u32 cc)
 {
 	printf("\tController Ready Independent of Media Enable (CRIME): %s\n",
-		NVME_CC_CRIME(cc) ? "Enabled":"Disabled");
+		NVME_CC_CRIME(cc) ? "Enabled" : "Disabled");
 
 	printf("\tI/O Completion Queue Entry Size (IOCQES): %u bytes\n",
 		1 << ((cc & 0x00f00000) >> NVME_CC_IOCQES_SHIFT));
@@ -1093,7 +1208,7 @@ static void stdout_registers_cc(__u32 cc)
 		(cc & 0x00000070) == 0x60 ? "All supported I/O Command Sets" :
 		(cc & 0x00000070) == 0x70 ? "Admin Command Set only" : "Reserved");
 	printf("\tEnable                              (EN): %s\n\n",
-		(cc & 0x00000001) ? "Yes":"No");
+		(cc & 0x00000001) ? "Yes" : "No");
 }
 
 static void stdout_registers_csts_shst(__u8 shst)
@@ -1111,20 +1226,21 @@ static void stdout_registers_csts_shst(__u8 shst)
 		break;
 	default:
 		printf("Reserved\n");
+		break;
 	}
 }
 
 static void stdout_registers_csts(__u32 csts)
 {
 	printf("\tProcessing Paused               (PP): %s\n",
-		(csts & 0x00000020) ? "Yes":"No");
+		(csts & 0x00000020) ? "Yes" : "No");
 	printf("\tNVM Subsystem Reset Occurred (NSSRO): %s\n",
-		(csts & 0x00000010) ? "Yes":"No");
+		(csts & 0x00000010) ? "Yes" : "No");
 	stdout_registers_csts_shst((csts & 0x0000000c) >> 2);
 	printf("\tController Fatal Status        (CFS): %s\n",
-		(csts & 0x00000002) ? "True":"False");
+		(csts & 0x00000002) ? "True" : "False");
 	printf("\tReady                          (RDY): %s\n\n",
-		(csts & 0x00000001) ? "Yes":"No");
+		(csts & 0x00000001) ? "Yes" : "No");
 
 }
 
@@ -1154,28 +1270,28 @@ static void stdout_registers_cmbloc(__u32 cmbloc, __u32 cmbsz)
 		return;
 	}
 	printf("\tOffset                                                        (OFST): 0x%x (See cmbsz.szu for granularity)\n",
-			(cmbloc & 0xfffff000) >> 12);
+	       (cmbloc & 0xfffff000) >> 12);
 
 	printf("\tCMB Queue Dword Alignment                                     (CQDA): %d\n",
-			(cmbloc & 0x00000100) >> 8);
+	       (cmbloc & 0x00000100) >> 8);
 
 	printf("\tCMB Data Metadata Mixed Memory Support                      (CDMMMS): %s\n",
-			enforced[(cmbloc & 0x00000080) >> 7]);
+	       enforced[(cmbloc & 0x00000080) >> 7]);
 
 	printf("\tCMB Data Pointer and Command Independent Locations Support (CDPCILS): %s\n",
-			enforced[(cmbloc & 0x00000040) >> 6]);
+	       enforced[(cmbloc & 0x00000040) >> 6]);
 
 	printf("\tCMB Data Pointer Mixed Locations Support                    (CDPMLS): %s\n",
-			enforced[(cmbloc & 0x00000020) >> 5]);
+	       enforced[(cmbloc & 0x00000020) >> 5]);
 
 	printf("\tCMB Queue Physically Discontiguous Support                   (CQPDS): %s\n",
-			enforced[(cmbloc & 0x00000010) >> 4]);
+	       enforced[(cmbloc & 0x00000010) >> 4]);
 
 	printf("\tCMB Queue Mixed Memory Support                               (CQMMS): %s\n",
-			enforced[(cmbloc & 0x00000008) >> 3]);
+	       enforced[(cmbloc & 0x00000008) >> 3]);
 
 	printf("\tBase Indicator Register                                        (BIR): 0x%x\n\n",
-			(cmbloc & 0x00000007));
+	       (cmbloc & 0x00000007));
 }
 
 static void stdout_registers_cmbsz(__u32 cmbsz)
@@ -1184,20 +1300,19 @@ static void stdout_registers_cmbsz(__u32 cmbsz)
 		printf("\tController Memory Buffer feature is not supported\n\n");
 		return;
 	}
-	printf("\tSize                      (SZ): %u\n",
-		(cmbsz & 0xfffff000) >> 12);
+	printf("\tSize                      (SZ): %u\n", (cmbsz & 0xfffff000) >> 12);
 	printf("\tSize Units               (SZU): %s\n",
-		nvme_register_szu_to_string((cmbsz & 0x00000f00) >> 8));
+	       nvme_register_szu_to_string((cmbsz & 0x00000f00) >> 8));
 	printf("\tWrite Data Support       (WDS): Write Data and metadata transfer in Controller Memory Buffer is %s\n",
-			(cmbsz & 0x00000010) ? "Supported":"Not supported");
+	       (cmbsz & 0x00000010) ? "Supported" : "Not supported");
 	printf("\tRead Data Support        (RDS): Read Data and metadata transfer in Controller Memory Buffer is %s\n",
-			(cmbsz & 0x00000008) ? "Supported":"Not supported");
+	       (cmbsz & 0x00000008) ? "Supported" : "Not supported");
 	printf("\tPRP SGL List Support   (LISTS): PRP/SG Lists in Controller Memory Buffer is %s\n",
-			(cmbsz & 0x00000004) ? "Supported":"Not supported");
+	       (cmbsz & 0x00000004) ? "Supported" : "Not supported");
 	printf("\tCompletion Queue Support (CQS): Admin and I/O Completion Queues in Controller Memory Buffer is %s\n",
-			(cmbsz & 0x00000002) ? "Supported":"Not supported");
+	       (cmbsz & 0x00000002) ? "Supported" : "Not supported");
 	printf("\tSubmission Queue Support (SQS): Admin and I/O Submission Queues in Controller Memory Buffer is %s\n\n",
-			(cmbsz & 0x00000001) ? "Supported":"Not supported");
+	       (cmbsz & 0x00000001) ? "Supported" : "Not supported");
 }
 
 static void stdout_registers_bpinfo_brs(__u8 brs)
@@ -1218,6 +1333,7 @@ static void stdout_registers_bpinfo_brs(__u8 brs)
 		break;
 	default:
 		printf("Invalid\n");
+		break;
 	}
 }
 
@@ -1274,13 +1390,13 @@ static void stdout_registers_pmrcap(__u32 pmrcap)
 	printf("\tPersistent Memory Region Write Barrier Mechanisms (PMRWBM): %x\n",
 		(pmrcap & 0x00003c00) >> 10);
 	printf("\tPersistent Memory Region Time Units                (PMRTU): PMR time unit is %s\n",
-		(pmrcap & 0x00000300) >> 8 ? "minutes":"500 milliseconds");
+		(pmrcap & 0x00000300) >> 8 ? "minutes" : "500 milliseconds");
 	printf("\tBase Indicator Register                              (BIR): %x\n",
 		(pmrcap & 0x000000e0) >> 5);
 	printf("\tWrite Data Support                                   (WDS): Write data to the PMR is %s\n",
-		(pmrcap & 0x00000010) ? "supported":"not supported");
+		(pmrcap & 0x00000010) ? "supported" : "not supported");
 	printf("\tRead Data Support                                    (RDS): Read data from the PMR is %s\n",
-		(pmrcap & 0x00000008) ? "supported":"not supported");
+		(pmrcap & 0x00000008) ? "supported" : "not supported");
 }
 
 static void stdout_registers_pmrctl(__u32 pmrctl)
@@ -1299,7 +1415,7 @@ static void stdout_registers_pmrsts(__u32 pmrsts, __u32 pmrctl)
 		"The Persistent Memory Region is %s to process "\
 		"PCI Express memory read and write requests\n",
 			(pmrsts & 0x00000100) == 0 && (pmrctl & 0x00000001) ?
-				"READY":"Not Ready");
+				"READY" : "Not Ready");
 	printf("\tError                            (ERR): %x\n", (pmrsts & 0x000000ff));
 }
 
@@ -1308,7 +1424,7 @@ static void stdout_registers_pmrebs(__u32 pmrebs)
 	printf("\tPMR Elasticity Buffer Size Base  (PMRWBZ): %x\n", (pmrebs & 0xffffff00) >> 8);
 	printf("\tRead Bypass Behavior                     : memory reads not conflicting with memory writes "\
 	       "in the PMR Elasticity Buffer %s bypass those memory writes\n",
-	       (pmrebs & 0x00000010) ? "SHALL":"MAY");
+	       (pmrebs & 0x00000010) ? "SHALL" : "MAY");
 	printf("\tPMR Elasticity Buffer Size Units (PMRSZU): %s\n",
 		nvme_register_pmr_pmrszu_to_string(pmrebs & 0x0000000f));
 }
@@ -1519,33 +1635,27 @@ static void stdout_single_property(int offset, uint64_t value64)
 		printf("cap : %"PRIx64"\n", value64);
 		stdout_registers_cap((struct nvme_bar_cap *)&value64);
 		break;
-
 	case NVME_REG_VS:
 		printf("version : %x\n", value32);
 		stdout_registers_version(value32);
 		break;
-
 	case NVME_REG_CC:
 		printf("cc : %x\n", value32);
 		stdout_registers_cc(value32);
 		break;
-
 	case NVME_REG_CSTS:
 		printf("csts : %x\n", value32);
 		stdout_registers_csts(value32);
 		break;
-
 	case NVME_REG_NSSR:
 		printf("nssr : %x\n", value32);
 		printf("\tNVM Subsystem Reset Control (NSSRC): %u\n\n",
 			value32);
 		break;
-
 	case NVME_REG_CRTO:
 		printf("crto : %x\n", value32);
 		stdout_registers_crto(value32);
 		break;
-
 	default:
 		printf("unknown property: 0x%02x (%s), value: %"PRIx64"\n",
 			offset, nvme_register_to_string(offset), value64);
@@ -2680,19 +2790,17 @@ static void print_psd_workload(__u8 apw)
 		/* Unknown or not provided */
 		printf("-");
 		break;
-
 	case 1:
 		/* Extended idle period with burst of random write */
 		printf("1MiB 32 RW, 30s idle");
 		break;
-
 	case 2:
 		/* Heavy sequential writes */
 		printf("80K 128KiB SW");
 		break;
-
 	default:
 		printf("reserved");
+		break;
 	}
 }
 
@@ -2705,19 +2813,17 @@ static void print_ps_power_and_scale(__le16 ctr_power, __u8 scale)
 		/* Not reported for this power state */
 		printf("-");
 		break;
-
 	case NVME_PSD_PS_100_MICRO_WATT:
 		/* Units of 0.0001W */
 		printf("%01u.%04uW", power / 10000, power % 10000);
 		break;
-
 	case NVME_PSD_PS_10_MILLI_WATT:
 		/* Units of 0.01W */
 		printf("%01u.%02uW", power / 100, power % 100);
 		break;
-
 	default:
 		printf("reserved");
+		break;
 	}
 }
 
@@ -2914,6 +3020,7 @@ static void stdout_id_ctrl(struct nvme_id_ctrl *ctrl,
 	printf("maxdna    : %s\n",
 		uint128_t_to_l10n_string(le128_to_cpu(ctrl->maxdna)));
 	printf("maxcna    : %u\n", le32_to_cpu(ctrl->maxcna));
+	printf("oaqd      : %u\n", le32_to_cpu(ctrl->oaqd));
 	printf("subnqn    : %-.*s\n", (int)sizeof(ctrl->subnqn), ctrl->subnqn);
 	printf("ioccsz    : %u\n", le32_to_cpu(ctrl->ioccsz));
 	printf("iorcsz    : %u\n", le32_to_cpu(ctrl->iorcsz));
@@ -3149,6 +3256,11 @@ static void stdout_list_ns(struct nvme_ns_list *ns_list)
 	}
 }
 
+static void stdout_zns_start_zone_list(__u64 nr_zones, struct json_object **zone_list)
+{
+	printf("nr_zones: %"PRIu64"\n", (uint64_t)le64_to_cpu(nr_zones));
+}
+
 static void stdout_zns_changed(struct nvme_zns_changed_zone_log *log)
 {
 	uint16_t nrzid;
@@ -3206,8 +3318,7 @@ static void stdout_zns_report_zones(void *report, __u32 descs,
 				(uint64_t)le64_to_cpu(desc->zcap), nvme_zone_state_to_string(desc->zs >> 4),
 				nvme_zone_type_to_string(desc->zt));
 			stdout_zns_report_zone_attributes(desc->za, desc->zai);
-		}
-		else {
+		} else {
 			printf("SLBA: %#-10"PRIx64" WP: %#-10"PRIx64" Cap: %#-10"PRIx64" State: %#-4x Type: %#-4x Attrs: %#-4x AttrsInfo: %#-4x\n",
 				(uint64_t)le64_to_cpu(desc->zslba), (uint64_t)le64_to_cpu(desc->wp),
 				(uint64_t)le64_to_cpu(desc->zcap), desc->zs, desc->zt,
@@ -3228,9 +3339,8 @@ static void stdout_list_ctrl(struct nvme_ctrl_list *ctrl_list)
 	int i;
 
 	printf("num of ctrls present: %u\n", num);
-	for (i = 0; i < min(num, 2047); i++) {
+	for (i = 0; i < min(num, 2047); i++)
 		printf("[%4u]:%#x\n", i, le16_to_cpu(ctrl_list->identifier[i]));
-	}
 }
 
 static void stdout_id_nvmset(struct nvme_id_nvmset_list *nvmset,
@@ -3428,7 +3538,7 @@ static void stdout_id_iocs(struct nvme_id_iocs *iocs)
 {
 	__u16 i;
 
-	for (i = 0; i < 512; i++)
+	for (i = 0; i < ARRAY_SIZE(iocs->iocsc); i++)
 		if (iocs->iocsc[i])
 			printf("I/O Command Set Combination[%u]:%"PRIx64"\n", i,
 				(uint64_t)le64_to_cpu(iocs->iocsc[i]));
@@ -4047,7 +4157,7 @@ static void stdout_lba_range(struct nvme_lba_range_type *lbrt, int nr_ranges)
 		printf("\tslba       : %#"PRIx64"\n", le64_to_cpu(lbrt->entry[i].slba));
 		printf("\tnlb        : %#"PRIx64"\n", le64_to_cpu(lbrt->entry[i].nlb));
 		printf("\tguid       : ");
-		for (j = 0; j < 16; j++)
+		for (j = 0; j < ARRAY_SIZE(lbrt->entry[i].guid); j++)
 			printf("%02x", lbrt->entry[i].guid[j]);
 		printf("\n");
 	}
@@ -4060,15 +4170,15 @@ static void stdout_auto_pst(struct nvme_feat_auto_pst *apst)
 
 	printf( "\tAuto PST Entries");
 	printf("\t.................\n");
-	for (i = 0; i < 32; i++) {
+	for (i = 0; i < ARRAY_SIZE(apst->apst_entry); i++) {
 		value = le64_to_cpu(apst->apst_entry[i]);
 
 		printf("\tEntry[%2d]   \n", i);
 		printf("\t.................\n");
 		printf("\tIdle Time Prior to Transition (ITPT): %u ms\n",
-			(__u32)(value >> NVME_APST_ENTRY_ITPT_SHIFT) & NVME_APST_ENTRY_ITPT_MASK);
+		       (__u32)NVME_GET(value, APST_ENTRY_ITPT));
 		printf("\tIdle Transition Power State   (ITPS): %u\n",
-			(__u32)(value >> NVME_APST_ENTRY_ITPS_SHIFT ) & NVME_APST_ENTRY_ITPS_MASK);
+		       (__u32)NVME_GET(value, APST_ENTRY_ITPS));
 		printf("\t.................\n");
 	}
 }
@@ -4120,11 +4230,11 @@ static void stdout_directive_show_fields(__u8 dtype, __u8 doper,
 		case NVME_DIRECTIVE_RECEIVE_IDENTIFY_DOPER_PARAM:
 			printf("\tDirective support \n");
 			printf("\t\tIdentify Directive       : %s\n",
-				(*field & 0x1) ? "supported":"not supported");
+				(*field & 0x1) ? "supported" : "not supported");
 			printf("\t\tStream Directive         : %s\n",
-				(*field & 0x2) ? "supported":"not supported");
+				(*field & 0x2) ? "supported" : "not supported");
 			printf("\t\tData Placement Directive : %s\n",
-				(*field & 0x4) ? "supported":"not supported");
+				(*field & 0x4) ? "supported" : "not supported");
 			printf("\tDirective enabled \n");
 			printf("\t\tIdentify Directive       : %s\n",
 				(*(field + 32) & 0x1) ? "enabled" : "disabled");
@@ -4139,40 +4249,39 @@ static void stdout_directive_show_fields(__u8 dtype, __u8 doper,
 				(*(field + 32) & 0x2) ? "enabled" : "disabled");
 			printf("\t\tData Placement Directive : %s\n",
 				(*(field + 32) & 0x4) ? "enabled" : "disabled");
-
 			break;
 		default:
 			fprintf(stderr,
 				"invalid directive operations for Identify Directives\n");
+			break;
 		}
 		break;
 	case NVME_DIRECTIVE_DTYPE_STREAMS:
 		switch (doper) {
 		case NVME_DIRECTIVE_RECEIVE_STREAMS_DOPER_PARAM:
 			printf("\tMax Streams Limit                          (MSL): %u\n",
-				*(__u16 *) field);
+				*(__u16 *)field);
 			printf("\tNVM Subsystem Streams Available           (NSSA): %u\n",
-				*(__u16 *) (field + 2));
+				*(__u16 *)(field + 2));
 			printf("\tNVM Subsystem Streams Open                (NSSO): %u\n",
-				*(__u16 *) (field + 4));
+				*(__u16 *)(field + 4));
 			printf("\tNVM Subsystem Stream Capability           (NSSC): %u\n",
-				*(__u16 *) (field + 6));
+				*(__u16 *)(field + 6));
 			printf("\tStream Write Size (in unit of LB size)     (SWS): %u\n",
-				*(__u32 *) (field + 16));
+				*(__u32 *)(field + 16));
 			printf("\tStream Granularity Size (in unit of SWS)   (SGS): %u\n",
-				*(__u16 *) (field + 20));
+				*(__u16 *)(field + 20));
 			printf("\tNamespace Streams Allocated                (NSA): %u\n",
-				*(__u16 *) (field + 22));
+				*(__u16 *)(field + 22));
 			printf("\tNamespace Streams Open                     (NSO): %u\n",
-				*(__u16 *) (field + 24));
+				*(__u16 *)(field + 24));
 			break;
 		case NVME_DIRECTIVE_RECEIVE_STREAMS_DOPER_STATUS:
-			count = *(__u16 *) field;
-			printf("\tOpen Stream Count  : %u\n", *(__u16 *) field);
-			for ( i = 0; i < count; i++ ) {
+			count = *(__u16 *)field;
+			printf("\tOpen Stream Count  : %u\n", *(__u16 *)field);
+			for (i = 0; i < count; i++)
 				printf("\tStream Identifier %.6u : %u\n", i + 1,
-					*(__u16 *) (field + ((i + 1) * 2)));
-			}
+					*(__u16 *)(field + ((i + 1) * 2)));
 			break;
 		case NVME_DIRECTIVE_RECEIVE_STREAMS_DOPER_RESOURCE:
 			printf("\tNamespace Streams Allocated (NSA): %u\n",
@@ -4181,13 +4290,13 @@ static void stdout_directive_show_fields(__u8 dtype, __u8 doper,
 		default:
 			fprintf(stderr,
 				"invalid directive operations for Streams Directives\n");
+			break;
 		}
 		break;
 	default:
 		fprintf(stderr, "invalid directive type\n");
 		break;
 	}
-	return;
 }
 
 static void stdout_directive_show(__u8 type, __u8 oper, __u16 spec, __u32 nsid, __u32 result,
@@ -4218,26 +4327,25 @@ static void stdout_plm_config(struct nvme_plm_config *plmcfg)
 static void stdout_host_metadata(enum nvme_features_id fid,
 				 struct nvme_host_metadata *data)
 {
-       struct nvme_metadata_element_desc *desc = &data->descs[0];
-       int i;
-       char val[4096];
-       __u16 len;
+	struct nvme_metadata_element_desc *desc = &data->descs[0];
+	int i;
+	char val[4096];
+	__u16 len;
 
-       printf("\tNum Metadata Element Descriptors: %d\n", data->ndesc);
-       for (i = 0; i < data->ndesc; i++) {
-	       len = le16_to_cpu(desc->len);
-	       strncpy(val, (char *)desc->val, min(sizeof(val) - 1, len));
+	printf("\tNum Metadata Element Descriptors: %d\n", data->ndesc);
+	for (i = 0; i < data->ndesc; i++) {
+		len = le16_to_cpu(desc->len);
+		strncpy(val, (char *)desc->val, min(sizeof(val) - 1, len));
 
-	       printf("\tElement[%-3d]:\n", i);
-	       printf("\t\tType	    : 0x%02x (%s)\n", desc->type,
+		printf("\tElement[%-3d]:\n", i);
+		printf("\t\tType	    : 0x%02x (%s)\n", desc->type,
 		       nvme_host_metadata_type_to_string(fid, desc->type));
-	       printf("\t\tRevision : %d\n", desc->rev);
-	       printf("\t\tLength   : %d\n", len);
-	       printf("\t\tValue    : %s\n", val);
+		printf("\t\tRevision : %d\n", desc->rev);
+		printf("\t\tLength   : %d\n", len);
+		printf("\t\tValue    : %s\n", val);
 
-	       desc = (struct nvme_metadata_element_desc *)
-		       &desc->val[desc->len];
-       }
+		desc = (struct nvme_metadata_element_desc *)&desc->val[desc->len];
+	}
 }
 
 static void stdout_feature_show_fields(enum nvme_features_id fid,
@@ -4260,8 +4368,8 @@ static void stdout_feature_show_fields(enum nvme_features_id fid,
 		break;
 	case NVME_FEAT_FID_POWER_MGMT:
 		field = (result & 0x000000E0) >> 5;
-		printf("\tWorkload Hint (WH): %u - %s\n",  field, nvme_feature_wl_hints_to_string(field));
-		printf("\tPower State   (PS): %u\n",  result & 0x0000001f);
+		printf("\tWorkload Hint (WH): %u - %s\n", field, nvme_feature_wl_hints_to_string(field));
+		printf("\tPower State   (PS): %u\n", result & 0x0000001f);
 		break;
 	case NVME_FEAT_FID_LBA_RANGE:
 		field = result & 0x0000003f;
@@ -4281,56 +4389,56 @@ static void stdout_feature_show_fields(enum nvme_features_id fid,
 		break;
 	case NVME_FEAT_FID_ERR_RECOVERY:
 		printf("\tDeallocated or Unwritten Logical Block Error Enable (DULBE): %s\n",
-			((result & 0x00010000) >> 16) ? "Enabled":"Disabled");
+			((result & 0x00010000) >> 16) ? "Enabled" : "Disabled");
 		printf("\tTime Limited Error Recovery                          (TLER): %u ms\n",
 			(result & 0x0000ffff) * 100);
 		break;
 	case NVME_FEAT_FID_VOLATILE_WC:
-		printf("\tVolatile Write Cache Enable (WCE): %s\n", (result & 0x00000001) ? "Enabled":"Disabled");
+		printf("\tVolatile Write Cache Enable (WCE): %s\n", (result & 0x00000001) ? "Enabled" : "Disabled");
 		break;
 	case NVME_FEAT_FID_NUM_QUEUES:
 		printf("\tNumber of IO Completion Queues Allocated (NCQA): %u\n", ((result & 0xffff0000) >> 16) + 1);
-		printf("\tNumber of IO Submission Queues Allocated (NSQA): %u\n",  (result & 0x0000ffff) + 1);
+		printf("\tNumber of IO Submission Queues Allocated (NSQA): %u\n", (result & 0x0000ffff) + 1);
 		break;
 	case NVME_FEAT_FID_IRQ_COALESCE:
 		printf("\tAggregation Time     (TIME): %u usec\n", ((result & 0x0000ff00) >> 8) * 100);
-		printf("\tAggregation Threshold (THR): %u\n",  (result & 0x000000ff) + 1);
+		printf("\tAggregation Threshold (THR): %u\n", (result & 0x000000ff) + 1);
 		break;
 	case NVME_FEAT_FID_IRQ_CONFIG:
-		printf("\tCoalescing Disable (CD): %s\n", ((result & 0x00010000) >> 16) ? "True":"False");
-		printf("\tInterrupt Vector   (IV): %u\n",  result & 0x0000ffff);
+		printf("\tCoalescing Disable (CD): %s\n", ((result & 0x00010000) >> 16) ? "True" : "False");
+		printf("\tInterrupt Vector   (IV): %u\n", result & 0x0000ffff);
 		break;
 	case NVME_FEAT_FID_WRITE_ATOMIC:
-		printf("\tDisable Normal (DN): %s\n", (result & 0x00000001) ? "True":"False");
+		printf("\tDisable Normal (DN): %s\n", (result & 0x00000001) ? "True" : "False");
 		break;
 	case NVME_FEAT_FID_ASYNC_EVENT:
 		printf("\tDiscovery Log Page Change Notices                         : %s\n",
-			((result & 0x80000000) >> 31) ? "Send async event":"Do not send async event");
+			((result & 0x80000000) >> 31) ? "Send async event" : "Do not send async event");
 		printf("\tEndurance Group Event Aggregate Log Change Notices        : %s\n",
-			((result & 0x00004000) >> 14) ? "Send async event":"Do not send async event");
+			((result & 0x00004000) >> 14) ? "Send async event" : "Do not send async event");
 		printf("\tLBA Status Information Notices                            : %s\n",
-			((result & 0x00002000) >> 13) ? "Send async event":"Do not send async event");
+			((result & 0x00002000) >> 13) ? "Send async event" : "Do not send async event");
 		printf("\tPredictable Latency Event Aggregate Log Change Notices    : %s\n",
-			((result & 0x00001000) >> 12) ? "Send async event":"Do not send async event");
+			((result & 0x00001000) >> 12) ? "Send async event" : "Do not send async event");
 		printf("\tAsymmetric Namespace Access Change Notices                : %s\n",
-			((result & 0x00000800) >> 11) ? "Send async event":"Do not send async event");
+			((result & 0x00000800) >> 11) ? "Send async event" : "Do not send async event");
 		printf("\tTelemetry Log Notices                                     : %s\n",
-			((result & 0x00000400) >> 10) ? "Send async event":"Do not send async event");
+			((result & 0x00000400) >> 10) ? "Send async event" : "Do not send async event");
 		printf("\tFirmware Activation Notices                               : %s\n",
-			((result & 0x00000200) >> 9) ? "Send async event":"Do not send async event");
+			((result & 0x00000200) >> 9) ? "Send async event" : "Do not send async event");
 		printf("\tNamespace Attribute Notices                               : %s\n",
-			((result & 0x00000100) >> 8) ? "Send async event":"Do not send async event");
+			((result & 0x00000100) >> 8) ? "Send async event" : "Do not send async event");
 		printf("\tSMART / Health Critical Warnings                          : %s\n",
-			(result & 0x000000ff) ? "Send async event":"Do not send async event");
+			(result & 0x000000ff) ? "Send async event" : "Do not send async event");
 		break;
 	case NVME_FEAT_FID_AUTO_PST:
 		printf("\tAutonomous Power State Transition Enable (APSTE): %s\n",
-			(result & 0x00000001) ? "Enabled":"Disabled");
+			(result & 0x00000001) ? "Enabled" : "Disabled");
 		if (buf)
 			stdout_auto_pst((struct nvme_feat_auto_pst *)buf);
 		break;
 	case NVME_FEAT_FID_HOST_MEM_BUF:
-		printf("\tEnable Host Memory (EHM): %s\n", (result & 0x00000001) ? "Enabled":"Disabled");
+		printf("\tEnable Host Memory (EHM): %s\n", (result & 0x00000001) ? "Enabled" : "Disabled");
 		if (buf)
 			stdout_host_mem_buffer((struct nvme_host_mem_buf_attrs *)buf);
 		break;
@@ -4355,7 +4463,7 @@ static void stdout_feature_show_fields(enum nvme_features_id fid,
 		printf("\tRead Recovery Level (RRL): %u\n", result & 0xf);
 		break;
 	case NVME_FEAT_FID_PLM_CONFIG:
-		printf("\tPredictable Latency Window Enabled: %s\n", result & 0x1 ? "True":"False");
+		printf("\tPredictable Latency Window Enabled: %s\n", result & 0x1 ? "True" : "False");
 		if (buf)
 			stdout_plm_config((struct nvme_plm_config *)buf);
 		break;
@@ -4377,13 +4485,15 @@ static void stdout_feature_show_fields(enum nvme_features_id fid,
 		printf("\tEndurance Group Critical Warnings  : %u\n", (result >> 16) & 0xff);
 		break;
 	case NVME_FEAT_FID_IOCS_PROFILE:
-		printf("\tI/O Command Set Profile: %s\n", result & 0x1 ? "True":"False");
+		printf("\tI/O Command Set Profile: %s\n", result & 0x1 ? "True" : "False");
 		break;
 	case NVME_FEAT_FID_SPINUP_CONTROL:
 		printf("\tSpinup control feature Enabled: %s\n", (result & 1) ? "True" : "False");
 		break;
 	case NVME_FEAT_FID_ENH_CTRL_METADATA:
+		fallthrough;
 	case NVME_FEAT_FID_CTRL_METADATA:
+		fallthrough;
 	case NVME_FEAT_FID_NS_METADATA:
 		if (buf)
 			stdout_host_metadata(fid, (struct nvme_host_metadata *)buf);
@@ -4401,14 +4511,14 @@ static void stdout_feature_show_fields(enum nvme_features_id fid,
 		break;
 	case NVME_FEAT_FID_RESV_MASK:
 		printf("\tMask Reservation Preempted Notification  (RESPRE): %s\n",
-			((result & 0x00000008) >> 3) ? "True":"False");
+			((result & 0x00000008) >> 3) ? "True" : "False");
 		printf("\tMask Reservation Released Notification   (RESREL): %s\n",
-			((result & 0x00000004) >> 2) ? "True":"False");
+			((result & 0x00000004) >> 2) ? "True" : "False");
 		printf("\tMask Registration Preempted Notification (REGPRE): %s\n",
-			((result & 0x00000002) >> 1) ? "True":"False");
+			((result & 0x00000002) >> 1) ? "True" : "False");
 		break;
 	case NVME_FEAT_FID_RESV_PERSIST:
-		printf("\tPersist Through Power Loss (PTPL): %s\n", (result & 0x00000001) ? "True":"False");
+		printf("\tPersist Through Power Loss (PTPL): %s\n", (result & 0x00000001) ? "True" : "False");
 		break;
 	case NVME_FEAT_FID_WRITE_PROTECT:
 		printf("\tNamespace Write Protect: %s\n", nvme_ns_wp_cfg_to_string(result));
@@ -4428,6 +4538,7 @@ static void stdout_feature_show_fields(enum nvme_features_id fid,
 			printf("\t%-53s: %sEnabled\n", nvme_fdp_event_to_string(d->evt),
 					d->evta & 0x1 ? "" : "Not ");
 		}
+		break;
 	default:
 		break;
 	}
@@ -4452,6 +4563,8 @@ static void stdout_lba_status(struct nvme_lba_status *list,
 			"\tspecified in the Action Type field over the\n"\
 			"\tnumber of logical blocks specified in the\n"\
 			"\tRange Length field\n");
+		break;
+	default:
 		break;
 	}
 
@@ -4539,7 +4652,7 @@ static bool stdout_simple_ns(const char *name, void *arg)
 	n = htable_ns_get(&res->ht_n, name);
 	stdout_list_item(n);
 
-        return true;
+	return true;
 }
 
 static void stdout_simple_list(nvme_root_t r)
@@ -4549,9 +4662,9 @@ static void stdout_simple_list(nvme_root_t r)
 	nvme_resources_init(r, &res);
 
 	printf("%-21s %-21s %-20s %-40s %-10s %-26s %-16s %-8s\n",
-	    "Node", "Generic", "SN", "Model", "Namespace", "Usage", "Format", "FW Rev");
+	       "Node", "Generic", "SN", "Model", "Namespace", "Usage", "Format", "FW Rev");
 	printf("%-.21s %-.21s %-.20s %-.40s %-.10s %-.26s %-.16s %-.8s\n",
-		dash, dash, dash, dash, dash, dash, dash, dash);
+	       dash, dash, dash, dash, dash, dash, dash, dash);
 	strset_iterate(&res.namespaces, stdout_simple_ns, &res);
 
 	nvme_resources_free(&res);
@@ -4939,8 +5052,10 @@ static void stdout_connect_msg(nvme_ctrl_t c)
 }
 
 static struct print_ops stdout_print_ops = {
+	/* libnvme types.h print functions */
 	.ana_log			= stdout_ana_log,
 	.boot_part_log			= stdout_boot_part_log,
+	.phy_rx_eom_log			= stdout_phy_rx_eom_log,
 	.ctrl_list			= stdout_list_ctrl,
 	.ctrl_registers			= stdout_ctrl_registers,
 	.directive			= stdout_directive_show,
@@ -4959,7 +5074,6 @@ static struct print_ops stdout_print_ops = {
 	.fw_log				= stdout_fw_log,
 	.id_ctrl			= stdout_id_ctrl,
 	.id_ctrl_nvm			= stdout_id_ctrl_nvm,
-	.id_ctrl_rpmbs			= stdout_id_ctrl_rpmbs,
 	.id_domain_list			= stdout_id_domain_list,
 	.id_independent_id_ns		= stdout_cmd_set_independent_id_ns,
 	.id_iocs			= stdout_id_iocs,
@@ -4968,9 +5082,7 @@ static struct print_ops stdout_print_ops = {
 	.id_ns_granularity_list		= stdout_id_ns_granularity_list,
 	.id_nvmset_list			= stdout_id_nvmset,
 	.id_uuid_list			= stdout_id_uuid_list,
-	.lba_range			= stdout_lba_range,
 	.lba_status			= stdout_lba_status,
-	.lba_status_info		= stdout_lba_status_info,
 	.lba_status_log			= stdout_lba_status_log,
 	.media_unit_stat_log		= stdout_media_unit_stat_log,
 	.mi_cmd_support_effects_log	= stdout_mi_cmd_support_effects_log,
@@ -4987,25 +5099,33 @@ static struct print_ops stdout_print_ops = {
 	.secondary_ctrl_list		= stdout_list_secondary_ctrl,
 	.select_result			= stdout_select_result,
 	.self_test_log 			= stdout_self_test_log,
-	.show_feature_fields		= stdout_feature_show_fields,
 	.single_property		= stdout_single_property,
 	.smart_log			= stdout_smart_log,
 	.supported_cap_config_list_log	= stdout_supported_cap_config_log,
 	.supported_log_pages		= stdout_supported_log,
+	.zns_start_zone_list		= stdout_zns_start_zone_list,
 	.zns_changed_zone_log		= stdout_zns_changed,
+	.zns_finish_zone_list		= NULL,
 	.zns_id_ctrl			= stdout_zns_id_ctrl,
 	.zns_id_ns			= stdout_zns_id_ns,
 	.zns_report_zones		= stdout_zns_report_zones,
+	.show_feature_fields		= stdout_feature_show_fields,
+	.id_ctrl_rpmbs			= stdout_id_ctrl_rpmbs,
+	.lba_range			= stdout_lba_range,
+	.lba_status_info		= stdout_lba_status_info,
 
+	/* libnvme tree print functions */
+	.list_item			= stdout_list_item,
 	.list_items			= stdout_list_items,
 	.print_nvme_subsystem_list	= stdout_subsystem_list,
 	.topology_ctrl			= stdout_topology_ctrl,
 	.topology_namespace		= stdout_topology_namespace,
 
-	.show_status			= stdout_status,
+	/* status and error messages */
+	.connect_msg			= stdout_connect_msg,
 	.show_message			= stdout_message,
 	.show_perror			= stdout_perror,
-	.connect_msg			= stdout_connect_msg,
+	.show_status			= stdout_status,
 };
 
 struct print_ops *nvme_get_stdout_print_ops(enum nvme_print_flags flags)

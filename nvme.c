@@ -299,7 +299,7 @@ int map_log_level(int verbose, bool quiet)
 	int log_level;
 
 	/*
-	 * LOG_NOTICE is unsued thus the user has to provide two 'v' for getting
+	 * LOG_NOTICE is unused thus the user has to provide two 'v' for getting
 	 * any feedback at all. Thus skip this level
 	 */
 	verbose++;
@@ -901,7 +901,7 @@ static int get_telemetry_log(int argc, char **argv, struct command *cmd,
 	};
 
 	NVME_ARGS(opts, cfg,
-		  OPT_FILE("output-file",     'o', &cfg.file_name, fname),
+		  OPT_FILE("output-file",     'O', &cfg.file_name, fname),
 		  OPT_UINT("host-generate",   'g', &cfg.host_gen,  hgen),
 		  OPT_FLAG("controller-init", 'c', &cfg.ctrl_init, cgen),
 		  OPT_UINT("data-area",       'd', &cfg.data_area, dgen),
@@ -1908,27 +1908,22 @@ static int get_phy_rx_eom_log(int argc, char **argv, struct command *cmd,
 	struct config {
 		__u8	lsp;
 		__u16	controller;
-		char	*output_format;
 	};
 
 	struct config cfg = {
 		.lsp		= 0,
 		.controller	= NVME_LOG_LSI_NONE,
-		.output_format	= "normal",
 	};
 
-	OPT_ARGS(opts) = {
-		OPT_BYTE("lsp",          's', &cfg.lsp,           lsp),
-		OPT_SHRT("controller",   'c', &cfg.controller,    controller),
-		OPT_FMT("output-format", 'o', &cfg.output_format, output_format),
-		OPT_END()
-	};
+	NVME_ARGS(opts, cfg,
+		  OPT_BYTE("lsp",        's', &cfg.lsp,        lsp),
+		  OPT_SHRT("controller", 'c', &cfg.controller, controller));
 
 	err = parse_and_open(&dev, argc, argv, desc, opts);
 	if (err)
 		return err;
 
-	err = flags = validate_output_format(cfg.output_format);
+	err = flags = validate_output_format(output_format_val);
 	if (err < 0) {
 		nvme_show_error("Invalid output format");
 		return err;
@@ -1954,8 +1949,8 @@ static int get_phy_rx_eom_log(int argc, char **argv, struct command *cmd,
 	/* Just read measurement, take given action when fetching full log */
 	lsp_tmp = cfg.lsp & 0xf3;
 
-	err = nvme_cli_get_log_phy_rx_eom(dev, lsp_tmp, cfg.controller,
-		phy_rx_eom_log_len, phy_rx_eom_log);
+	err = nvme_cli_get_log_phy_rx_eom(dev, lsp_tmp, cfg.controller, phy_rx_eom_log_len,
+					  phy_rx_eom_log);
 	if (err) {
 		if (err > 0)
 			nvme_show_status(err);
@@ -1965,20 +1960,19 @@ static int get_phy_rx_eom_log(int argc, char **argv, struct command *cmd,
 		return err;
 	}
 
-	if (phy_rx_eom_log->eomip == NVME_PHY_RX_EOM_COMPLETED) {
+	if (phy_rx_eom_log->eomip == NVME_PHY_RX_EOM_COMPLETED)
 		phy_rx_eom_log_len = le16_to_cpu(phy_rx_eom_log->hsize) +
 				     le32_to_cpu(phy_rx_eom_log->dsize) *
 				     le16_to_cpu(phy_rx_eom_log->nd);
-	} else {
+	else
 		phy_rx_eom_log_len = le16_to_cpu(phy_rx_eom_log->hsize);
-	}
 
 	phy_rx_eom_log = nvme_realloc(phy_rx_eom_log, phy_rx_eom_log_len);
 	if (!phy_rx_eom_log)
 		return -ENOMEM;
 
-	err = nvme_cli_get_log_phy_rx_eom(dev, cfg.lsp, cfg.controller,
-		phy_rx_eom_log_len, phy_rx_eom_log);
+	err = nvme_cli_get_log_phy_rx_eom(dev, cfg.lsp, cfg.controller, phy_rx_eom_log_len,
+					  phy_rx_eom_log);
 	if (!err)
 		nvme_show_phy_rx_eom_log(phy_rx_eom_log, cfg.controller, flags);
 	else if (err > 0)
@@ -2323,7 +2317,7 @@ static int get_log(int argc, char **argv, struct command *cmd, struct plugin *pl
 		  OPT_BYTE("log-id",       'i', &cfg.log_id,       log_id),
 		  OPT_UINT("log-len",      'l', &cfg.log_len,      log_len),
 		  OPT_UINT("aen",          'a', &cfg.aen,          aen),
-		  OPT_SUFFIX("lpo",        'o', &cfg.lpo,          lpo),
+		  OPT_SUFFIX("lpo",        'L', &cfg.lpo,          lpo),
 		  OPT_BYTE("lsp",          's', &cfg.lsp,          lsp),
 		  OPT_SHRT("lsi",          'S', &cfg.lsi,          lsi),
 		  OPT_FLAG("rae",          'r', &cfg.rae,          rae),
@@ -3119,7 +3113,7 @@ static int create_ns(int argc, char **argv, struct command *cmd, struct plugin *
 		  OPT_STR("ncap-si",       'C', &cfg.ncap_si,  ncap_si),
 		  OPT_FLAG("azr",          'z', &cfg.azr,      azr),
 		  OPT_UINT("rar",          'r', &cfg.rar,      rar),
-		  OPT_UINT("ror",          'o', &cfg.ror,      ror),
+		  OPT_UINT("ror",          'O', &cfg.ror,      ror),
 		  OPT_UINT("rnumzrwa",     'u', &cfg.rnumzrwa, rnumzrwa),
 		  OPT_LIST("phndls",       'p', &cfg.phndls,   phndls));
 
@@ -3391,7 +3385,7 @@ int __id_ctrl(int argc, char **argv, struct command *cmd, struct plugin *plugin,
 	};
 
 	NVME_ARGS(opts, cfg,
-		  OPT_FLAG("vendor-specific", 'v', &cfg.vendor_specific, vendor_specific),
+		  OPT_FLAG("vendor-specific", 'V', &cfg.vendor_specific, vendor_specific),
 		  OPT_FLAG("raw-binary",      'b', &cfg.raw_binary,      raw_identify),
 		  OPT_FLAG("human-readable",  'H', &cfg.human_readable,  human_readable_identify));
 
@@ -3708,7 +3702,7 @@ static int id_ns(int argc, char **argv, struct command *cmd, struct plugin *plug
 	NVME_ARGS(opts, cfg,
 		  OPT_UINT("namespace-id",    'n', &cfg.namespace_id,    namespace_id_desired),
 		  OPT_FLAG("force",             0, &cfg.force,           force),
-		  OPT_FLAG("vendor-specific", 'v', &cfg.vendor_specific, vendor_specific),
+		  OPT_FLAG("vendor-specific", 'V', &cfg.vendor_specific, vendor_specific),
 		  OPT_FLAG("raw-binary",      'b', &cfg.raw_binary,      raw_identify),
 		  OPT_FLAG("human-readable",  'H', &cfg.human_readable,  human_readable_identify));
 
@@ -4885,7 +4879,7 @@ static int fw_download(int argc, char **argv, struct command *cmd, struct plugin
 	NVME_ARGS(opts, cfg,
 		  OPT_FILE("fw",         'f', &cfg.fw,         fw),
 		  OPT_UINT("xfer",       'x', &cfg.xfer,       xfer),
-		  OPT_UINT("offset",     'o', &cfg.offset,     offset),
+		  OPT_UINT("offset",     'O', &cfg.offset,     offset),
 		  OPT_FLAG("progress",   'p', &cfg.progress,   progress),
 		  OPT_FLAG("ignore-ovr", 'i', &cfg.ignore_ovr, ignore_ovr));
 
@@ -5439,7 +5433,7 @@ static int get_property(int argc, char **argv, struct command *cmd, struct plugi
 	};
 
 	NVME_ARGS(opts, cfg,
-		  OPT_UINT("offset",         'o', &cfg.offset,         offset),
+		  OPT_UINT("offset",         'O', &cfg.offset,         offset),
 		  OPT_FLAG("human-readable", 'H', &cfg.human_readable, human_readable));
 
 	err = parse_and_open(&dev, argc, argv, desc, opts);
@@ -5490,8 +5484,8 @@ static int set_property(int argc, char **argv, struct command *cmd, struct plugi
 	};
 
 	NVME_ARGS(opts, cfg,
-		  OPT_UINT("offset", 'o', &cfg.offset, offset),
-		  OPT_UINT("value",  'v', &cfg.value,  value));
+		  OPT_UINT("offset", 'O', &cfg.offset, offset),
+		  OPT_UINT("value",  'V', &cfg.value,  value));
 
 	err = parse_and_open(&dev, argc, argv, desc, opts);
 	if (err)
@@ -5828,7 +5822,7 @@ static int set_feature(int argc, char **argv, struct command *cmd, struct plugin
 	NVME_ARGS(opts, cfg,
 		  OPT_UINT("namespace-id", 'n', &cfg.namespace_id, namespace_desired),
 		  OPT_BYTE("feature-id",   'f', &cfg.feature_id,   feature_id),
-		  OPT_SUFFIX("value",      'v', &cfg.value,        value),
+		  OPT_SUFFIX("value",      'V', &cfg.value,        value),
 		  OPT_UINT("cdw12",        'c', &cfg.cdw12,        cdw12),
 		  OPT_BYTE("uuid-index",   'U', &cfg.uuid_index,   uuid_index_specify),
 		  OPT_UINT("data-len",     'l', &cfg.data_len,     buf_len),
@@ -5881,16 +5875,18 @@ static int set_feature(int argc, char **argv, struct command *cmd, struct plugin
 		if (cfg.feature_id == NVME_FEAT_FID_TIMESTAMP && cfg.value) {
 			memcpy(buf, &cfg.value, NVME_FEAT_TIMESTAMP_DATA_SIZE);
 		} else {
-			if (strlen(cfg.file)) {
+			if (strlen(cfg.file))
 				ffd = open(cfg.file, O_RDONLY);
-				if (ffd <= 0) {
-					nvme_show_error("Failed to open file %s: %s",
-							cfg.file, strerror(errno));
-					return -EINVAL;
-				}
+			else
+				ffd = dup(STDIN_FILENO);
+
+			if (ffd < 0) {
+				nvme_show_error("Failed to open file %s: %s",
+						cfg.file, strerror(errno));
+				return -EINVAL;
 			}
 
-			err = read(ffd, (void *)buf, cfg.data_len);
+			err = read(ffd, buf, cfg.data_len);
 			if (err < 0) {
 				nvme_show_error("failed to read data buffer from input file: %s",
 						strerror(errno));
@@ -7110,7 +7106,7 @@ static int submit_io(int opcode, char *command, const char *desc, int argc, char
 	int mode = 0644;
 	__u16 control = 0, nblocks = 0;
 	__u32 dsmgmt = 0;
-	int logical_block_size = 0;
+	unsigned int logical_block_size = 0;
 	unsigned long long buffer_size = 0, mbuffer_size = 0;
 	bool huge;
 	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
@@ -7201,7 +7197,7 @@ static int submit_io(int opcode, char *command, const char *desc, int argc, char
 		  OPT_BYTE("dir-type",          'T', &cfg.dtype,             dtype_for_write),
 		  OPT_SHRT("dir-spec",          'S', &cfg.dspec,             dspec),
 		  OPT_BYTE("dsm",               'D', &cfg.dsmgmt,            dsm),
-		  OPT_FLAG("show-command",      'v', &cfg.show,              show),
+		  OPT_FLAG("show-command",      'V', &cfg.show,              show),
 		  OPT_FLAG("dry-run",           'w', &cfg.dry_run,           dry),
 		  OPT_FLAG("latency",           't', &cfg.latency,           latency),
 		  OPT_FLAG("force",               0, &cfg.force,             force));
@@ -7281,9 +7277,6 @@ static int submit_io(int opcode, char *command, const char *desc, int argc, char
 		goto close_mfd;
 	}
 
-	if (nvme_get_logical_block_size(dev_fd(dev), cfg.namespace_id, &logical_block_size) < 0)
-		goto close_mfd;
-
 	ns = nvme_alloc(sizeof(*ns));
 	if (!ns) {
 		err = -ENOMEM;
@@ -7300,12 +7293,13 @@ static int submit_io(int opcode, char *command, const char *desc, int argc, char
 	}
 
 	nvme_id_ns_flbas_to_lbaf_inuse(ns->flbas, &lba_index);
+	logical_block_size = 1 << ns->lbaf[lba_index].ds;
 	ms = ns->lbaf[lba_index].ms;
 	if (NVME_FLBAS_META_EXT(ns->flbas)) {
 		/*
-		 * No meta data is transfered for PRACT=1 and MD=8:
+		 * No meta data is transferred for PRACT=1 and MD=8:
 		 *   5.2.2.1 Protection Information and Write Commands
-		 *   5.2.2.2 Protection Informatio and Read Commands
+		 *   5.2.2.2 Protection Information and Read Commands
 		 */
 		if (!(cfg.prinfo == 0x1 && ms == 8))
 			logical_block_size += ms;
@@ -7325,7 +7319,7 @@ static int submit_io(int opcode, char *command, const char *desc, int argc, char
 		nblocks = ((buffer_size + (logical_block_size - 1)) / logical_block_size) - 1;
 
 		/* Update the data size based on the required block count */
-		buffer_size = (nblocks + 1) * logical_block_size;
+		buffer_size = ((unsigned long long)nblocks + 1) * logical_block_size;
 	}
 
 	buffer = nvme_alloc_huge(buffer_size, &huge);
@@ -7829,7 +7823,7 @@ static int capacity_mgmt(int argc, char **argv, struct command *cmd, struct plug
 	};
 
 	NVME_ARGS(opts, cfg,
-		  OPT_BYTE("operation",   'o', &cfg.operation,    operation),
+		  OPT_BYTE("operation",   'O', &cfg.operation,    operation),
 		  OPT_SHRT("element-id",  'i', &cfg.element_id,   element_id),
 		  OPT_UINT("cap-lower",   'l', &cfg.dw11,         cap_lower),
 		  OPT_UINT("cap-upper",   'u', &cfg.dw12,         cap_upper));
@@ -8036,7 +8030,7 @@ static int lockdown_cmd(int argc, char **argv, struct command *cmd, struct plugi
 	};
 
 	NVME_ARGS(opts, cfg,
-		  OPT_BYTE("ofi",	'o', &cfg.ofi,      ofi_desc),
+		  OPT_BYTE("ofi",	'O', &cfg.ofi,      ofi_desc),
 		  OPT_BYTE("ifc",	'f', &cfg.ifc,      ifc_desc),
 		  OPT_BYTE("prhbt",	'p', &cfg.prhbt,    prhbt_desc),
 		  OPT_BYTE("scp",	's', &cfg.scp,      scp_desc),
@@ -8172,7 +8166,7 @@ static int passthru(int argc, char **argv, bool admin,
 	};
 
 	NVME_ARGS(opts, cfg,
-		  OPT_BYTE("opcode",       'o', &cfg.opcode,       opcode),
+		  OPT_BYTE("opcode",       'O', &cfg.opcode,       opcode),
 		  OPT_BYTE("flags",        'f', &cfg.flags,        cflags),
 		  OPT_BYTE("prefill",      'p', &cfg.prefill,      prefill),
 		  OPT_SHRT("rsvd",         'R', &cfg.rsvd,         rsvd),
@@ -9007,7 +9001,7 @@ static int nvme_mi(int argc, char **argv, __u8 admin_opcode, const char *desc)
 	};
 
 	NVME_ARGS(opts, cfg,
-		  OPT_BYTE("opcode", 'o', &cfg.opcode, opcode),
+		  OPT_BYTE("opcode", 'O', &cfg.opcode, opcode),
 		  OPT_UINT("namespace-id", 'n', &cfg.namespace_id, namespace_desired),
 		  OPT_UINT("data-len", 'l', &cfg.data_len, data_len),
 		  OPT_UINT("nmimt", 'm', &cfg.nmimt, nmimt),

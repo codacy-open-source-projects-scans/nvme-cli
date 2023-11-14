@@ -222,6 +222,7 @@ endforeach
 systemd_files = [
   'nvmefc-boot-connections.service',
   'nvmf-autoconnect.service',
+  'nvmf-connect-nbft.service',
   'nvmf-connect.target',
   'nvmf-connect@.service',
 ]
@@ -235,6 +236,7 @@ foreach file : systemd_files
 endforeach
 
 udev_files = [
+  '65-persistent-net-nbft.rules',
   '70-nvmf-autoconnect.rules',
   '71-nvmf-netapp.rules',
 ]

@@ -4570,13 +4570,9 @@ static void get_feature_id_print(struct feat_cfg cfg, int err, __u32 result,
 
 	if (!err) {
 		if (!cfg.raw_binary || !buf) {
-			printf("get-feature:%#0*x (%s), %s value:%#0*x\n",
-			       cfg.feature_id ? 4 : 2, cfg.feature_id,
-			       nvme_feature_to_string(cfg.feature_id),
-			       nvme_select_to_string(cfg.sel), result ? 10 : 8,
-			       result);
+			nvme_feature_show(cfg.feature_id, cfg.sel, result);
 			if (cfg.sel == 3)
-				nvme_show_select_result(result);
+				nvme_show_select_result(cfg.feature_id, result);
 			else if (cfg.human_readable)
 				nvme_feature_show_fields(cfg.feature_id, result,
 							 buf);
@@ -4590,7 +4586,7 @@ static void get_feature_id_print(struct feat_cfg cfg, int err, __u32 result,
 		    !nvme_status_equals(status,  type, NVME_SC_INVALID_NS))
 			nvme_show_status(err);
 	} else {
-		fprintf(stderr, "get-feature: %s\n", nvme_strerror(errno));
+		nvme_show_error("get-feature: %s", nvme_strerror(errno));
 	}
 }
 
@@ -4653,14 +4649,11 @@ static int get_feature_ids(struct nvme_dev *dev, struct feat_cfg cfg)
 			continue;
 		if (!nvme_status_equals(status, type, NVME_SC_INVALID_NS))
 			break;
-		fprintf(stderr, "get-feature:%#0*x (%s): ",
-			cfg.feature_id ? 4 : 2, cfg.feature_id,
-			nvme_feature_to_string(cfg.feature_id));
-		nvme_show_status(err);
+		nvme_show_error_status(err, "get-feature:%#0*x (%s)", cfg.feature_id ? 4 : 2,
+				       cfg.feature_id, nvme_feature_to_string(cfg.feature_id));
 	}
 
-	if (feat_num == 1 &&
-	    nvme_status_equals(status, type, NVME_SC_INVALID_FIELD))
+	if (feat_num == 1 && nvme_status_equals(status, type, NVME_SC_INVALID_FIELD))
 		nvme_show_status(err);
 
 	return err;
@@ -4733,7 +4726,11 @@ static int get_feature(int argc, char **argv, struct command *cmd,
 		return -1;
 	}
 
+	nvme_show_init();
+
 	err = get_feature_ids(dev, cfg);
+
+	nvme_show_finish();
 
 	return err;
 }
@@ -8718,7 +8715,7 @@ static int gen_tls_key(int argc, char **argv, struct command *command, struct pl
 				nvme_show_error("Invalid secret '%s'", cfg.secret);
 				return -EINVAL;
 			}
-			if (i >= key_len) {
+			if (i >= key_len * 2) {
 				fprintf(stderr, "Skipping excess secret bytes\n");
 				break;
 			}

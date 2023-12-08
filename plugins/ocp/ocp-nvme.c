@@ -117,7 +117,6 @@ static int ocp_print_C3_log_normal(struct nvme_dev *dev,
 {
 	char ts_buf[128];
 	int i, j;
-	int pos = 0;
 
 	printf("-Latency Monitor/C3 Log Page Data-\n");
 	printf("  Controller   :  %s\n", dev->name);
@@ -141,6 +140,8 @@ static int ocp_print_C3_log_normal(struct nvme_dev *dev,
 	printf("  Active Threshold D                 %d ms\n",
 	       C3_ACTIVE_THRESHOLD_INCREMENT *
 	       le16_to_cpu(log_data->active_threshold_d+1));
+	printf("  Active Latency Configuration       0x%x \n",
+	       le16_to_cpu(log_data->active_latency_config));
 	printf("  Active Latency Minimum Window      %d ms\n",
 	       C3_MINIMUM_WINDOW_INCREMENT *
 	       le16_to_cpu(log_data->active_latency_min_window));
@@ -178,14 +179,6 @@ static int ocp_print_C3_log_normal(struct nvme_dev *dev,
 
 	printf("                                                            Read                           Write                 Deallocate/Trim\n");
 	for (i = 0; i < C3_BUCKET_NUM; i++) {
-		printf("  Active Latency Mode: Bucket %d      %27d     %27d     %27d\n",
-		       i,
-		       log_data->active_latency_config & (1 << pos),
-		       log_data->active_latency_config & (1 << pos),
-		       log_data->active_latency_config & (1 << pos));
-	}
-
-	for (i = 0; i < C3_BUCKET_NUM; i++) {
 		printf("  Active Bucket Counter: Bucket %d    %27d     %27d     %27d\n",
 		       i,
 		       le32_to_cpu(log_data->active_bucket_counter[i][READ]),
@@ -196,10 +189,10 @@ static int ocp_print_C3_log_normal(struct nvme_dev *dev,
 	for (i = 0; i < C3_BUCKET_NUM; i++) {
 		printf("  Active Latency Time Stamp: Bucket %d    ", i);
 		for (j = 2; j >= 0; j--) {
-			if (le64_to_cpu(log_data->active_latency_timestamp[i][j]) == -1) {
+			if (le64_to_cpu(log_data->active_latency_timestamp[3-i][j]) == -1) {
 				printf("                    N/A         ");
 			} else {
-				convert_ts(le64_to_cpu(log_data->active_latency_timestamp[i][j]), ts_buf);
+				convert_ts(le64_to_cpu(log_data->active_latency_timestamp[3-i][j]), ts_buf);
 				printf("%s     ", ts_buf);
 			}
 		}
@@ -209,9 +202,9 @@ static int ocp_print_C3_log_normal(struct nvme_dev *dev,
 	for (i = 0; i < C3_BUCKET_NUM; i++) {
 		printf("  Active Measured Latency: Bucket %d  %27d ms  %27d ms  %27d ms\n",
 		       i,
-		       le16_to_cpu(log_data->active_measured_latency[i][READ-1]),
-		       le16_to_cpu(log_data->active_measured_latency[i][WRITE-1]),
-		       le16_to_cpu(log_data->active_measured_latency[i][TRIM-1]));
+		       le16_to_cpu(log_data->active_measured_latency[3-i][READ-1]),
+		       le16_to_cpu(log_data->active_measured_latency[3-i][WRITE-1]),
+		       le16_to_cpu(log_data->active_measured_latency[3-i][TRIM-1]));
 	}
 
 	printf("\n");
@@ -226,10 +219,10 @@ static int ocp_print_C3_log_normal(struct nvme_dev *dev,
 	for (i = 0; i < C3_BUCKET_NUM; i++) {
 		printf("  Static Latency Time Stamp: Bucket %d    ", i);
 		for (j = 2; j >= 0; j--) {
-			if (le64_to_cpu(log_data->static_latency_timestamp[i][j]) == -1) {
+			if (le64_to_cpu(log_data->static_latency_timestamp[3-i][j]) == -1) {
 				printf("                    N/A         ");
 			} else {
-				convert_ts(le64_to_cpu(log_data->static_latency_timestamp[i][j]), ts_buf);
+				convert_ts(le64_to_cpu(log_data->static_latency_timestamp[3-i][j]), ts_buf);
 				printf("%s     ", ts_buf);
 			}
 		}
@@ -239,9 +232,9 @@ static int ocp_print_C3_log_normal(struct nvme_dev *dev,
 	for (i = 0; i < C3_BUCKET_NUM; i++) {
 		printf("  Static Measured Latency: Bucket %d  %27d ms  %27d ms  %27d ms\n",
 		       i,
-		       le16_to_cpu(log_data->static_measured_latency[i][READ-1]),
-		       le16_to_cpu(log_data->static_measured_latency[i][WRITE-1]),
-		       le16_to_cpu(log_data->static_measured_latency[i][TRIM-1]));
+		       le16_to_cpu(log_data->static_measured_latency[3-i][READ-1]),
+		       le16_to_cpu(log_data->static_measured_latency[3-i][WRITE-1]),
+		       le16_to_cpu(log_data->static_measured_latency[3-i][TRIM-1]));
 	}
 
 	return 0;
@@ -253,7 +246,6 @@ static void ocp_print_C3_log_json(struct ssd_latency_monitor_log *log_data)
 	char ts_buf[128];
 	char buf[128];
 	int i, j;
-	int pos = 0;
 	char *operation[3] = {"Trim", "Write", "Read"};
 
 	root = json_create_object();
@@ -278,19 +270,8 @@ static void ocp_print_C3_log_json(struct ssd_latency_monitor_log *log_data)
 	json_object_add_value_uint(root, "Active Threshold D",
 		C3_ACTIVE_THRESHOLD_INCREMENT *
 		le16_to_cpu(log_data->active_threshold_d + 1));
-
-	for (i = 0; i < C3_BUCKET_NUM; i++) {
-		struct json_object *bucket;
-
-		bucket = json_create_object();
-		sprintf(buf, "Active Latency Mode: Bucket %d", i);
-		for (j = 2; j >= 0; j--) {
-			json_object_add_value_uint(bucket, operation[j],
-						   log_data->active_latency_config & (1 << pos));
-		}
-		json_object_add_value_object(root, buf, bucket);
-	}
-
+	json_object_add_value_uint(root, "Active Latency Configuration",
+		le16_to_cpu(log_data->active_latency_config));
 	json_object_add_value_uint(root, "Active Latency Minimum Window",
 		C3_MINIMUM_WINDOW_INCREMENT *
 		le16_to_cpu(log_data->active_latency_min_window));
@@ -313,10 +294,10 @@ static void ocp_print_C3_log_json(struct ssd_latency_monitor_log *log_data)
 		bucket = json_create_object();
 		sprintf(buf, "Active Latency Time Stamp: Bucket %d", i);
 		for (j = 2; j >= 0; j--) {
-			if (le64_to_cpu(log_data->active_latency_timestamp[i][j]) == -1) {
+			if (le64_to_cpu(log_data->active_latency_timestamp[3-i][j]) == -1) {
 				json_object_add_value_string(bucket, operation[j], "NA");
 			} else {
-				convert_ts(le64_to_cpu(log_data->active_latency_timestamp[i][j]), ts_buf);
+				convert_ts(le64_to_cpu(log_data->active_latency_timestamp[3-i][j]), ts_buf);
 				json_object_add_value_string(bucket, operation[j], ts_buf);
 			}
 		}
@@ -330,7 +311,7 @@ static void ocp_print_C3_log_json(struct ssd_latency_monitor_log *log_data)
 		sprintf(buf, "Active Measured Latency: Bucket %d", i);
 		for (j = 2; j >= 0; j--) {
 			json_object_add_value_uint(bucket, operation[j],
-				le16_to_cpu(log_data->active_measured_latency[i][j]));
+				le16_to_cpu(log_data->active_measured_latency[3-i][j]));
 		}
 		json_object_add_value_object(root, buf, bucket);
 	}
@@ -356,10 +337,10 @@ static void ocp_print_C3_log_json(struct ssd_latency_monitor_log *log_data)
 		bucket = json_create_object();
 		sprintf(buf, "Static Latency Time Stamp: Bucket %d", i);
 		for (j = 2; j >= 0; j--) {
-			if (le64_to_cpu(log_data->static_latency_timestamp[i][j]) == -1) {
+			if (le64_to_cpu(log_data->static_latency_timestamp[3-i][j]) == -1) {
 				json_object_add_value_string(bucket, operation[j], "NA");
 			} else {
-				convert_ts(le64_to_cpu(log_data->static_latency_timestamp[i][j]), ts_buf);
+				convert_ts(le64_to_cpu(log_data->static_latency_timestamp[3-i][j]), ts_buf);
 				json_object_add_value_string(bucket, operation[j], ts_buf);
 			}
 		}
@@ -373,7 +354,7 @@ static void ocp_print_C3_log_json(struct ssd_latency_monitor_log *log_data)
 		sprintf(buf, "Static Measured Latency: Bucket %d", i);
 		for (j = 2; j >= 0; j--) {
 			json_object_add_value_uint(bucket, operation[j],
-				le16_to_cpu(log_data->static_measured_latency[i][j]));
+				le16_to_cpu(log_data->static_measured_latency[3-i][j]));
 		}
 		json_object_add_value_object(root, buf, bucket);
 	}
@@ -416,15 +397,15 @@ static void ocp_print_C3_log_json(struct ssd_latency_monitor_log *log_data)
 static int get_c3_log_page(struct nvme_dev *dev, char *format)
 {
 	struct ssd_latency_monitor_log *log_data;
-	int ret = 0;
-	int fmt = -1;
+	enum nvme_print_flags fmt;
+	int ret;
 	__u8 *data;
 	int i;
 
-	fmt = validate_output_format(format);
-	if (fmt < 0) {
+	ret = validate_output_format(format, &fmt);
+	if (ret < 0) {
 		fprintf(stderr, "ERROR : OCP : invalid output format\n");
-		return fmt;
+		return ret;
 	}
 
 	data = malloc(sizeof(__u8) * C3_LATENCY_MON_LOG_BUF_LEN);
@@ -481,6 +462,9 @@ static int get_c3_log_page(struct nvme_dev *dev, char *format)
 		case JSON:
 			ocp_print_C3_log_json(log_data);
 			break;
+		default:
+			fprintf(stderr, "unhandled output format\n");
+
 		}
 	} else {
 		fprintf(stderr,
@@ -1324,17 +1308,17 @@ static void ocp_print_c5_log_binary(struct unsupported_requirement_log *log_data
 
 static int get_c5_log_page(struct nvme_dev *dev, char *format)
 {
-	int ret = 0;
-	int fmt = -1;
+	enum nvme_print_flags fmt;
+	int ret;
 	__u8 *data;
 	int i;
 	struct unsupported_requirement_log *log_data;
 	int j;
 
-	fmt = validate_output_format(format);
-	if (fmt < 0) {
+	ret = validate_output_format(format, &fmt);
+	if (ret < 0) {
 		fprintf(stderr, "ERROR : OCP : invalid output format\n");
-		return fmt;
+		return ret;
 	}
 
 	data = (__u8 *)malloc(sizeof(__u8) * C5_UNSUPPORTED_REQS_LEN);
@@ -1385,6 +1369,8 @@ static int get_c5_log_page(struct nvme_dev *dev, char *format)
 			break;
 		case BINARY:
 			ocp_print_c5_log_binary(log_data);
+			break;
+		default:
 			break;
 		}
 	} else {
@@ -1548,16 +1534,16 @@ static void ocp_print_c1_log_binary(struct ocp_error_recovery_log_page *log_data
 
 static int get_c1_log_page(struct nvme_dev *dev, char *format)
 {
-	int ret = 0;
-	int fmt = -1;
+	struct ocp_error_recovery_log_page *log_data;
+	enum nvme_print_flags fmt;
+	int ret;
 	__u8 *data;
 	int i, j;
-	struct ocp_error_recovery_log_page *log_data;
 
-	fmt = validate_output_format(format);
-	if (fmt < 0) {
+	ret = validate_output_format(format, &fmt);
+	if (ret < 0) {
 		fprintf(stderr, "ERROR : OCP : invalid output format\n");
-		return fmt;
+		return ret;
 	}
 
 	data = (__u8 *)malloc(sizeof(__u8) * C1_ERROR_RECOVERY_LOG_BUF_LEN);
@@ -1608,6 +1594,8 @@ static int get_c1_log_page(struct nvme_dev *dev, char *format)
 			break;
 		case BINARY:
 			ocp_print_c1_log_binary(log_data);
+			break;
+		default:
 			break;
 		}
 	} else {
@@ -1762,16 +1750,16 @@ static void ocp_print_c4_log_binary(struct ocp_device_capabilities_log_page *log
 
 static int get_c4_log_page(struct nvme_dev *dev, char *format)
 {
-	int ret = 0;
-	int fmt = -1;
+	struct ocp_device_capabilities_log_page *log_data;
+	enum nvme_print_flags fmt;
+	int ret;
 	__u8 *data;
 	int i, j;
-	struct ocp_device_capabilities_log_page *log_data;
 
-	fmt = validate_output_format(format);
-	if (fmt < 0) {
+	ret = validate_output_format(format, &fmt);
+	if (ret < 0) {
 		fprintf(stderr, "ERROR : OCP : invalid output format\n");
-		return fmt;
+		return ret;
 	}
 
 	data = (__u8 *)malloc(sizeof(__u8) * C4_DEV_CAP_REQ_LEN);
@@ -1822,6 +1810,8 @@ static int get_c4_log_page(struct nvme_dev *dev, char *format)
 			break;
 		case BINARY:
 			ocp_print_c4_log_binary(log_data);
+			break;
+		default:
 			break;
 		}
 	} else {

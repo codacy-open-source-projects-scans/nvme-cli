@@ -701,8 +701,11 @@ static int __create_telemetry_log_host(struct nvme_dev *dev,
 	if (err)
 		return -errno;
 
-	*size = NVME_LOG_TELEM_BLOCK_SIZE;
-	return get_log_telemetry_host(dev, NVME_LOG_TELEM_BLOCK_SIZE, buf);
+	err = parse_telemetry_da(dev, da, log, size);
+	if (err)
+		return err;
+
+	return get_log_telemetry_host(dev, *size, buf);
 }
 
 static int __get_telemetry_log_ctrl(struct nvme_dev *dev,
@@ -8767,6 +8770,7 @@ static int check_tls_key(int argc, char **argv, struct command *command, struct 
 			nvme_show_error("Failed to insert key, error %d", errno);
 			return -errno;
 		}
+		printf("Inserted TLS key %08x\n", (unsigned int)tls_key);
 	} else {
 		char *tls_id;
 
@@ -8774,7 +8778,7 @@ static int check_tls_key(int argc, char **argv, struct command *command, struct 
 					cfg.subsysnqn, cfg.identity,
 					hmac, decoded_key, decoded_len);
 		if (!tls_id) {
-			nvme_show_error("Failed to generated identity, error %d",
+			nvme_show_error("Failed to generate identity, error %d",
 					errno);
 			return -errno;
 		}

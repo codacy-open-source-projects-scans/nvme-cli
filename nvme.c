@@ -52,9 +52,10 @@
 	#include <sys/random.h>
 #endif
 
+#include <libnvme.h>
+
 #include "common.h"
 #include "nvme.h"
-#include "libnvme.h"
 #include "nvme-print.h"
 #include "plugin.h"
 #include "util/base64.h"
@@ -62,6 +63,7 @@
 #include "nvme-wrap.h"
 #include "util/argconfig.h"
 #include "util/suffix.h"
+#include "util/logging.h"
 #include "fabrics.h"
 #define CREATE_CMD
 #include "nvme-builtin.h"
@@ -108,7 +110,7 @@ struct passthru_config {
 
 #define NVME_ARGS(n, ...)                                                         \
 	struct argconfig_commandline_options n[] = {                              \
-		OPT_FLAG("verbose",      'v', NULL,               verbose),       \
+		OPT_INCR("verbose",      'v', &verbose_level,     verbose),       \
 		OPT_FMT("output-format", 'o', &output_format_val, output_format), \
 		##__VA_ARGS__,                                                    \
 		OPT_END()                                                         \
@@ -186,6 +188,7 @@ static const char dash[51] = {[0 ... 49] = '=', '\0'};
 static const char space[51] = {[0 ... 49] = ' ', '\0'};
 
 static char *output_format_val = "normal";
+int verbose_level;
 
 static void *mmap_registers(nvme_root_t r, struct nvme_dev *dev);
 
@@ -194,36 +197,6 @@ const char *nvme_strerror(int errnum)
 	if (errnum >= ENVME_CONNECT_RESOLVE)
 		return nvme_errno_to_string(errnum);
 	return strerror(errnum);
-}
-
-int map_log_level(int verbose, bool quiet)
-{
-	int log_level;
-
-	/*
-	 * LOG_NOTICE is unused thus the user has to provide two 'v' for getting
-	 * any feedback at all. Thus skip this level
-	 */
-	verbose++;
-
-	switch (verbose) {
-	case 0:
-		log_level = LOG_WARNING;
-		break;
-	case 1:
-		log_level = LOG_NOTICE;
-		break;
-	case 2:
-		log_level = LOG_INFO;
-		break;
-	default:
-		log_level = LOG_DEBUG;
-		break;
-	}
-	if (quiet)
-		log_level = LOG_ERR;
-
-	return log_level;
 }
 
 static ssize_t getrandom_bytes(void *buf, size_t buflen)
@@ -400,8 +373,8 @@ int parse_and_open(struct nvme_dev **dev, int argc, char **argv,
 	ret = get_dev(dev, argc, argv, O_RDONLY);
 	if (ret < 0)
 		argconfig_print_help(desc, opts);
-	else if (argconfig_parse_seen(opts, "verbose"))
-		nvme_cli_set_debug(*dev, true);
+	else
+		log_level = map_log_level(verbose_level, false);
 
 	return ret;
 }
@@ -3251,7 +3224,8 @@ static int list_subsys(int argc, char **argv, struct command *cmd,
 	if (argconfig_parse_seen(opts, "verbose"))
 		flags |= VERBOSE;
 
-	r = nvme_create_root(stderr, map_log_level(!!(flags & VERBOSE), false));
+
+	r = nvme_create_root(stderr, log_level);
 	if (!r) {
 		if (devname)
 			nvme_show_error("Failed to scan nvme subsystem for %s", devname);
@@ -3308,7 +3282,7 @@ static int list(int argc, char **argv, struct command *cmd, struct plugin *plugi
 	if (argconfig_parse_seen(opts, "verbose"))
 		flags |= VERBOSE;
 
-	r = nvme_create_root(stderr, map_log_level(!!(flags & VERBOSE), false));
+	r = nvme_create_root(stderr, log_level);
 	if (!r) {
 		nvme_show_error("Failed to create topology root: %s", nvme_strerror(errno));
 		return -errno;
@@ -3614,6 +3588,9 @@ static int ns_descs(int argc, char **argv, struct command *cmd, struct plugin *p
 
 	if (cfg.raw_binary)
 		flags = BINARY;
+
+	if (argconfig_parse_seen(opts, "verbose"))
+		flags |= VERBOSE;
 
 	if (!cfg.namespace_id) {
 		err = nvme_get_nsid(dev_fd(dev), &cfg.namespace_id);
@@ -5297,7 +5274,7 @@ static void *mmap_registers(nvme_root_t r, struct nvme_dev *dev)
 
 	fd = open(path, O_RDONLY);
 	if (fd < 0) {
-		if (map_log_level(0, false) >= LOG_DEBUG)
+		if (log_level >= LOG_DEBUG)
 			nvme_show_error("%s did not find a pci resource, open failed %s",
 					dev->name, strerror(errno));
 		return NULL;
@@ -5305,7 +5282,7 @@ static void *mmap_registers(nvme_root_t r, struct nvme_dev *dev)
 
 	membase = mmap(NULL, getpagesize(), PROT_READ, MAP_SHARED, fd, 0);
 	if (membase == MAP_FAILED) {
-		if (map_log_level(0, false) >= LOG_DEBUG) {
+		if (log_level >= LOG_DEBUG) {
 			fprintf(stderr, "%s failed to map. ", dev->name);
 			fprintf(stderr, "Did your kernel enable CONFIG_IO_STRICT_DEVMEM?\n");
 		}
@@ -5377,7 +5354,7 @@ static int get_property(int argc, char **argv, struct command *cmd, struct plugi
 {
 	const char *desc = "Reads and shows the defined NVMe controller property\n"
 		"for NVMe over Fabric. Property offset must be one of:\n"
-		"CAP=0x0, VS=0x8, CC=0x14, CSTS=0x1c, NSSR=0x20";
+		"CAP=0x0, VS=0x8, CC=0x14, CSTS=0x1c, NSSR=0x20, NSSD=0x64, CRTO=0x68";
 	const char *offset = "offset of the requested property";
 	const char *human_readable = "show property in readable format";
 
@@ -8886,7 +8863,7 @@ static int show_topology_cmd(int argc, char **argv, struct command *command, str
 		return -EINVAL;
 	}
 
-	r = nvme_create_root(stderr, map_log_level(!!(flags & VERBOSE), false));
+	r = nvme_create_root(stderr, log_level);
 	if (!r) {
 		nvme_show_error("Failed to create topology root: %s", nvme_strerror(errno));
 		return -errno;

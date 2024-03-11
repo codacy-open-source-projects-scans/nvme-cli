@@ -38,12 +38,14 @@
 #include <sys/types.h>
 #include <linux/types.h>
 
+#include <libnvme.h>
+
 #include "common.h"
 #include "nvme.h"
 #include "nbft.h"
-#include "libnvme.h"
 #include "nvme-print.h"
 #include "fabrics.h"
+#include "util/logging.h"
 
 #define PATH_NVMF_DISC		SYSCONFDIR "/nvme/discovery.conf"
 #define PATH_NVMF_CONFIG	SYSCONFDIR "/nvme/config.json"
@@ -714,7 +716,9 @@ int nvmf_discover(const char *desc, int argc, char **argv, bool connect)
 	if (!strcmp(config_file, "none"))
 		config_file = NULL;
 
-	r = nvme_create_root(stderr, map_log_level(verbose, quiet));
+	log_level = map_log_level(verbose, quiet);
+
+	r = nvme_create_root(stderr, log_level);
 	if (!r) {
 		fprintf(stderr, "Failed to create topology root: %s\n",
 			nvme_strerror(errno));
@@ -942,7 +946,9 @@ int nvmf_connect(const char *desc, int argc, char **argv)
 	if (!strcmp(config_file, "none"))
 		config_file = NULL;
 
-	r = nvme_create_root(stderr, map_log_level(verbose, quiet));
+	log_level = map_log_level(verbose, quiet);
+
+	r = nvme_create_root(stderr, log_level);
 	if (!r) {
 		fprintf(stderr, "Failed to create topology root: %s\n",
 			nvme_strerror(errno));
@@ -1102,7 +1108,9 @@ int nvmf_disconnect(const char *desc, int argc, char **argv)
 		return -EINVAL;
 	}
 
-	r = nvme_create_root(stderr, map_log_level(cfg.verbose, false));
+	log_level = map_log_level(cfg.verbose, false);
+
+	r = nvme_create_root(stderr, log_level);
 	if (!r) {
 		fprintf(stderr, "Failed to create topology root: %s\n",
 			nvme_strerror(errno));
@@ -1170,7 +1178,9 @@ int nvmf_disconnect_all(const char *desc, int argc, char **argv)
 	if (ret)
 		return ret;
 
-	r = nvme_create_root(stderr, map_log_level(cfg.verbose, false));
+	log_level = map_log_level(cfg.verbose, false);
+
+	r = nvme_create_root(stderr, log_level);
 	if (!r) {
 		fprintf(stderr, "Failed to create topology root: %s\n",
 			nvme_strerror(errno));
@@ -1238,7 +1248,9 @@ int nvmf_config(const char *desc, int argc, char **argv)
 	if (!strcmp(config_file, "none"))
 		config_file = NULL;
 
-	r = nvme_create_root(stderr, map_log_level(verbose, quiet));
+	log_level = map_log_level(verbose, quiet);
+
+	r = nvme_create_root(stderr, log_level);
 	if (!r) {
 		fprintf(stderr, "Failed to create topology root: %s\n",
 			nvme_strerror(errno));
@@ -1390,7 +1402,9 @@ int nvmf_dim(const char *desc, int argc, char **argv)
 		return -EINVAL;
 	}
 
-	r = nvme_create_root(stderr, map_log_level(cfg.verbose, false));
+	log_level = map_log_level(cfg.verbose, false);
+
+	r = nvme_create_root(stderr, log_level);
 	if (!r) {
 		fprintf(stderr, "Failed to create topology root: %s\n",
 			nvme_strerror(errno));

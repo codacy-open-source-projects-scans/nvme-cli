@@ -132,34 +132,24 @@ static enum eDriveModel GetDriveModel(int idx)
 	if (vendor_id == MICRON_VENDOR_ID) {
 		switch (device_id) {
 		case 0x5196:
-			fallthrough;
 		case 0x51A0:
-			fallthrough;
 		case 0x51A1:
-			fallthrough;
 		case 0x51A2:
 			eModel = M51AX;
 			break;
 		case 0x51B0:
-			fallthrough;
 		case 0x51B1:
-			fallthrough;
 		case 0x51B2:
 			eModel = M51BX;
 			break;
 		case 0x51C0:
-			fallthrough;
 		case 0x51C1:
-			fallthrough;
 		case 0x51C2:
-			fallthrough;
 		case 0x51C3:
 			eModel = M51CX;
 			break;
 		case 0x5405:
-			fallthrough;
 		case 0x5406:
-			fallthrough;
 		case 0x5407:
 			eModel = M5407;
 			break;
@@ -226,7 +216,6 @@ static int SetupDebugDataDirectories(char *strSN, char *strFilePath,
 	int length = 0;
 	int nIndex = 0;
 	char *strTemp = NULL;
-	struct stat dirStat;
 	int j;
 	int k = 0;
 	int i = 0;
@@ -304,16 +293,15 @@ static int SetupDebugDataDirectories(char *strSN, char *strFilePath,
 	strMainDirName[nIndex] = '\0';
 
 	j = 1;
-	while (!stat(strMainDirName, &dirStat)) {
+	while (mkdir(strMainDirName, 0777) < 0) {
+		if (errno != EEXIST) {
+			err = -1;
+			goto exit_status;
+		}
 		strMainDirName[nIndex] = '\0';
 		sprintf(strAppend, "-%d", j);
 		strcat(strMainDirName, strAppend);
 		j++;
-	}
-
-	if (mkdir(strMainDirName, 0777) < 0) {
-		err = -1;
-		goto exit_status;
 	}
 
 	if (strOSDirName) {
@@ -331,7 +319,7 @@ static int SetupDebugDataDirectories(char *strSN, char *strFilePath,
 				rmdir(strOSDirName);
 			rmdir(strMainDirName);
 			err = -1;
-	}
+		}
 	}
 
 exit_status:
@@ -3217,28 +3205,20 @@ static int micron_internal_logs(int argc, char **argv, struct command *cmd,
 		err = -1;
 		switch (aVendorLogs[i].ucLogPage) {
 		case 0xE1:
-			fallthrough;
 		case 0xE5:
-			fallthrough;
 		case 0xE9:
 			err = 1;
 			break;
 		case 0xE2:
-			fallthrough;
 		case 0xE3:
-			fallthrough;
 		case 0xE4:
-			fallthrough;
 		case 0xE8:
-			fallthrough;
 		case 0xEA:
 			err = get_common_log(dev_fd(dev), aVendorLogs[i].ucLogPage,
 				 &dataBuffer, &bSize);
 			break;
 		case 0xC1:
-			fallthrough;
 		case 0xC2:
-			fallthrough;
 		case 0xC4:
 			err = GetLogPageSize(dev_fd(dev), aVendorLogs[i].ucLogPage,
 					     &bSize);
@@ -3247,7 +3227,6 @@ static int micron_internal_logs(int argc, char **argv, struct command *cmd,
 						       &dataBuffer, bSize);
 			break;
 		case 0xE6:
-			fallthrough;
 		case 0xE7:
 			puiIDDBuf = (unsigned int *)&ctrl;
 			uiMask = puiIDDBuf[1015];
@@ -3273,11 +3252,8 @@ static int micron_internal_logs(int argc, char **argv, struct command *cmd,
 			}
 			break;
 		case 0xF7:
-			fallthrough;
 		case 0xF9:
-			fallthrough;
 		case 0xFC:
-			fallthrough;
 		case 0xFD:
 			if (eModel == M51BX)
 				(void)NVMEResetLog(dev_fd(dev), aVendorLogs[i].ucLogPage,

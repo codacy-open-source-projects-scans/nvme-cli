@@ -230,15 +230,11 @@ static void stdout_persistent_event_log_rci(__le32 pel_header_rci)
 
 static void stdout_persistent_event_entry_ehai(__u8 ehai)
 {
-	__u8 rsvd1 = (ehai & 0xfc) >> 2;
-	__u8 pit = ehai & 0x03;
+	__u8 rsvd1 = NVME_PEL_EHAI_RSVD(ehai);
+	__u8 pit = NVME_PEL_EHAI_PIT(ehai);
 
 	printf("  [7:2] : %#x\tReserved\n", rsvd1);
-	printf("\tPort Identifier Type (PIT): %u(%s)\n", pit,
-		(pit == 0x00) ? "PIT not reported and PELPID does not apply" :
-		(pit == 0x01) ? "NVM subsystem port" :
-		(pit == 0x02) ? "NVMe-MI port" :
-		"Event not associated with any port and PELPID does not apply");
+	printf("\tPort Identifier Type (PIT): %u(%s)\n", pit, nvme_pel_ehai_pit_to_string(pit));
 }
 
 static void stdout_add_bitmap(int i, __u8 seb)
@@ -487,13 +483,13 @@ static void stdout_persistent_event_log(void *pevent_log_info,
 		case NVME_PEL_SET_FEATURE_EVENT:
 			set_feat_event = pevent_log_info + offset;
 			printf("Set Feature Event Entry:\n");
-			dword_cnt =  set_feat_event->layout & 0x03;
-			fid = le32_to_cpu(set_feat_event->cdw_mem[0]) & 0x000f;
+			dword_cnt = NVME_SET_FEAT_EVENT_DW_COUNT(set_feat_event->layout);
+			fid = NVME_GET(le32_to_cpu(set_feat_event->cdw_mem[0]), FEATURES_CDW10_FID);
 			cdw11 = le32_to_cpu(set_feat_event->cdw_mem[1]);
 
 			printf("Set Feature ID  :%#02x (%s),  value:%#08x\n", fid,
 				nvme_feature_to_string(fid), cdw11);
-			if (((set_feat_event->layout & 0xff) >> 2) != 0) {
+			if (NVME_SET_FEAT_EVENT_MB_COUNT(set_feat_event->layout)) {
 				mem_buf = (unsigned char *)(set_feat_event + 4 + dword_cnt * 4);
 				stdout_feature_show_fields(fid, cdw11, mem_buf);
 			}
@@ -602,7 +598,7 @@ static void stdout_fid_support_effects_log_human(__u32 fid_support)
 	printf("  CCC%s", (fid_support & NVME_FID_SUPPORTED_EFFECTS_CCC) ? set : clr);
 	printf("  USS%s", (fid_support & NVME_FID_SUPPORTED_EFFECTS_UUID_SEL) ? set : clr);
 
-	fsp = (fid_support >> NVME_FID_SUPPORTED_EFFECTS_SCOPE_SHIFT) & NVME_FID_SUPPORTED_EFFECTS_SCOPE_MASK;
+	fsp = NVME_GET(fid_support, FID_SUPPORTED_EFFECTS_SCOPE);
 
 	printf("  NAMESPACE SCOPE%s", (fsp & NVME_FID_SUPPORTED_EFFECTS_SCOPE_NS) ? set : clr);
 	printf("  CONTROLLER SCOPE%s", (fsp & NVME_FID_SUPPORTED_EFFECTS_SCOPE_CTRL) ? set : clr);
@@ -645,7 +641,7 @@ static void stdout_mi_cmd_support_effects_log_human(__u32 mi_cmd_support)
 	printf("  NIC%s", (mi_cmd_support & NVME_MI_CMD_SUPPORTED_EFFECTS_NIC) ? set : clr);
 	printf("  CCC%s", (mi_cmd_support & NVME_MI_CMD_SUPPORTED_EFFECTS_CCC) ? set : clr);
 
-	csp = (mi_cmd_support >> NVME_MI_CMD_SUPPORTED_EFFECTS_SCOPE_SHIFT) & NVME_MI_CMD_SUPPORTED_EFFECTS_SCOPE_MASK;
+	csp = NVME_GET(mi_cmd_support, MI_CMD_SUPPORTED_EFFECTS_SCOPE);
 
 	printf("  NAMESPACE SCOPE%s", (csp & NVME_MI_CMD_SUPPORTED_EFFECTS_SCOPE_NS) ? set : clr);
 	printf("  CONTROLLER SCOPE%s", (csp & NVME_MI_CMD_SUPPORTED_EFFECTS_SCOPE_CTRL) ? set : clr);
@@ -679,13 +675,13 @@ static void stdout_mi_cmd_support_effects_log(struct nvme_mi_cmd_supported_effec
 static void stdout_boot_part_log(void *bp_log, const char *devname,
 				 __u32 size)
 {
-	struct nvme_boot_partition *hdr;
+	struct nvme_boot_partition *hdr = bp_log;
 
-	hdr = bp_log;
 	printf("Boot Partition Log for device: %s\n", devname);
 	printf("Log ID: %u\n", hdr->lid);
-	printf("Boot Partition Size: %u KiB\n", le32_to_cpu(hdr->bpinfo) & 0x7fff);
-	printf("Active BPID: %u\n", (le32_to_cpu(hdr->bpinfo) >> 31) & 0x1);
+	printf("Boot Partition Size: %u KiB\n",
+	       NVME_BOOT_PARTITION_INFO_BPSZ(le32_to_cpu(hdr->bpinfo)));
+	printf("Active BPID: %u\n", NVME_BOOT_PARTITION_INFO_ABPID(le32_to_cpu(hdr->bpinfo)));
 }
 
 static const char *eomip_to_string(__u8 eomip)
@@ -3795,7 +3791,7 @@ static void stdout_effects_log_page(enum nvme_csi csi,
 
 static void stdout_effects_log_pages(struct list_head *list)
 {
-	nvme_effects_log_node_t *node;
+	nvme_effects_log_node_t *node = NULL;
 
 	list_for_each(list, node, node) {
 		stdout_effects_log_page(node->csi, &node->effects);

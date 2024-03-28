@@ -190,7 +190,7 @@ static const char space[51] = {[0 ... 49] = ' ', '\0'};
 static char *output_format_val = "normal";
 int verbose_level;
 
-static void *mmap_registers(nvme_root_t r, struct nvme_dev *dev);
+static void *mmap_registers(struct nvme_dev *dev);
 
 const char *nvme_strerror(int errnum)
 {
@@ -254,7 +254,8 @@ static int open_dev_direct(struct nvme_dev **devp, char *devstr, int flags)
 	}
 	if (!is_chardev(dev) && !is_blkdev(dev)) {
 		nvme_show_error("%s is not a block or character device", devstr);
-		err = -ENODEV;
+		errno = ENODEV;
+		err = -1;
 		goto err_close;
 	}
 	*devp = dev;
@@ -980,12 +981,9 @@ static int get_effects_log(int argc, char **argv, struct command *cmd, struct pl
 	list_head_init(&log_pages);
 
 	if (cfg.csi < 0) {
-		nvme_root_t r;
 		__u64 cap;
 
-		r = nvme_scan(NULL);
-		bar = mmap_registers(r, dev);
-		nvme_free_tree(r);
+		bar = mmap_registers(dev);
 
 		if (bar) {
 			cap = mmio_read64(bar + NVME_REG_CAP);
@@ -3248,7 +3246,8 @@ static int list_subsys(int argc, char **argv, struct command *cmd,
 
 	err = nvme_scan_topology(r, filter, (void *)devname);
 	if (err) {
-		nvme_show_error("Failed to scan topology: %s", nvme_strerror(errno));
+		if (errno != ENOENT)
+			nvme_show_error("Failed to scan topology: %s", nvme_strerror(errno));
 		goto ret;
 	}
 
@@ -3289,7 +3288,8 @@ static int list(int argc, char **argv, struct command *cmd, struct plugin *plugi
 	}
 	err = nvme_scan_topology(r, NULL, NULL);
 	if (err < 0) {
-		nvme_show_error("Failed to scan topology: %s", nvme_strerror(errno));
+		if (errno != ENOENT)
+			nvme_show_error("Failed to scan topology: %s", nvme_strerror(errno));
 		nvme_free_tree(r);
 		return err;
 	}
@@ -5247,31 +5247,13 @@ static int nvme_get_properties(int fd, void **pbar)
 	return err;
 }
 
-static void *mmap_registers(nvme_root_t r, struct nvme_dev *dev)
+static void *mmap_registers(struct nvme_dev *dev)
 {
-	nvme_ctrl_t c = NULL;
-	nvme_ns_t n = NULL;
-
 	char path[512];
 	void *membase;
 	int fd;
 
-	c = nvme_scan_ctrl(r, dev->name);
-	if (c) {
-		snprintf(path, sizeof(path), "%s/device/resource0",
-			nvme_ctrl_get_sysfs_dir(c));
-		nvme_free_ctrl(c);
-	} else {
-		n = nvme_scan_namespace(dev->name);
-		if (!n) {
-			nvme_show_error("Unable to find %s", dev->name);
-			return NULL;
-		}
-		snprintf(path, sizeof(path), "%s/device/device/resource0",
-			 nvme_ns_get_sysfs_dir(n));
-		nvme_free_ns(n);
-	}
-
+	sprintf(path, "/sys/class/nvme/%s/device/resource0", dev->name);
 	fd = open(path, O_RDONLY);
 	if (fd < 0) {
 		if (log_level >= LOG_DEBUG)
@@ -5303,7 +5285,6 @@ static int show_registers(int argc, char **argv, struct command *cmd, struct plu
 	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
 	enum nvme_print_flags flags;
 	bool fabrics = false;
-	nvme_root_t r;
 	void *bar;
 	int err;
 
@@ -5322,21 +5303,20 @@ static int show_registers(int argc, char **argv, struct command *cmd, struct plu
 	if (err)
 		return err;
 
-	r = nvme_scan(NULL);
 	err = validate_output_format(output_format_val, &flags);
 	if (err < 0) {
 		nvme_show_error("Invalid output format");
-		goto free_tree;
+		return err;
 	}
 
 	if (cfg.human_readable)
 		flags |= VERBOSE;
 
-	bar = mmap_registers(r, dev);
+	bar = mmap_registers(dev);
 	if (!bar) {
 		err = nvme_get_properties(dev_fd(dev), &bar);
 		if (err)
-			goto free_tree;
+			return err;
 		fabrics = true;
 	}
 
@@ -5345,9 +5325,8 @@ static int show_registers(int argc, char **argv, struct command *cmd, struct plu
 		free(bar);
 	else
 		munmap(bar, getpagesize());
-free_tree:
-	nvme_free_tree(r);
-	return err;
+
+	return 0;
 }
 
 static int get_property(int argc, char **argv, struct command *cmd, struct plugin *plugin)
@@ -8340,7 +8319,7 @@ static int gen_dhchap_key(int argc, char **argv, struct command *command, struct
 	    "HMAC function to use for key transformation (0 = none, 1 = SHA-256, 2 = SHA-384, 3 = SHA-512).";
 	const char *nqn = "Host NQN to use for key transformation.";
 
-	unsigned char *raw_secret;
+	_cleanup_free_ unsigned char *raw_secret = NULL;
 	unsigned char key[68];
 	char encoded_key[128];
 	unsigned long crc = crc32(0L, NULL, 0);
@@ -8560,7 +8539,7 @@ static int gen_tls_key(int argc, char **argv, struct command *command, struct pl
 	const char *keytype = "Key type of the retained key.";
 	const char *insert = "Insert only, do not print the retained key.";
 
-	unsigned char *raw_secret;
+	_cleanup_free_ unsigned char *raw_secret = NULL;
 	char encoded_key[128];
 	int key_len = 32;
 	unsigned long crc = crc32(0L, NULL, 0);
@@ -8871,7 +8850,8 @@ static int show_topology_cmd(int argc, char **argv, struct command *command, str
 
 	err = nvme_scan_topology(r, NULL, NULL);
 	if (err < 0) {
-		nvme_show_error("Failed to scan topology: %s", nvme_strerror(errno));
+		if (errno != ENOENT)
+			nvme_show_error("Failed to scan topology: %s", nvme_strerror(errno));
 		nvme_free_tree(r);
 		return err;
 	}

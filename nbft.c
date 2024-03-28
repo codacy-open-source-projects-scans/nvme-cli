@@ -13,6 +13,7 @@
 #include "nvme-print.h"
 
 #include "util/types.h"
+#include "util/logging.h"
 
 #define NBFT_SYSFS_FILENAME	"NBFT*"
 
@@ -80,14 +81,14 @@ int discover_from_nbft(nvme_root_t r, char *hostnqn_arg, char *hostid_arg,
 		       char *hostnqn_sys, char *hostid_sys,
 		       const char *desc, bool connect,
 		       const struct nvme_fabrics_config *cfg, char *nbft_path,
-		       enum nvme_print_flags flags, bool verbose)
+		       enum nvme_print_flags flags, unsigned int verbose)
 {
 	char *hostnqn = NULL, *hostid = NULL, *host_traddr = NULL;
 	nvme_host_t h;
 	nvme_ctrl_t c;
 	int ret, i;
 	struct list_head nbft_list;
-	struct nbft_file_entry *entry;
+	struct nbft_file_entry *entry = NULL;
 	struct nbft_info_subsystem_ns **ss;
 	struct nbft_info_hfi *hfi;
 
@@ -107,6 +108,9 @@ int discover_from_nbft(nvme_root_t r, char *hostnqn_arg, char *hostid_arg,
 		for (ss = entry->nbft->subsystem_ns_list; ss && *ss; ss++)
 			for (i = 0; i < (*ss)->num_hfis; i++) {
 				nvme_ctrl_t cl;
+				int saved_log_level = log_level;
+				bool saved_log_pid = false;
+				bool saved_log_tstamp = false;
 
 				hfi = (*ss)->hfis[i];
 				if (hostnqn_arg)
@@ -159,8 +163,35 @@ int discover_from_nbft(nvme_root_t r, char *hostnqn_arg, char *hostid_arg,
 					goto out_free;
 				}
 
+				/* Pause logging for unavailable SSNSs */
+				if ((*ss)->unavailable && verbose < 1) {
+					saved_log_level = nvme_get_logging_level(r,
+										 &saved_log_pid,
+										 &saved_log_tstamp);
+					nvme_init_logging(r, -1, false, false);
+				}
+
 				errno = 0;
 				ret = nvmf_add_ctrl(h, c, cfg);
+
+				/* Resume logging */
+				if ((*ss)->unavailable && verbose < 1)
+					nvme_init_logging(r,
+							  saved_log_level,
+							  saved_log_pid,
+							  saved_log_tstamp);
+
+				/*
+				 * In case this SSNS was marked as 'unavailable' and
+				 * the connection attempt failed again, ignore it.
+				 */
+				if (ret == -1 && (*ss)->unavailable) {
+					if (verbose >= 1)
+						fprintf(stderr,
+							"SSNS %d reported as unavailable, skipping\n",
+							(*ss)->index);
+					continue;
+				}
 
 				/*
 				 * With TCP/DHCP, it can happen that the OS
@@ -188,12 +219,14 @@ int discover_from_nbft(nvme_root_t r, char *hostnqn_arg, char *hostid_arg,
 					ret = nvmf_add_ctrl(h, c, cfg);
 					if (ret == 0 && verbose >= 1)
 						fprintf(stderr,
-							"connect with host_traddr=\"%s\" failed, success after omitting host_traddr\n",
+							"SSNS %d: connect with host_traddr=\"%s\" failed, success after omitting host_traddr\n",
+							(*ss)->index,
 							host_traddr);
 				}
 
 				if (ret)
-					fprintf(stderr, "no controller found\n");
+					fprintf(stderr, "SSNS %d: no controller found\n",
+						(*ss)->index);
 				else {
 					if (flags == NORMAL)
 						print_connect_msg(c);

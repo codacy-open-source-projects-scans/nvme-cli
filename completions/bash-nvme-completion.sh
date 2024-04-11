@@ -453,6 +453,20 @@ nvme_list_opts () {
 		opts+=" --opcode= -O --namespace-id= -n --data-len= -l \
 			--nmimt= -m --nmd0= -0 --nmd1= -1 --input-file= -i"
 			;;
+		"get-reg")
+		opts+=" --offset, -O --human-readable -H --cap --vs --cmbloc \
+			--cmbsz --bpinfo --cmbsts --cmbebs --cmbswtp --crto \
+			--pmrcap --pmrsts --pmrebs --pmrswtp --intms --intmc \
+			--cc --csts --nssr --aqa --asq --acq --bprsel --bpmbl \
+			--cmbmsc --nssd --pmrctl --pmrmscl --pmrmscu \
+			--output-format -o --verbose -v"
+			;;
+		"set-reg")
+		opts+=" --offset, -O --value= -V --mmio32 -m --intms= --intmc= \
+			--cc= --csts= --nssr= --aqa= --asq= --acq= --bprsel= \
+			--bpmbl= --cmbmsc= --nssd= --pmrctl= --pmrmscl= \
+			--pmrmscu= --output-format= -o --verbose= -v"
+			;;
 		"version")
 		opts+=$NO_OPTS
 			;;
@@ -1447,6 +1461,12 @@ plugin_ocp_opts () {
 		"set-telemetry-profile")
 		opts+=" --telemetry-profile-select= -t"
 			;;
+		"set-dssd-async-event-config")
+		opts+=" --enable-panic-notices -e --save -s"
+			;;
+		"get-dssd-power-state-feature")
+		opts+=" --sel= -S"
+			;;
 		"help")
 		opts+=$NO_OPTS
 			;;
@@ -1523,7 +1543,8 @@ _nvme_subcmds () {
 			clear-pcie-correctable-error-counters \
 			vs-fw-activate-history device-capability-log \
 			set-dssd-power-state-feature telemetry-string-log \
-			set-telemetry-profile"
+			set-telemetry-profile set-dssd-async-event-config \
+			get-dssd-async-event-config"
 	)
 
 	# Associative array mapping plugins to corresponding option completions
@@ -1575,7 +1596,7 @@ _nvme_subcmds () {
 		rpmb boot-part-log fid-support-effects-log \
 		supported-log-pages lockdown media-unit-stat-log \
 		supported-cap-config-log dim show-topology list-endgrp \
-		nvme-mi-recv nvme-mi-send"
+		nvme-mi-recv nvme-mi-send get-reg set-reg"
 
 	# Add plugins:
 	for plugin in "${!_plugin_subcmds[@]}"; do

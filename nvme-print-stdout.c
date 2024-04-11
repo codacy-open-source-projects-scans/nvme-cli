@@ -707,9 +707,9 @@ static const char *eomip_to_string(__u8 eomip)
 
 static void stdout_phy_rx_eom_odp(uint8_t odp)
 {
-	__u8 rsvd = (odp >> 2) & 0x3F;
-	__u8 edfp = (odp >> 1) & 0x1;
-	__u8 pefp = odp & 0x1;
+	__u8 rsvd = NVME_EOM_ODP_RSVD(odp);
+	__u8 edfp = NVME_EOM_ODP_EDFP(odp);
+	__u8 pefp = NVME_EOM_ODP_PEFP(odp);
 
 	if (rsvd)
 		printf("  [7:2] : %#x\tReserved\n", rsvd);
@@ -751,7 +751,7 @@ static void stdout_phy_rx_eom_descs(struct nvme_phy_rx_eom_log *log)
 		printf("Number of Columns: %u\n", le16_to_cpu(desc->ncols));
 		printf("Eye Data Length: %u\n", le16_to_cpu(desc->edlen));
 
-		if (log->odp & NVME_EOM_PRINTABLE_EYE_PRESENT)
+		if (NVME_EOM_ODP_PEFP(log->odp))
 			stdout_eom_printable_eye(desc);
 
 		/* Eye Data field is vendor specific */
@@ -820,10 +820,10 @@ static void stdout_media_unit_stat_log(struct nvme_media_unit_stat_log *mus_log)
 
 static void stdout_fdp_config_fdpa(uint8_t fdpa)
 {
-	__u8 valid = (fdpa >> 7) & 0x1;
+	__u8 valid = NVME_GET(fdpa, FDP_CONFIG_FDPA_VALID);
 	__u8 rsvd = (fdpa >> 5) & 0x3;
-	__u8 fdpvwc = (fdpa >> 4) & 0x1;
-	__u8 rgif = fdpa & 0xf;
+	__u8 fdpvwc = NVME_GET(fdpa, FDP_CONFIG_FDPA_FDPVWC);
+	__u8 rgif = NVME_GET(fdpa, FDP_CONFIG_FDPA_RGIF);
 
 	printf("  [7:7] : %#x\tFDP Configuration %sValid\n",
 		valid, valid ? "" : "Not ");
@@ -1118,21 +1118,20 @@ static void stdout_registers_cap(struct nvme_bar_cap *cap)
 
 static void stdout_registers_version(__u32 vs)
 {
-	printf("\tNVMe specification %d.%d\n\n", (vs & 0xffff0000) >> 16,
-		(vs & 0x0000ff00) >> 8);
+	printf("\tNVMe specification %d.%d\n\n", NVME_MAJOR(vs), NVME_MINOR(vs));
 }
 
 static void stdout_registers_cc_ams(__u8 ams)
 {
 	printf("\tArbitration Mechanism Selected     (AMS): ");
 	switch (ams) {
-	case 0:
+	case NVME_CC_AMS_RR:
 		printf("Round Robin\n");
 		break;
-	case 1:
+	case NVME_CC_AMS_WRRU:
 		printf("Weighted Round Robin with Urgent Priority Class\n");
 		break;
-	case 7:
+	case NVME_CC_AMS_VS:
 		printf("Vendor Specific\n");
 		break;
 	default:
@@ -1145,13 +1144,13 @@ static void stdout_registers_cc_shn(__u8 shn)
 {
 	printf("\tShutdown Notification              (SHN): ");
 	switch (shn) {
-	case 0:
+	case NVME_CC_SHN_NONE:
 		printf("No notification; no effect\n");
 		break;
-	case 1:
+	case NVME_CC_SHN_NORMAL:
 		printf("Normal shutdown notification\n");
 		break;
-	case 2:
+	case NVME_CC_SHN_ABRUPT:
 		printf("Abrupt shutdown notification\n");
 		break;
 	default:
@@ -1165,33 +1164,30 @@ static void stdout_registers_cc(__u32 cc)
 	printf("\tController Ready Independent of Media Enable (CRIME): %s\n",
 		NVME_CC_CRIME(cc) ? "Enabled" : "Disabled");
 
-	printf("\tI/O Completion Queue Entry Size (IOCQES): %u bytes\n",
-		1 << ((cc & 0x00f00000) >> NVME_CC_IOCQES_SHIFT));
-	printf("\tI/O Submission Queue Entry Size (IOSQES): %u bytes\n",
-		1 << ((cc & 0x000f0000) >> NVME_CC_IOSQES_SHIFT));
-	stdout_registers_cc_shn((cc & 0x0000c000) >> NVME_CC_SHN_SHIFT);
-	stdout_registers_cc_ams((cc & 0x00003800) >> NVME_CC_AMS_SHIFT);
+	printf("\tI/O Completion Queue Entry Size (IOCQES): %u bytes\n", 1 << NVME_CC_IOCQES(cc));
+	printf("\tI/O Submission Queue Entry Size (IOSQES): %u bytes\n", 1 << NVME_CC_IOSQES(cc));
+	stdout_registers_cc_shn(NVME_CC_SHN(cc));
+	stdout_registers_cc_ams(NVME_CC_AMS(cc));
 	printf("\tMemory Page Size                   (MPS): %u bytes\n",
-		1 << (12 + ((cc & 0x00000780) >> NVME_CC_MPS_SHIFT)));
+	       1 << (12 + NVME_CC_MPS(cc)));
 	printf("\tI/O Command Set Selected           (CSS): %s\n",
-		(cc & 0x00000070) == 0x00 ? "NVM Command Set" :
-		(cc & 0x00000070) == 0x60 ? "All supported I/O Command Sets" :
-		(cc & 0x00000070) == 0x70 ? "Admin Command Set only" : "Reserved");
-	printf("\tEnable                              (EN): %s\n\n",
-		(cc & 0x00000001) ? "Yes" : "No");
+	       NVME_CC_CSS(cc) == NVME_CC_CSS_NVM ? "NVM Command Set" :
+	       NVME_CC_CSS(cc) == NVME_CC_CSS_CSI ? "All supported I/O Command Sets" :
+	       NVME_CC_CSS(cc) == NVME_CC_CSS_ADMIN ? "Admin Command Set only" : "Reserved");
+	printf("\tEnable                              (EN): %s\n\n", NVME_CC_EN(cc) ? "Yes" : "No");
 }
 
 static void stdout_registers_csts_shst(__u8 shst)
 {
 	printf("\tShutdown Status               (SHST): ");
 	switch (shst) {
-	case 0:
+	case NVME_CSTS_SHST_NORMAL:
 		printf("Normal operation (no shutdown has been requested)\n");
 		break;
-	case 1:
+	case NVME_CSTS_SHST_OCCUR:
 		printf("Shutdown processing occurring\n");
 		break;
-	case 2:
+	case NVME_CSTS_SHST_CMPLT:
 		printf("Shutdown processing complete\n");
 		break;
 	default:
@@ -1202,16 +1198,14 @@ static void stdout_registers_csts_shst(__u8 shst)
 
 static void stdout_registers_csts(__u32 csts)
 {
-	printf("\tProcessing Paused               (PP): %s\n",
-		(csts & 0x00000020) ? "Yes" : "No");
+	printf("\tProcessing Paused               (PP): %s\n", NVME_CSTS_PP(csts) ? "Yes" : "No");
 	printf("\tNVM Subsystem Reset Occurred (NSSRO): %s\n",
-		(csts & 0x00000010) ? "Yes" : "No");
-	stdout_registers_csts_shst((csts & 0x0000000c) >> 2);
+	       NVME_CSTS_NSSRO(csts) ? "Yes" : "No");
+	stdout_registers_csts_shst(NVME_CSTS_SHST(csts));
 	printf("\tController Fatal Status        (CFS): %s\n",
-		(csts & 0x00000002) ? "True" : "False");
+	       NVME_CSTS_CFS(csts) ? "True" : "False");
 	printf("\tReady                          (RDY): %s\n\n",
-		(csts & 0x00000001) ? "Yes" : "No");
-
+	       NVME_CSTS_RDY(csts) ? "Yes" : "No");
 }
 
 static void stdout_registers_nssd(__u32 nssd)
@@ -1227,21 +1221,19 @@ static void stdout_registers_crto(__u32 crto)
 
 static void stdout_registers_aqa(__u32 aqa)
 {
-	printf("\tAdmin Completion Queue Size (ACQS): %u\n",
-		((aqa & 0x0fff0000) >> 16) + 1);
-	printf("\tAdmin Submission Queue Size (ASQS): %u\n\n",
-		(aqa & 0x00000fff) + 1);
-
+	printf("\tAdmin Completion Queue Size (ACQS): %u\n", NVME_AQA_ACQS(aqa) + 1);
+	printf("\tAdmin Submission Queue Size (ASQS): %u\n\n", NVME_AQA_ASQS(aqa) + 1);
 }
 
-static void stdout_registers_cmbloc(__u32 cmbloc, __u32 cmbsz)
+static void stdout_registers_cmbloc(__u32 cmbloc, bool support)
 {
 	static const char * const enforced[] = { "Enforced", "Not Enforced" };
 
-	if (cmbsz == 0) {
+	if (!support) {
 		printf("\tController Memory Buffer feature is not supported\n\n");
 		return;
 	}
+
 	printf("\tOffset                                                        (OFST): ");
 	printf("%#x (See cmbsz.szu for granularity)\n", (cmbloc & 0xfffff000) >> 12);
 
@@ -1352,6 +1344,24 @@ static void stdout_registers_cmbsts(__u32 cmbsts)
 		(cmbsts & 0x00000001));
 }
 
+static void stdout_registers_cmbebs(__u32 cmbebs)
+{
+	printf("\tCMB Elasticity Buffer Size Base  (CMBWBZ): %#x\n", cmbebs >> 8);
+	printf("\tRead Bypass Behavior                     : ");
+	printf("memory reads not conflicting with memory writes in the CMB Elasticity Buffer ");
+	printf("%s", cmbebs & 0x10 ? "SHALL" : "MAY");
+	printf(" bypass those memory writes\n");
+	printf("\tCMB Elasticity Buffer Size Units (CMBSZU): %s\n\n",
+	       nvme_register_unit_to_string(cmbebs & 0xf));
+}
+
+static void stdout_registers_cmbswtp(__u32 cmbswtp)
+{
+	printf("\tCMB Sustained Write Throughput       (CMBSWTV): %#x\n", cmbswtp >> 8);
+	printf("\tCMB Sustained Write Throughput Units (CMBSWTU): %s/second\n\n",
+	       nvme_register_unit_to_string(cmbswtp & 0xf));
+}
+
 static void stdout_registers_pmrcap(__u32 pmrcap)
 {
 	printf("\tController Memory Space Supported                   (CMSS): ");
@@ -1376,14 +1386,14 @@ static void stdout_registers_pmrctl(__u32 pmrctl)
 	printf("\tEnable (EN): PMR is %s\n", NVME_PMRCTL_EN(pmrctl) ? "READY" : "Disabled");
 }
 
-static void stdout_registers_pmrsts(__u32 pmrsts, __u32 pmrctl)
+static void stdout_registers_pmrsts(__u32 pmrsts, bool ready)
 {
 	printf("\tController Base Address Invalid (CBAI): %x\n", NVME_PMRSTS_CBAI(pmrsts));
 	printf("\tHealth Status                   (HSTS): %s\n",
 	       nvme_register_pmr_hsts_to_string(NVME_PMRSTS_HSTS(pmrsts)));
 	printf("\tNot Ready                       (NRDY): ");
 	printf("The Persistent Memory Region is %s to process ",
-	       !NVME_PMRSTS_NRDY(pmrsts) && NVME_PMRCTL_EN(pmrctl) ? "READY" : "Not Ready");
+	       !NVME_PMRSTS_NRDY(pmrsts) && ready ? "READY" : "Not Ready");
 	printf("PCI Express memory read and write requests\n");
 	printf("\tError                            (ERR): %x\n", NVME_PMRSTS_ERR(pmrsts));
 }
@@ -1396,7 +1406,7 @@ static void stdout_registers_pmrebs(__u32 pmrebs)
 	printf("in the PMR Elasticity Buffer %s bypass those memory writes\n",
 	       NVME_PMREBS_RBB(pmrebs) ? "SHALL" : "MAY");
 	printf("\tPMR Elasticity Buffer Size Units (PMRSZU): %s\n",
-	       nvme_register_pmr_pmrszu_to_string(NVME_PMREBS_PMRSZU(pmrebs)));
+	       nvme_register_unit_to_string(NVME_PMREBS_PMRSZU(pmrebs)));
 }
 
 static void stdout_registers_pmrswtp(__u32 pmrswtp)
@@ -1404,7 +1414,7 @@ static void stdout_registers_pmrswtp(__u32 pmrswtp)
 	printf("\tPMR Sustained Write Throughput       (PMRSWTV): %x\n",
 	       NVME_PMRSWTP_PMRSWTV(pmrswtp));
 	printf("\tPMR Sustained Write Throughput Units (PMRSWTU): %s/second\n",
-	       nvme_register_pmr_pmrszu_to_string(NVME_PMRSWTP_PMRSWTU(pmrswtp)));
+	       nvme_register_unit_to_string(NVME_PMRSWTP_PMRSWTU(pmrswtp)));
 }
 
 static void stdout_registers_pmrmscl(uint32_t pmrmscl)
@@ -1420,213 +1430,168 @@ static void stdout_registers_pmrmscu(uint32_t pmrmscu)
 		pmrmscu);
 }
 
-void stdout_ctrl_registers(void *bar, bool fabrics)
+static void stdout_ctrl_register_human(int offset, uint64_t value, bool support)
 {
-	uint64_t cap, asq, acq, bpmbl, cmbmsc;
-	uint32_t vs, intms, intmc, cc, csts, nssr, crto, aqa, cmbsz, cmbloc, bpinfo,
-		 bprsel, cmbsts, pmrcap, pmrctl, pmrsts, pmrebs, pmrswtp,
-		 pmrmscl, pmrmscu;
-	int human = stdout_print_ops.flags & VERBOSE;
-
-	cap = mmio_read64(bar + NVME_REG_CAP);
-	vs = mmio_read32(bar + NVME_REG_VS);
-	intms = mmio_read32(bar + NVME_REG_INTMS);
-	intmc = mmio_read32(bar + NVME_REG_INTMC);
-	cc = mmio_read32(bar + NVME_REG_CC);
-	csts = mmio_read32(bar + NVME_REG_CSTS);
-	nssr = mmio_read32(bar + NVME_REG_NSSR);
-	crto = mmio_read32(bar + NVME_REG_CRTO);
-	aqa = mmio_read32(bar + NVME_REG_AQA);
-	asq = mmio_read64(bar + NVME_REG_ASQ);
-	acq = mmio_read64(bar + NVME_REG_ACQ);
-	cmbloc = mmio_read32(bar + NVME_REG_CMBLOC);
-	cmbsz = mmio_read32(bar + NVME_REG_CMBSZ);
-	bpinfo = mmio_read32(bar + NVME_REG_BPINFO);
-	bprsel = mmio_read32(bar + NVME_REG_BPRSEL);
-	bpmbl = mmio_read64(bar + NVME_REG_BPMBL);
-	cmbmsc = mmio_read64(bar + NVME_REG_CMBMSC);
-	cmbsts = mmio_read32(bar + NVME_REG_CMBSTS);
-	pmrcap = mmio_read32(bar + NVME_REG_PMRCAP);
-	pmrctl = mmio_read32(bar + NVME_REG_PMRCTL);
-	pmrsts = mmio_read32(bar + NVME_REG_PMRSTS);
-	pmrebs = mmio_read32(bar + NVME_REG_PMREBS);
-	pmrswtp = mmio_read32(bar + NVME_REG_PMRSWTP);
-	pmrmscl = mmio_read32(bar + NVME_REG_PMRMSCL);
-	pmrmscu = mmio_read32(bar + NVME_REG_PMRMSCU);
-
-	if (human) {
-		if (cap != 0xffffffff) {
-			printf("cap     : %"PRIx64"\n", cap);
-			stdout_registers_cap((struct nvme_bar_cap *)&cap);
-		}
-		if (vs != 0xffffffff) {
-			printf("version : %x\n", vs);
-			stdout_registers_version(vs);
-		}
-		if (cc != 0xffffffff) {
-			printf("cc      : %x\n", cc);
-			stdout_registers_cc(cc);
-		}
-		if (csts != 0xffffffff) {
-			printf("csts    : %x\n", csts);
-			stdout_registers_csts(csts);
-		}
-		if (nssr != 0xffffffff) {
-			printf("nssr    : %x\n", nssr);
-			printf("\tNVM Subsystem Reset Control (NSSRC): %u\n\n",
-				nssr);
-		}
-		if (crto != 0xffffffff) {
-			printf("crto    : %x\n", crto);
-			stdout_registers_crto(crto);
-		}
-		if (!fabrics) {
-			printf("intms   : %x\n", intms);
-			printf("\tInterrupt Vector Mask Set (IVMS): %x\n\n",
-					intms);
-
-			printf("intmc   : %x\n", intmc);
-			printf("\tInterrupt Vector Mask Clear (IVMC): %x\n\n",
-					intmc);
-			printf("aqa     : %x\n", aqa);
-			stdout_registers_aqa(aqa);
-
-			printf("asq     : %"PRIx64"\n", asq);
-			printf("\tAdmin Submission Queue Base (ASQB): %"PRIx64"\n\n",
-					asq);
-
-			printf("acq     : %"PRIx64"\n", acq);
-			printf("\tAdmin Completion Queue Base (ACQB): %"PRIx64"\n\n",
-					acq);
-
-			printf("cmbloc  : %x\n", cmbloc);
-			stdout_registers_cmbloc(cmbloc, cmbsz);
-
-			printf("cmbsz   : %x\n", cmbsz);
-			stdout_registers_cmbsz(cmbsz);
-
-			printf("bpinfo  : %x\n", bpinfo);
-			stdout_registers_bpinfo(bpinfo);
-
-			printf("bprsel  : %x\n", bprsel);
-			stdout_registers_bprsel(bprsel);
-
-			printf("bpmbl   : %"PRIx64"\n", bpmbl);
-			stdout_registers_bpmbl(bpmbl);
-
-			printf("cmbmsc	: %"PRIx64"\n", cmbmsc);
-			stdout_registers_cmbmsc(cmbmsc);
-
-			printf("cmbsts	: %x\n", cmbsts);
-			stdout_registers_cmbsts(cmbsts);
-
-			printf("pmrcap  : %x\n", pmrcap);
-			stdout_registers_pmrcap(pmrcap);
-
-			printf("pmrctl  : %x\n", pmrctl);
-			stdout_registers_pmrctl(pmrctl);
-
-			printf("pmrsts  : %x\n", pmrsts);
-			stdout_registers_pmrsts(pmrsts, pmrctl);
-
-			printf("pmrebs  : %x\n", pmrebs);
-			stdout_registers_pmrebs(pmrebs);
-
-			printf("pmrswtp : %x\n", pmrswtp);
-			stdout_registers_pmrswtp(pmrswtp);
-
-			printf("pmrmscl	: %#x\n", pmrmscl);
-			stdout_registers_pmrmscl(pmrmscl);
-
-			printf("pmrmscu	: %#x\n", pmrmscu);
-			stdout_registers_pmrmscu(pmrmscu);
-		}
-	} else {
-		if (cap != 0xffffffff)
-			printf("cap     : %"PRIx64"\n", cap);
-		if (vs != 0xffffffff)
-			printf("version : %x\n", vs);
-		if (cc != 0xffffffff)
-			printf("cc      : %x\n", cc);
-		if (csts != 0xffffffff)
-			printf("csts    : %x\n", csts);
-		if (nssr != 0xffffffff)
-			printf("nssr    : %x\n", nssr);
-		if (crto != 0xffffffff)
-			printf("crto    : %x\n", crto);
-		if (!fabrics) {
-			printf("intms   : %x\n", intms);
-			printf("intmc   : %x\n", intmc);
-			printf("aqa     : %x\n", aqa);
-			printf("asq     : %"PRIx64"\n", asq);
-			printf("acq     : %"PRIx64"\n", acq);
-			printf("cmbloc  : %x\n", cmbloc);
-			printf("cmbsz   : %x\n", cmbsz);
-			printf("bpinfo  : %x\n", bpinfo);
-			printf("bprsel  : %x\n", bprsel);
-			printf("bpmbl   : %"PRIx64"\n", bpmbl);
-			printf("cmbmsc	: %"PRIx64"\n", cmbmsc);
-			printf("cmbsts	: %x\n", cmbsts);
-			printf("pmrcap  : %x\n", pmrcap);
-			printf("pmrctl  : %x\n", pmrctl);
-			printf("pmrsts  : %x\n", pmrsts);
-			printf("pmrebs  : %x\n", pmrebs);
-			printf("pmrswtp : %x\n", pmrswtp);
-			printf("pmrmscl	: %#x\n", pmrmscl);
-			printf("pmrmscu	: %#x\n", pmrmscu);
-		}
+	switch (offset) {
+	case NVME_REG_CAP:
+		stdout_registers_cap((struct nvme_bar_cap *)&value);
+		break;
+	case NVME_REG_VS:
+		stdout_registers_version(value);
+		break;
+	case NVME_REG_INTMS:
+		printf("\tInterrupt Vector Mask Set (IVMS): %#"PRIx64"\n\n", value);
+		break;
+	case NVME_REG_INTMC:
+		printf("\tInterrupt Vector Mask Clear (IVMC): %#"PRIx64"\n\n", value);
+		break;
+	case NVME_REG_CC:
+		stdout_registers_cc(value);
+		break;
+	case NVME_REG_CSTS:
+		stdout_registers_csts(value);
+		break;
+	case NVME_REG_NSSR:
+		printf("\tNVM Subsystem Reset Control (NSSRC): %"PRIu64"\n\n", value);
+		break;
+	case NVME_REG_AQA:
+		stdout_registers_aqa(value);
+		break;
+	case NVME_REG_ASQ:
+		printf("\tAdmin Submission Queue Base (ASQB): %#"PRIx64"\n\n", value);
+		break;
+	case NVME_REG_ACQ:
+		printf("\tAdmin Completion Queue Base (ACQB): %#"PRIx64"\n\n", value);
+		break;
+	case NVME_REG_CMBLOC:
+		stdout_registers_cmbloc(value, support);
+		break;
+	case NVME_REG_CMBSZ:
+		stdout_registers_cmbsz(value);
+		break;
+	case NVME_REG_BPINFO:
+		stdout_registers_bpinfo(value);
+		break;
+	case NVME_REG_BPRSEL:
+		stdout_registers_bprsel(value);
+		break;
+	case NVME_REG_BPMBL:
+		stdout_registers_bpmbl(value);
+		break;
+	case NVME_REG_CMBMSC:
+		stdout_registers_cmbmsc(value);
+		break;
+	case NVME_REG_CMBSTS:
+		stdout_registers_cmbsts(value);
+		break;
+	case NVME_REG_CMBEBS:
+		stdout_registers_cmbebs(value);
+		break;
+	case NVME_REG_CMBSWTP:
+		stdout_registers_cmbswtp(value);
+		break;
+	case NVME_REG_NSSD:
+		stdout_registers_nssd(value);
+		break;
+	case NVME_REG_CRTO:
+		stdout_registers_crto(value);
+		break;
+	case NVME_REG_PMRCAP:
+		stdout_registers_pmrcap(value);
+		break;
+	case NVME_REG_PMRCTL:
+		stdout_registers_pmrctl(value);
+		break;
+	case NVME_REG_PMRSTS:
+		stdout_registers_pmrsts(value, support);
+		break;
+	case NVME_REG_PMREBS:
+		stdout_registers_pmrebs(value);
+		break;
+	case NVME_REG_PMRSWTP:
+		stdout_registers_pmrswtp(value);
+		break;
+	case NVME_REG_PMRMSCL:
+		stdout_registers_pmrmscl(value);
+		break;
+	case NVME_REG_PMRMSCU:
+		stdout_registers_pmrmscu(value);
+		break;
+	default:
+		printf("unknown register: %#04x (%s), value: %#"PRIx64"\n",
+		       offset, nvme_register_to_string(offset), value);
+		break;
 	}
 }
 
-static void stdout_single_property(int offset, uint64_t value64)
+static void stdout_ctrl_register_common(int offset, uint64_t value, bool fabrics)
 {
-	int human = stdout_print_ops.flags & VERBOSE;
-	uint32_t value32 = (uint32_t)value64;
+	bool human = !!(stdout_print_ops.flags & VERBOSE);
+	const char *name = nvme_register_to_string(offset);
+	const char *type = fabrics ? "property" : "register";
 
-	if (!human) {
-		if (nvme_is_64bit_reg(offset))
-			printf("property: %#02x (%s), value: %#"PRIx64"\n",
-			       offset, nvme_register_to_string(offset), value64);
-		else
-			printf("property: %#02x (%s), value: %#x\n", offset,
-			       nvme_register_to_string(offset), value32);
+	if (human) {
+		printf("%s: %#"PRIx64"\n", name, value);
+		stdout_ctrl_register_human(offset, value, true);
 		return;
 	}
 
-	switch (offset) {
-	case NVME_REG_CAP:
-		printf("cap : %"PRIx64"\n", value64);
-		stdout_registers_cap((struct nvme_bar_cap *)&value64);
-		break;
-	case NVME_REG_VS:
-		printf("version : %x\n", value32);
-		stdout_registers_version(value32);
-		break;
-	case NVME_REG_CC:
-		printf("cc : %x\n", value32);
-		stdout_registers_cc(value32);
-		break;
-	case NVME_REG_CSTS:
-		printf("csts : %x\n", value32);
-		stdout_registers_csts(value32);
-		break;
-	case NVME_REG_NSSR:
-		printf("nssr : %x\n", value32);
-		printf("\tNVM Subsystem Reset Control (NSSRC): %u\n\n", value32);
-		break;
-	case NVME_REG_NSSD:
-		printf("nssd : %x\n", value32);
-		stdout_registers_nssd(value32);
-		break;
-	case NVME_REG_CRTO:
-		printf("crto : %x\n", value32);
-		stdout_registers_crto(value32);
-		break;
-	default:
-		printf("unknown property: %#02x (%s), value: %"PRIx64"\n",
-		       offset, nvme_register_to_string(offset), value64);
-		break;
+	printf("%s: %#04x (%s), value: %#"PRIx64"\n", type, offset,
+	       name, value);
+}
+
+static void stdout_ctrl_register(int offset, uint64_t value)
+{
+	stdout_ctrl_register_common(offset, value, false);
+}
+
+static void stdout_ctrl_register_support(void *bar, bool fabrics, int offset, bool human,
+					 bool support)
+{
+	uint64_t value = nvme_is_64bit_reg(offset) ? mmio_read64(bar + offset) :
+	    mmio_read32(bar + offset);
+
+	if (fabrics && value == -1)
+		return;
+
+	printf("%-8s: ", nvme_register_symbol_to_string(offset));
+
+	printf("%#"PRIx64"\n", value);
+
+	if (human)
+		stdout_ctrl_register_human(offset, value, support);
+}
+
+void stdout_ctrl_registers(void *bar, bool fabrics)
+{
+	uint32_t value;
+	bool human = !!(stdout_print_ops.flags & VERBOSE);
+	int offset;
+	bool support;
+
+	for (offset = NVME_REG_CAP; offset <= NVME_REG_PMRMSCU; offset += get_reg_size(offset)) {
+		if (!nvme_is_ctrl_reg(offset) || (fabrics && !nvme_is_fabrics_reg(offset)))
+			continue;
+		switch (offset) {
+		case NVME_REG_CMBLOC:
+			value = mmio_read32(bar + NVME_REG_CMBSZ);
+			support = nvme_registers_cmbloc_support(value);
+			break;
+		case NVME_REG_PMRSTS:
+			value = mmio_read32(bar + NVME_REG_PMRCTL);
+			support = nvme_registers_pmrctl_ready(value);
+			break;
+		default:
+			support = true;
+			break;
+		}
+		stdout_ctrl_register_support(bar, fabrics, offset, human, support);
 	}
+}
+
+static void stdout_single_property(int offset, uint64_t value)
+{
+	stdout_ctrl_register_common(offset, value, true);
 }
 
 static void stdout_status(int status)
@@ -4811,8 +4776,9 @@ static bool stdout_detailed_ctrl(const char *name, void *arg)
 	c = htable_ctrl_get(&res->ht_c, name);
 	assert(c);
 
-	printf("%-8s %-20s %-40s %-8s %-6s %-14s %-6s %-12s ",
+	printf("%-8s %-6s %-20s %-40s %-8s %-6s %-14s %-6s %-12s ",
 	       nvme_ctrl_get_name(c),
+	       nvme_ctrl_get_cntlid(c),
 	       nvme_ctrl_get_serial(c),
 	       nvme_ctrl_get_model(c),
 	       nvme_ctrl_get_firmware(c),
@@ -4891,10 +4857,11 @@ static void stdout_detailed_list(nvme_root_t r)
 	strset_iterate(&res.subsystems, stdout_detailed_subsys, &res);
 	printf("\n");
 
-	printf("%-8s %-20s %-40s %-8s %-6s %-14s %-6s %-12s %-16s\n", "Device",
-		"SN", "MN", "FR", "TxPort", "Address", "Slot", "Subsystem", "Namespaces");
-	printf("%-.8s %-.20s %-.40s %-.8s %-.6s %-.14s %-.6s %-.12s %-.16s\n", dash,
-		dash, dash, dash, dash, dash, dash, dash, dash);
+	printf("%-8s %-6s %-20s %-40s %-8s %-6s %-14s %-6s %-12s %-16s\n", "Device",
+		"Cntlid", "SN", "MN", "FR", "TxPort", "Address", "Slot", "Subsystem",
+		"Namespaces");
+	printf("%-.8s %-.6s %-.20s %-.40s %-.8s %-.6s %-.14s %-.6s %-.12s %-.16s\n",
+			dash, dash, dash, dash, dash, dash, dash, dash, dash, dash);
 	strset_iterate(&res.ctrls, stdout_detailed_ctrl, &res);
 	printf("\n");
 
@@ -5120,6 +5087,7 @@ static struct print_ops stdout_print_ops = {
 	.phy_rx_eom_log			= stdout_phy_rx_eom_log,
 	.ctrl_list			= stdout_list_ctrl,
 	.ctrl_registers			= stdout_ctrl_registers,
+	.ctrl_register			= stdout_ctrl_register,
 	.directive			= stdout_directive_show,
 	.discovery_log			= stdout_discovery_log,
 	.effects_log_list		= stdout_effects_log_pages,

@@ -1235,49 +1235,50 @@ static void stdout_registers_cmbloc(__u32 cmbloc, bool support)
 	}
 
 	printf("\tOffset                                                        (OFST): ");
-	printf("%#x (See cmbsz.szu for granularity)\n", (cmbloc & 0xfffff000) >> 12);
+	printf("%#x (See cmbsz.szu for granularity)\n", NVME_CMBLOC_OFST(cmbloc));
 
 	printf("\tCMB Queue Dword Alignment                                     (CQDA): %d\n",
-	       (cmbloc & 0x00000100) >> 8);
+	       NVME_CMBLOC_CQDA(cmbloc));
 
 	printf("\tCMB Data Metadata Mixed Memory Support                      (CDMMMS): %s\n",
-	       enforced[(cmbloc & 0x00000080) >> 7]);
+	       enforced[NVME_CMBLOC_CDMMMS(cmbloc)]);
 
 	printf("\tCMB Data Pointer and Command Independent Locations Support (CDPCILS): %s\n",
-	       enforced[(cmbloc & 0x00000040) >> 6]);
+	       enforced[NVME_CMBLOC_CDPCILS(cmbloc)]);
 
 	printf("\tCMB Data Pointer Mixed Locations Support                    (CDPMLS): %s\n",
-	       enforced[(cmbloc & 0x00000020) >> 5]);
+	       enforced[NVME_CMBLOC_CDPLMS(cmbloc)]);
 
 	printf("\tCMB Queue Physically Discontiguous Support                   (CQPDS): %s\n",
-	       enforced[(cmbloc & 0x00000010) >> 4]);
+	       enforced[NVME_CMBLOC_CQPDS(cmbloc)]);
 
 	printf("\tCMB Queue Mixed Memory Support                               (CQMMS): %s\n",
-	       enforced[(cmbloc & 0x00000008) >> 3]);
+	       enforced[NVME_CMBLOC_CQMMS(cmbloc)]);
 
 	printf("\tBase Indicator Register                                        (BIR): %#x\n\n",
-	       (cmbloc & 0x00000007));
+	       NVME_CMBLOC_BIR(cmbloc));
 }
 
 static void stdout_registers_cmbsz(__u32 cmbsz)
 {
-	if (cmbsz == 0) {
+	if (!cmbsz) {
 		printf("\tController Memory Buffer feature is not supported\n\n");
 		return;
 	}
-	printf("\tSize                      (SZ): %u\n", (cmbsz & 0xfffff000) >> 12);
+
+	printf("\tSize                      (SZ): %u\n", NVME_CMBSZ_SZ(cmbsz));
 	printf("\tSize Units               (SZU): %s\n",
-	       nvme_register_szu_to_string((cmbsz & 0x00000f00) >> 8));
+	       nvme_register_szu_to_string(NVME_CMBSZ_SZU(cmbsz)));
 	printf("\tWrite Data Support       (WDS): Write Data and metadata transfer in Controller Memory Buffer is %s\n",
-	       (cmbsz & 0x00000010) ? "Supported" : "Not supported");
+	       NVME_CMBSZ_WDS(cmbsz) ? "Supported" : "Not supported");
 	printf("\tRead Data Support        (RDS): Read Data and metadata transfer in Controller Memory Buffer is %s\n",
-	       (cmbsz & 0x00000008) ? "Supported" : "Not supported");
+	       NVME_CMBSZ_RDS(cmbsz) ? "Supported" : "Not supported");
 	printf("\tPRP SGL List Support   (LISTS): PRP/SG Lists in Controller Memory Buffer is %s\n",
-	       (cmbsz & 0x00000004) ? "Supported" : "Not supported");
+	       NVME_CMBSZ_LISTS(cmbsz) ? "Supported" : "Not supported");
 	printf("\tCompletion Queue Support (CQS): Admin and I/O Completion Queues in Controller Memory Buffer is %s\n",
-	       (cmbsz & 0x00000002) ? "Supported" : "Not supported");
+	       NVME_CMBSZ_CQS(cmbsz) ? "Supported" : "Not supported");
 	printf("\tSubmission Queue Support (SQS): Admin and I/O Submission Queues in Controller Memory Buffer is %s\n\n",
-	       (cmbsz & 0x00000001) ? "Supported" : "Not supported");
+	       NVME_CMBSZ_SQS(cmbsz) ? "Supported" : "Not supported");
 }
 
 static void stdout_registers_bpinfo_brs(__u8 brs)
@@ -1304,27 +1305,21 @@ static void stdout_registers_bpinfo_brs(__u8 brs)
 
 static void stdout_registers_bpinfo(__u32 bpinfo)
 {
-	printf("\tActive Boot Partition ID      (ABPID): %u\n",
-		(bpinfo & 0x80000000) >> 31);
-	stdout_registers_bpinfo_brs((bpinfo & 0x03000000) >> 24);
-	printf("\tBoot Partition Size            (BPSZ): %u\n",
-		bpinfo & 0x00007fff);
+	printf("\tActive Boot Partition ID      (ABPID): %u\n", NVME_BPINFO_ABPID(bpinfo));
+	stdout_registers_bpinfo_brs(NVME_BPINFO_BRS(bpinfo));
+	printf("\tBoot Partition Size            (BPSZ): %u\n", NVME_BPINFO_BPSZ(bpinfo));
 }
 
 static void stdout_registers_bprsel(__u32 bprsel)
 {
-	printf("\tBoot Partition Identifier      (BPID): %u\n",
-		(bprsel & 0x80000000) >> 31);
-	printf("\tBoot Partition Read Offset    (BPROF): %x\n",
-		(bprsel & 0x3ffffc00) >> 10);
-	printf("\tBoot Partition Read Size      (BPRSZ): %x\n",
-		bprsel & 0x000003ff);
+	printf("\tBoot Partition Identifier      (BPID): %u\n", NVME_BPRSEL_BPID(bprsel));
+	printf("\tBoot Partition Read Offset    (BPROF): %x\n", NVME_BPRSEL_BPROF(bprsel));
+	printf("\tBoot Partition Read Size      (BPRSZ): %x\n", NVME_BPRSEL_BPRSZ(bprsel));
 }
 
 static void stdout_registers_bpmbl(uint64_t bpmbl)
 {
-	printf("\tBoot Partition Memory Buffer Base Address (BMBBA): %"PRIx64"\n",
-		bpmbl);
+	printf("\tBoot Partition Memory Buffer Base Address (BMBBA): %"PRIx64"\n", bpmbl);
 }
 
 static void stdout_registers_cmbmsc(uint64_t cmbmsc)

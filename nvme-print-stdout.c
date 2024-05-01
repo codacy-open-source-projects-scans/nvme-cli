@@ -1198,6 +1198,8 @@ static void stdout_registers_csts_shst(__u8 shst)
 
 static void stdout_registers_csts(__u32 csts)
 {
+	printf("\tShutdown Type                   (ST): %s\n",
+	       NVME_CSTS_ST(csts) ? "Subsystem" : "Controller");
 	printf("\tProcessing Paused               (PP): %s\n", NVME_CSTS_PP(csts) ? "Yes" : "No");
 	printf("\tNVM Subsystem Reset Occurred (NSSRO): %s\n",
 	       NVME_CSTS_NSSRO(csts) ? "Yes" : "No");
@@ -1325,36 +1327,34 @@ static void stdout_registers_bpmbl(uint64_t bpmbl)
 static void stdout_registers_cmbmsc(uint64_t cmbmsc)
 {
 	printf("\tController Base Address         (CBA): %" PRIx64 "\n",
-			(cmbmsc & 0xfffffffffffff000) >> 12);
-	printf("\tController Memory Space Enable (CMSE): %" PRIx64 "\n",
-			(cmbmsc & 0x0000000000000002) >> 1);
-	printf("\tCapabilities Registers Enabled  (CRE): CMBLOC and "\
-	       "CMBSZ registers are%senabled\n\n",
-		(cmbmsc & 0x0000000000000001) ? " " : " NOT ");
+	       (uint64_t)NVME_CMBMSC_CBA(cmbmsc));
+	printf("\tController Memory Space Enable (CMSE): %" PRIx64 "\n", NVME_CMBMSC_CMSE(cmbmsc));
+	printf("\tCapabilities Registers Enabled  (CRE): ");
+	printf("CMBLOC and CMBSZ registers are %senabled\n\n",
+	       NVME_CMBMSC_CRE(cmbmsc) ? "" : "NOT ");
 }
 
 static void stdout_registers_cmbsts(__u32 cmbsts)
 {
-	printf("\tController Base Address Invalid (CBAI): %x\n\n",
-		(cmbsts & 0x00000001));
+	printf("\tController Base Address Invalid (CBAI): %x\n\n", NVME_CMBSTS_CBAI(cmbsts));
 }
 
 static void stdout_registers_cmbebs(__u32 cmbebs)
 {
-	printf("\tCMB Elasticity Buffer Size Base  (CMBWBZ): %#x\n", cmbebs >> 8);
+	printf("\tCMB Elasticity Buffer Size Base  (CMBWBZ): %#x\n", NVME_CMBEBS_CMBWBZ(cmbebs));
 	printf("\tRead Bypass Behavior                     : ");
 	printf("memory reads not conflicting with memory writes in the CMB Elasticity Buffer ");
-	printf("%s", cmbebs & 0x10 ? "SHALL" : "MAY");
-	printf(" bypass those memory writes\n");
+	printf("%s bypass those memory writes\n", NVME_CMBEBS_RBB(cmbebs) ? "SHALL" : "MAY");
 	printf("\tCMB Elasticity Buffer Size Units (CMBSZU): %s\n\n",
-	       nvme_register_unit_to_string(cmbebs & 0xf));
+	       nvme_register_unit_to_string(NVME_CMBEBS_CMBSZU(cmbebs)));
 }
 
 static void stdout_registers_cmbswtp(__u32 cmbswtp)
 {
-	printf("\tCMB Sustained Write Throughput       (CMBSWTV): %#x\n", cmbswtp >> 8);
+	printf("\tCMB Sustained Write Throughput       (CMBSWTV): %#x\n",
+	       NVME_CMBSWTP_CMBSWTV(cmbswtp));
 	printf("\tCMB Sustained Write Throughput Units (CMBSWTU): %s/second\n\n",
-	       nvme_register_unit_to_string(cmbswtp & 0xf));
+	       nvme_register_unit_to_string(NVME_CMBSWTP_CMBSWTU(cmbswtp)));
 }
 
 static void stdout_registers_pmrcap(__u32 pmrcap)
@@ -1631,18 +1631,17 @@ static void stdout_error_status(int status, const char *msg, va_list ap)
 
 static void stdout_id_ctrl_cmic(__u8 cmic)
 {
-	__u8 rsvd = (cmic & 0xF0) >> 4;
-	__u8 ana = (cmic & 0x8) >> 3;
-	__u8 sriov = (cmic & 0x4) >> 2;
-	__u8 mctl = (cmic & 0x2) >> 1;
-	__u8 mp = cmic & 0x1;
+	__u8 rsvd = NVME_CMIC_MULTI_RSVD(cmic);
+	__u8 ana = NVME_CMIC_MULTI_ANA(cmic);
+	__u8 sriov = NVME_CMIC_MULTI_SRIOV(cmic);
+	__u8 mctl = NVME_CMIC_MULTI_CTRL(cmic);
+	__u8 mp = NVME_CMIC_MULTI_PORT(cmic);
 
 	if (rsvd)
 		printf("  [7:4] : %#x\tReserved\n", rsvd);
 	printf("  [3:3] : %#x\tANA %ssupported\n", ana, ana ? "" : "not ");
 	printf("  [2:2] : %#x\t%s\n", sriov, sriov ? "SR-IOV" : "PCI");
-	printf("  [1:1] : %#x\t%s Controller\n",
-		mctl, mctl ? "Multi" : "Single");
+	printf("  [1:1] : %#x\t%s Controller\n", mctl, mctl ? "Multi" : "Single");
 	printf("  [0:0] : %#x\t%s Port\n", mp, mp ? "Multi" : "Single");
 	printf("\n");
 }

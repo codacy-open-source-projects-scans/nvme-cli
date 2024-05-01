@@ -26,10 +26,11 @@ if json_c_dep.found()
     'plugins/wdc/wdc-utils.c',
     'plugins/ymtc/ymtc-nvme.c',
     'plugins/zns/zns.c',
+    'plugins/ssstc/ssstc-nvme.c',
   ]
   subdir('solidigm')
   subdir('ocp')
-  if conf.has('HAVE_SED_OPAL')
+  if conf.get('HAVE_SED_OPAL') != 0
     subdir('sed')
   endif
 endif

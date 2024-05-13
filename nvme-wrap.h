@@ -26,10 +26,9 @@ int nvme_cli_identify_active_ns_list(struct nvme_dev *dev, __u32 nsid,
 				     struct nvme_ns_list *list);
 int nvme_cli_identify_allocated_ns_list(struct nvme_dev *dev, __u32 nsid,
 					struct nvme_ns_list *list);
-int nvme_cli_identify_primary_ctrl(struct nvme_dev *dev, __u32 nsid,
+int nvme_cli_identify_primary_ctrl(struct nvme_dev *dev, __u16 cntid,
 				   struct nvme_primary_ctrl_cap *cap);
-int nvme_cli_identify_secondary_ctrl_list(struct nvme_dev *dev,
-					  __u16 ctrl_id,
+int nvme_cli_identify_secondary_ctrl_list(struct nvme_dev *dev, __u16 cntid,
 					  struct nvme_secondary_ctrl_list *sc_list);
 int nvme_cli_ns_mgmt_delete(struct nvme_dev *dev, __u32 nsid);
 int nvme_cli_ns_mgmt_create(struct nvme_dev *dev,
@@ -92,8 +91,6 @@ int nvme_cli_get_log_predictable_lat_event(struct nvme_dev *dev, bool rae,
 int nvme_cli_get_log_ana(struct nvme_dev *dev,
 			 enum nvme_log_ana_lsp lsp, bool rae,
 			 __u64 offset, __u32 len, void *log);
-int nvme_cli_get_log_ana_groups(struct nvme_dev *dev, bool rae, __u32 len,
-				struct nvme_ana_group_desc *log);
 int nvme_cli_get_log_lba_status(struct nvme_dev *dev, bool rae,
 				__u64 offset, __u32 len, void *log);
 int nvme_cli_get_log_endurance_grp_evt(struct nvme_dev *dev, bool rae,

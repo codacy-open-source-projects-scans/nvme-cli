@@ -34,6 +34,7 @@
 #include <inttypes.h>
 #include <locale.h>
 #include <stdio.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -432,9 +433,8 @@ static int get_dev(struct nvme_dev **dev, int argc, char **argv, int flags)
 	return ret != 0 ? -errno : 0;
 }
 
-int parse_and_open(struct nvme_dev **dev, int argc, char **argv,
-		   const char *desc,
-		   struct argconfig_commandline_options *opts)
+static int parse_args(int argc, char *argv[], const char *desc,
+		      struct argconfig_commandline_options *opts)
 {
 	int ret;
 
@@ -442,11 +442,25 @@ int parse_and_open(struct nvme_dev **dev, int argc, char **argv,
 	if (ret)
 		return ret;
 
+	log_level = map_log_level(verbose_level, false);
+	nvme_init_default_logging(stderr, log_level, false, false);
+
+	return 0;
+}
+
+int parse_and_open(struct nvme_dev **dev, int argc, char **argv,
+		   const char *desc,
+		   struct argconfig_commandline_options *opts)
+{
+	int ret;
+
+	ret = parse_args(argc, argv, desc, opts);
+	if (ret)
+		return ret;
+
 	ret = get_dev(dev, argc, argv, O_RDONLY);
 	if (ret < 0)
 		argconfig_print_help(desc, opts);
-	else
-		log_level = map_log_level(verbose_level, false);
 
 	return ret;
 }
@@ -1462,8 +1476,8 @@ static int get_persistent_event_log(int argc, char **argv,
 		"processing this persistent log page command.";
 	const char *log_len = "number of bytes to retrieve";
 
-	_cleanup_free_ struct nvme_persistent_event_log *pevent_collected = NULL;
 	_cleanup_free_ struct nvme_persistent_event_log *pevent = NULL;
+	struct nvme_persistent_event_log *pevent_collected = NULL;
 	_cleanup_huge_ struct nvme_mem_huge mh = { 0, };
 	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
 	enum nvme_print_flags flags;
@@ -3269,7 +3283,7 @@ static bool nvme_match_device_filter(nvme_subsystem_t s,
 static int list_subsys(int argc, char **argv, struct command *cmd,
 		struct plugin *plugin)
 {
-	nvme_root_t r = NULL;
+	_cleanup_nvme_root_ nvme_root_t r = NULL;
 	enum nvme_print_flags flags;
 	const char *desc = "Retrieve information for subsystems";
 	nvme_scan_filter_t filter = NULL;
@@ -3279,9 +3293,9 @@ static int list_subsys(int argc, char **argv, struct command *cmd,
 
 	NVME_ARGS(opts);
 
-	err = argconfig_parse(argc, argv, desc, opts);
+	err = parse_args(argc, argv, desc, opts);
 	if (err < 0)
-		goto ret;
+		return err;
 
 	devname = NULL;
 	if (optind < argc)
@@ -3303,8 +3317,7 @@ static int list_subsys(int argc, char **argv, struct command *cmd,
 			nvme_show_error("Failed to scan nvme subsystem for %s", devname);
 		else
 			nvme_show_error("Failed to scan nvme subsystem");
-		err = -errno;
-		goto ret;
+		return -errno;
 	}
 
 	if (devname) {
@@ -3312,8 +3325,7 @@ static int list_subsys(int argc, char **argv, struct command *cmd,
 
 		if (sscanf(devname, "nvme%dn%d", &subsys_num, &nsid) != 2) {
 			nvme_show_error("Invalid device name %s", devname);
-			err = -EINVAL;
-			goto ret;
+			return -EINVAL;
 		}
 		filter = nvme_match_device_filter;
 	}
@@ -3322,27 +3334,24 @@ static int list_subsys(int argc, char **argv, struct command *cmd,
 	if (err) {
 		if (errno != ENOENT)
 			nvme_show_error("Failed to scan topology: %s", nvme_strerror(errno));
-		goto ret;
+		return -errno;
 	}
 
 	nvme_show_subsystem_list(r, nsid != NVME_NSID_ALL, flags);
 
-ret:
-	if (r)
-		nvme_free_tree(r);
-	return err;
+	return 0;
 }
 
 static int list(int argc, char **argv, struct command *cmd, struct plugin *plugin)
 {
 	const char *desc = "Retrieve basic information for all NVMe namespaces";
 	enum nvme_print_flags flags;
-	nvme_root_t r;
+	_cleanup_nvme_root_ nvme_root_t r = NULL;
 	int err = 0;
 
 	NVME_ARGS(opts);
 
-	err = argconfig_parse(argc, argv, desc, opts);
+	err = parse_args(argc, argv, desc, opts);
 	if (err < 0)
 		return err;
 
@@ -3364,12 +3373,10 @@ static int list(int argc, char **argv, struct command *cmd, struct plugin *plugi
 	if (err < 0) {
 		if (errno != ENOENT)
 			nvme_show_error("Failed to scan topology: %s", nvme_strerror(errno));
-		nvme_free_tree(r);
 		return err;
 	}
 
 	nvme_show_list_items(r, flags);
-	nvme_free_tree(r);
 
 	return err;
 }
@@ -5012,11 +5019,11 @@ static void fw_commit_print_mud(struct nvme_dev *dev, __u32 result)
 
 	if (result & 0x1)
 		printf("Detected an overlapping firmware/boot partition image update command\n"
-		       "sequence due to processing a command from a Management Endpoint");
+		       "sequence due to processing a command from an Admin SQ on a controller\n");
 
 	if (result >> 1 & 0x1)
 		printf("Detected an overlapping firmware/boot partition image update command\n"
-		       "sequence due to processing a command from an Admin SQ on a controller");
+		       "sequence due to processing a command from a Management Endpoint\n");
 }
 
 static int fw_commit(int argc, char **argv, struct command *cmd, struct plugin *plugin)
@@ -6128,7 +6135,7 @@ static int format_cmd(int argc, char **argv, struct command *cmd, struct plugin 
 		  OPT_FLAG("force",          0, &cfg.force,        force),
 		  OPT_SUFFIX("block-size", 'b', &cfg.bs,           bs));
 
-	err = argconfig_parse(argc, argv, desc, opts);
+	err = parse_args(argc, argv, desc, opts);
 	if (err)
 		return err;
 
@@ -7783,7 +7790,7 @@ static int submit_io(int opcode, char *command, const char *desc, int argc, char
 		if (err)
 			return err;
 	} else {
-		err = argconfig_parse(argc, argv, desc, opts);
+		err = parse_args(argc, argv, desc, opts);
 		if (err)
 			return err;
 		err = open_exclusive(&dev, argc, argv, cfg.force);
@@ -8975,7 +8982,7 @@ static int gen_dhchap_key(int argc, char **argv, struct command *command, struct
 		  OPT_STR("nqn",		'n', &cfg.nqn,		nqn),
 		  OPT_UINT("hmac",		'm', &cfg.hmac,		hmac));
 
-	err = argconfig_parse(argc, argv, desc, opts);
+	err = parse_args(argc, argv, desc, opts);
 	if (err)
 		return err;
 
@@ -9075,8 +9082,8 @@ static int check_dhchap_key(int argc, char **argv, struct command *command, stru
 
 	unsigned char decoded_key[128];
 	unsigned int decoded_len;
-	u_int32_t crc = crc32(0L, NULL, 0);
-	u_int32_t key_crc;
+	uint32_t crc = crc32(0L, NULL, 0);
+	uint32_t key_crc;
 	int err = 0, hmac;
 	struct config {
 		char	*key;
@@ -9089,7 +9096,7 @@ static int check_dhchap_key(int argc, char **argv, struct command *command, stru
 	NVME_ARGS(opts,
 		  OPT_STR("key", 'k', &cfg.key, key));
 
-	err = argconfig_parse(argc, argv, desc, opts);
+	err = parse_args(argc, argv, desc, opts);
 	if (err)
 		return err;
 
@@ -9144,10 +9151,10 @@ static int check_dhchap_key(int argc, char **argv, struct command *command, stru
 		return -EINVAL;
 	}
 	crc = crc32(crc, decoded_key, decoded_len);
-	key_crc = ((u_int32_t)decoded_key[decoded_len]) |
-		   ((u_int32_t)decoded_key[decoded_len + 1] << 8) |
-		   ((u_int32_t)decoded_key[decoded_len + 2] << 16) |
-		   ((u_int32_t)decoded_key[decoded_len + 3] << 24);
+	key_crc = ((uint32_t)decoded_key[decoded_len]) |
+		   ((uint32_t)decoded_key[decoded_len + 1] << 8) |
+		   ((uint32_t)decoded_key[decoded_len + 2] << 16) |
+		   ((uint32_t)decoded_key[decoded_len + 3] << 24);
 	if (key_crc != crc) {
 		nvme_show_error("CRC mismatch (key %08x, crc %08x)", key_crc, crc);
 		return -EINVAL;
@@ -9208,7 +9215,7 @@ static int gen_tls_key(int argc, char **argv, struct command *command, struct pl
 		  OPT_UINT("identity",	'I', &cfg.identity,	identity),
 		  OPT_FLAG("insert",	'i', &cfg.insert,	insert));
 
-	err = argconfig_parse(argc, argv, desc, opts);
+	err = parse_args(argc, argv, desc, opts);
 	if (err)
 		return err;
 	if (cfg.hmac < 1 || cfg.hmac > 2) {
@@ -9326,7 +9333,7 @@ static int check_tls_key(int argc, char **argv, struct command *command, struct 
 		  OPT_UINT("identity",	'I', &cfg.identity,	identity),
 		  OPT_FLAG("insert",	'i', &cfg.insert,	insert));
 
-	err = argconfig_parse(argc, argv, desc, opts);
+	err = parse_args(argc, argv, desc, opts);
 	if (err)
 		return err;
 
@@ -9508,7 +9515,7 @@ static int show_topology_cmd(int argc, char **argv, struct command *command, str
 	const char *desc = "Show the topology\n";
 	const char *ranking = "Ranking order: namespace|ctrl";
 	enum nvme_print_flags flags;
-	nvme_root_t r;
+	_cleanup_nvme_root_ nvme_root_t r = NULL;
 	enum nvme_cli_topo_ranking rank;
 	int err;
 
@@ -9560,7 +9567,6 @@ static int show_topology_cmd(int argc, char **argv, struct command *command, str
 	}
 
 	nvme_show_topology(r, rank, flags);
-	nvme_free_tree(r);
 
 	return err;
 }

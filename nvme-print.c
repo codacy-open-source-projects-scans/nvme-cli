@@ -712,6 +712,7 @@ const char *nvme_log_to_string(__u8 lid)
 	case NVME_LOG_LID_ENDURANCE_GRP_EVT:		return "Endurance Group Event Aggregate";
 	case NVME_LOG_LID_FID_SUPPORTED_EFFECTS:	return "Feature Identifiers Supported and Effects";
 	case NVME_LOG_LID_MI_CMD_SUPPORTED_EFFECTS:	return "NVMe-MI Commands Supported and Effects";
+	case NVME_LOG_LID_CMD_AND_FEAT_LOCKDOWN:	return "Command and Feature Lockdown";
 	case NVME_LOG_LID_BOOT_PARTITION:		return "Boot Partition";
 	case NVME_LOG_LID_FDP_CONFIGS:			return "FDP Configurations";
 	case NVME_LOG_LID_FDP_RUH_USAGE:		return "Reclaim Unit Handle Usage";
@@ -1166,14 +1167,13 @@ void nvme_dev_full_path(nvme_ns_t n, char *path, size_t len)
 {
 	struct stat st;
 
+	snprintf(path, len, "%s", nvme_ns_get_name(n));
+	if (strncmp(path, "/dev/spdk/", 10) == 0 && stat(path, &st) == 0)
+		return;
+
 	snprintf(path, len, "/dev/%s", nvme_ns_get_name(n));
 	if (stat(path, &st) == 0)
 		return;
-
-	snprintf(path, len, "/dev/spdk/%s", nvme_ns_get_name(n));
-	if (stat(path, &st) == 0)
-		return;
-
 	/*
 	 * We could start trying to search for it but let's make
 	 * it simple and just don't show the path at all.
@@ -1187,13 +1187,17 @@ void nvme_generic_full_path(nvme_ns_t n, char *path, size_t len)
 	int instance;
 	struct stat st;
 
+	/*
+	 * There is no block devices for SPDK, point generic path to existing
+	 * chardevice.
+	 */
+	snprintf(path, len, "%s", nvme_ns_get_name(n));
+	if (strncmp(path, "/dev/spdk/", 10) == 0 && stat(path, &st) == 0)
+		return;
+
 	sscanf(nvme_ns_get_name(n), "nvme%dn%d", &instance, &head_instance);
 	snprintf(path, len, "/dev/ng%dn%d", instance, head_instance);
 
-	if (stat(path, &st) == 0)
-		return;
-
-	snprintf(path, len, "/dev/spdk/ng%dn%d", instance, head_instance);
 	if (stat(path, &st) == 0)
 		return;
 	/*

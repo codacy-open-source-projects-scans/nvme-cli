@@ -1118,7 +1118,8 @@ static void stdout_registers_cap(struct nvme_bar_cap *cap)
 
 static void stdout_registers_version(__u32 vs)
 {
-	printf("\tNVMe specification %d.%d\n\n", NVME_MAJOR(vs), NVME_MINOR(vs));
+	printf("\tNVMe specification %d.%d.%d\n\n", NVME_MAJOR(vs), NVME_MINOR(vs),
+	       NVME_TERTIARY(vs));
 }
 
 static void stdout_registers_cc_ams(__u8 ams)
@@ -1164,12 +1165,14 @@ static void stdout_registers_cc(__u32 cc)
 	printf("\tController Ready Independent of Media Enable (CRIME): %s\n",
 		NVME_CC_CRIME(cc) ? "Enabled" : "Disabled");
 
-	printf("\tI/O Completion Queue Entry Size (IOCQES): %u bytes\n", 1 << NVME_CC_IOCQES(cc));
-	printf("\tI/O Submission Queue Entry Size (IOSQES): %u bytes\n", 1 << NVME_CC_IOSQES(cc));
+	printf("\tI/O Completion Queue Entry Size (IOCQES): %u bytes\n",
+	       POWER_OF_TWO(NVME_CC_IOCQES(cc)));
+	printf("\tI/O Submission Queue Entry Size (IOSQES): %u bytes\n",
+	       POWER_OF_TWO(NVME_CC_IOSQES(cc)));
 	stdout_registers_cc_shn(NVME_CC_SHN(cc));
 	stdout_registers_cc_ams(NVME_CC_AMS(cc));
 	printf("\tMemory Page Size                   (MPS): %u bytes\n",
-	       1 << (12 + NVME_CC_MPS(cc)));
+	       POWER_OF_TWO(12 + NVME_CC_MPS(cc)));
 	printf("\tI/O Command Set Selected           (CSS): %s\n",
 	       NVME_CC_CSS(cc) == NVME_CC_CSS_NVM ? "NVM Command Set" :
 	       NVME_CC_CSS(cc) == NVME_CC_CSS_CSI ? "All supported I/O Command Sets" :
@@ -1225,6 +1228,16 @@ static void stdout_registers_aqa(__u32 aqa)
 {
 	printf("\tAdmin Completion Queue Size (ACQS): %u\n", NVME_AQA_ACQS(aqa) + 1);
 	printf("\tAdmin Submission Queue Size (ASQS): %u\n\n", NVME_AQA_ASQS(aqa) + 1);
+}
+
+static void stdout_registers_asq(uint64_t asq)
+{
+	printf("\tAdmin Submission Queue Base (ASQB): %"PRIx64"\n", (uint64_t)NVME_ASQ_ASQB(asq));
+}
+
+static void stdout_registers_acq(uint64_t acq)
+{
+	printf("\tAdmin Completion Queue Base (ACQB): %"PRIx64"\n", (uint64_t)NVME_ACQ_ACQB(acq));
 }
 
 static void stdout_registers_cmbloc(__u32 cmbloc, bool support)
@@ -1321,7 +1334,8 @@ static void stdout_registers_bprsel(__u32 bprsel)
 
 static void stdout_registers_bpmbl(uint64_t bpmbl)
 {
-	printf("\tBoot Partition Memory Buffer Base Address (BMBBA): %"PRIx64"\n", bpmbl);
+	printf("\tBoot Partition Memory Buffer Base Address (BMBBA): %"PRIx64"\n",
+	       (uint64_t)NVME_BPMBL_BMBBA(bpmbl));
 }
 
 static void stdout_registers_cmbmsc(uint64_t cmbmsc)
@@ -1365,7 +1379,7 @@ static void stdout_registers_pmrcap(__u32 pmrcap)
 	printf("\tPersistent Memory Region Timeout                   (PMRTO): %x\n",
 	       NVME_PMRCAP_PMRTO(pmrcap));
 	printf("\tPersistent Memory Region Write Barrier Mechanisms (PMRWBM): %x\n",
-	       NVME_PMRCAP_PMRWMB(pmrcap));
+	       NVME_PMRCAP_PMRWBM(pmrcap));
 	printf("\tPersistent Memory Region Time Units                (PMRTU): ");
 	printf("PMR time unit is %s\n", NVME_PMRCAP_PMRTU(pmrcap) ? "minutes" : "500 milliseconds");
 	printf("\tBase Indicator Register                              (BIR): %x\n",
@@ -1453,10 +1467,10 @@ static void stdout_ctrl_register_human(int offset, uint64_t value, bool support)
 		stdout_registers_aqa(value);
 		break;
 	case NVME_REG_ASQ:
-		printf("\tAdmin Submission Queue Base (ASQB): %#"PRIx64"\n\n", value);
+		stdout_registers_asq(value);
 		break;
 	case NVME_REG_ACQ:
-		printf("\tAdmin Completion Queue Base (ACQB): %#"PRIx64"\n\n", value);
+		stdout_registers_acq(value);
 		break;
 	case NVME_REG_CMBLOC:
 		stdout_registers_cmbloc(value, support);
@@ -3185,9 +3199,9 @@ static void stdout_zns_id_ns(struct nvme_zns_id_ns *ns,
 	stdout_zns_id_ns_recommended_limit(ns->rrl1, human, "rrl1");
 	stdout_zns_id_ns_recommended_limit(ns->rrl2, human, "rrl2");
 	stdout_zns_id_ns_recommended_limit(ns->rrl3, human, "rrl3");
-	stdout_zns_id_ns_recommended_limit(ns->frl,  human, "frl1");
-	stdout_zns_id_ns_recommended_limit(ns->frl,  human, "frl2");
-	stdout_zns_id_ns_recommended_limit(ns->frl,  human, "frl3");
+	stdout_zns_id_ns_recommended_limit(ns->frl1,  human, "frl1");
+	stdout_zns_id_ns_recommended_limit(ns->frl2,  human, "frl2");
+	stdout_zns_id_ns_recommended_limit(ns->frl3,  human, "frl3");
 
 	printf("numzrwa : %#x\n", le32_to_cpu(ns->numzrwa));
 	printf("zrwafg  : %u\n", le16_to_cpu(ns->zrwafg));
@@ -4601,11 +4615,11 @@ static void stdout_dev_full_path(nvme_ns_t n, char *path, size_t len)
 {
 	struct stat st;
 
-	snprintf(path, len, "/dev/%s", nvme_ns_get_name(n));
-	if (stat(path, &st) == 0)
+	snprintf(path, len, "%s", nvme_ns_get_name(n));
+	if (strncmp(path, "/dev/spdk/", 10) == 0 && stat(path, &st) == 0)
 		return;
 
-	snprintf(path, len, "/dev/spdk/%s", nvme_ns_get_name(n));
+	snprintf(path, len, "/dev/%s", nvme_ns_get_name(n));
 	if (stat(path, &st) == 0)
 		return;
 
@@ -4622,6 +4636,14 @@ static void stdout_generic_full_path(nvme_ns_t n, char *path, size_t len)
 	int instance;
 	struct stat st;
 
+	/*
+	 * There is no block devices for SPDK, point generic path to existing
+	 * chardevice.
+	 */
+	snprintf(path, len, "%s", nvme_ns_get_name(n));
+	if (strncmp(path, "/dev/spdk/", 10) == 0 && stat(path, &st) == 0)
+		return;
+
 	if (sscanf(nvme_ns_get_name(n), "nvme%dn%d", &instance, &head_instance) != 2)
 		return;
 
@@ -4630,9 +4652,6 @@ static void stdout_generic_full_path(nvme_ns_t n, char *path, size_t len)
 	if (stat(path, &st) == 0)
 		return;
 
-	snprintf(path, len, "/dev/spdk/ng%dn%d", instance, head_instance);
-	if (stat(path, &st) == 0)
-		return;
 	/*
 	 * We could start trying to search for it but let's make
 	 * it simple and just don't show the path at all.
@@ -4851,17 +4870,17 @@ static void stdout_detailed_list(nvme_root_t r)
 	strset_iterate(&res.subsystems, stdout_detailed_subsys, &res);
 	printf("\n");
 
-	printf("%-8s %-6s %-20s %-40s %-8s %-6s %-14s %-6s %-12s %-16s\n", "Device",
+	printf("%-16s %-5s %-20s %-40s %-8s %-6s %-14s %-6s %-12s %-16s\n", "Device",
 		"Cntlid", "SN", "MN", "FR", "TxPort", "Address", "Slot", "Subsystem",
 		"Namespaces");
-	printf("%-.8s %-.6s %-.20s %-.40s %-.8s %-.6s %-.14s %-.6s %-.12s %-.16s\n",
+	printf("%-.16s %-.6s %-.20s %-.40s %-.8s %-.6s %-.14s %-.6s %-.12s %-.16s\n",
 			dash, dash, dash, dash, dash, dash, dash, dash, dash, dash);
 	strset_iterate(&res.ctrls, stdout_detailed_ctrl, &res);
 	printf("\n");
 
-	printf("%-12s %-12s %-10s %-26s %-16s %-16s\n", "Device", "Generic",
+	printf("%-17s %-17s %-10s %-26s %-16s %-16s\n", "Device", "Generic",
 		"NSID", "Usage", "Format", "Controllers");
-	printf("%-.12s %-.12s %-.10s %-.26s %-.16s %-.16s\n", dash, dash, dash,
+	printf("%-.17s %-.17s %-.10s %-.26s %-.16s %-.16s\n", dash, dash, dash,
 		dash, dash, dash);
 	strset_iterate(&res.namespaces, stdout_detailed_ns, &res);
 

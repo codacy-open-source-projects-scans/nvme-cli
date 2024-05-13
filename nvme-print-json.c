@@ -16,7 +16,6 @@
 #define BUF_LEN 320
 #define VAL_LEN 4096
 #define BYTE_TO_BIT(byte) ((byte) * 8)
-#define POWER_OF_TWO(exponent) (1 << (exponent))
 #define MS_TO_SEC(time) ((time) / 1000)
 #define MS500_TO_MS(time) ((time) * 500)
 #define MS500_TO_SEC(time) (MS_TO_SEC(MS500_TO_MS(time)))
@@ -34,7 +33,10 @@
 
 static const uint8_t zero_uuid[16] = { 0 };
 static struct print_ops json_print_ops;
-static struct json_object *json_r = NULL;
+static struct json_object *json_r;
+
+static void json_feature_show_fields(enum nvme_features_id fid, unsigned int result,
+				     unsigned char *buf);
 
 static void d_json(unsigned char *buf, int len, int width, int group, struct json_object *array)
 {
@@ -57,6 +59,15 @@ static void d_json(unsigned char *buf, int len, int width, int group, struct jso
 	}
 }
 
+static void obj_d(struct json_object *o, const char *k, unsigned char *buf, int len, int width,
+		  int group)
+{
+	struct json_object *data = json_create_array();
+
+	d_json(buf, len, width, group, data);
+	obj_add_array(o, k, data);
+}
+
 static void obj_add_uint_x(struct json_object *o, const char *k, __u32 v)
 {
 	char str[STR_LEN];
@@ -73,12 +84,17 @@ static void obj_add_uint_0x(struct json_object *o, const char *k, __u32 v)
 	obj_add_str(o, k, str);
 }
 
-static void obj_add_uint_02x(struct json_object *o, const char *k, __u32 v)
+static void obj_add_uint_0nx(struct json_object *o, const char *k, __u32 v, int width)
 {
 	char str[STR_LEN];
 
 	sprintf(str, "0x%02x", v);
 	obj_add_str(o, k, str);
+}
+
+static void obj_add_uint_02x(struct json_object *o, const char *k, __u32 v)
+{
+	obj_add_uint_0nx(o, k, v, 2);
 }
 
 static void obj_add_uint_nx(struct json_object *o, const char *k, __u32 v)
@@ -116,6 +132,7 @@ static void obj_add_int_secs(struct json_object *o, const char *k, int v)
 static void obj_add_result(struct json_object *o, const char *v, ...)
 {
 	va_list ap;
+
 	va_start(ap, v);
 	char *value;
 
@@ -133,6 +150,7 @@ static void obj_add_result(struct json_object *o, const char *v, ...)
 static void obj_add_key(struct json_object *o, const char *k, const char *v, ...)
 {
 	va_list ap;
+
 	va_start(ap, v);
 	char *value;
 
@@ -301,7 +319,7 @@ static void json_nvme_id_ns(struct nvme_id_ns *ns, unsigned int nsid,
 	json_print(r);
 }
 
- void json_nvme_id_ctrl(struct nvme_id_ctrl *ctrl,
+void json_nvme_id_ctrl(struct nvme_id_ctrl *ctrl,
 			void (*vs)(__u8 *vs, struct json_object *r))
 {
 	struct json_object *r = json_create_object();
@@ -373,7 +391,7 @@ static void json_nvme_id_ns(struct nvme_id_ns *ns, unsigned int nsid,
 	obj_add_int(r, "hmmaxd", le16_to_cpu(ctrl->hmmaxd));
 	obj_add_int(r, "nsetidmax", le16_to_cpu(ctrl->nsetidmax));
 	obj_add_int(r, "endgidmax", le16_to_cpu(ctrl->endgidmax));
-	obj_add_int(r, "anatt",ctrl->anatt);
+	obj_add_int(r, "anatt", ctrl->anatt);
 	obj_add_int(r, "anacap", ctrl->anacap);
 	obj_add_uint(r, "anagrpmax", le32_to_cpu(ctrl->anagrpmax));
 	obj_add_uint(r, "nanagrpid", le32_to_cpu(ctrl->nanagrpid));
@@ -433,7 +451,7 @@ static void json_nvme_id_ns(struct nvme_id_ns *ns, unsigned int nsid,
 		array_add_obj(psds, psd);
 	}
 
-	if(vs)
+	if (vs)
 		vs(ctrl->vs, r);
 
 	json_print(r);
@@ -689,7 +707,7 @@ static void json_smart_log(struct nvme_smart_log *smart, unsigned int nsid,
 		if (temp == 0)
 			continue;
 
-		sprintf(key, "temperature_sensor_%d",c+1);
+		sprintf(key, "temperature_sensor_%d", c + 1);
 		obj_add_int(r, key, temp);
 	}
 
@@ -886,7 +904,7 @@ static void json_registers_version(__u32 vs, struct json_object *r)
 	sprintf(json_str, "%x", vs);
 	obj_add_str(r, "Version", json_str);
 
-	sprintf(json_str, "%d.%d", (vs & 0xffff0000) >> 16, (vs & 0x0000ff00) >> 8);
+	sprintf(json_str, "%d.%d.%d", NVME_MAJOR(vs), NVME_MINOR(vs), NVME_TERTIARY(vs));
 	obj_add_str(r, "NVMe specification", json_str);
 }
 
@@ -909,13 +927,13 @@ static void json_registers_cc_ams(__u8 ams, struct json_object *r)
 	char json_str[STR_LEN];
 
 	switch (ams) {
-	case 0:
+	case NVME_CC_AMS_RR:
 		sprintf(json_str, "Round Robin");
 		break;
-	case 1:
+	case NVME_CC_AMS_WRRU:
 		sprintf(json_str, "Weighted Round Robin with Urgent Priority Class");
 		break;
-	case 7:
+	case NVME_CC_AMS_VS:
 		sprintf(json_str, "Vendor Specific");
 		break;
 	default:
@@ -931,13 +949,13 @@ static void json_registers_cc_shn(__u8 shn, struct json_object *r)
 	char json_str[STR_LEN];
 
 	switch (shn) {
-	case 0:
+	case NVME_CC_SHN_NONE:
 		sprintf(json_str, "No notification; no effect");
 		break;
-	case 1:
+	case NVME_CC_SHN_NORMAL:
 		sprintf(json_str, "Normal shutdown notification");
 		break;
-	case 2:
+	case NVME_CC_SHN_ABRUPT:
 		sprintf(json_str, "Abrupt shutdown notification");
 		break;
 	default:
@@ -958,22 +976,23 @@ static void json_registers_cc(__u32 cc, struct json_object *r)
 	obj_add_str(r, "Controller Ready Independent of Media Enable (CRIME)",
 		     NVME_CC_CRIME(cc) ? "Enabled" : "Disabled");
 
-	sprintf(json_str, "%u bytes", POWER_OF_TWO(NVME_GET(cc, CC_IOCQES)));
+	sprintf(json_str, "%u bytes", POWER_OF_TWO(NVME_CC_IOCQES(cc)));
 	obj_add_str(r, "I/O Completion Queue Entry Size (IOCQES): ", json_str);
 
-	sprintf(json_str, "%u bytes", POWER_OF_TWO(NVME_GET(cc, CC_IOSQES)));
+	sprintf(json_str, "%u bytes", POWER_OF_TWO(NVME_CC_IOSQES(cc)));
 	obj_add_str(r, "I/O Submission Queue Entry Size (IOSQES)", json_str);
 
-	json_registers_cc_shn((cc & 0xc000) >> NVME_CC_SHN_SHIFT, r);
-	json_registers_cc_ams((cc & 0x3800) >> NVME_CC_AMS_SHIFT, r);
+	json_registers_cc_shn(NVME_CC_SHN(cc), r);
+	json_registers_cc_ams(NVME_CC_AMS(cc), r);
 
-	sprintf(json_str, "%u bytes", POWER_OF_TWO(12 + NVME_GET(cc, CC_MPS)));
+	sprintf(json_str, "%u bytes", POWER_OF_TWO(12 + NVME_CC_MPS(cc)));
 	obj_add_str(r, "Memory Page Size (MPS)", json_str);
 
-	obj_add_str(r, "I/O Command Set Selected (CSS)", (cc & 0x70) == 0x00 ? "NVM Command Set" :
-		     (cc & 0x70) == 0x60 ? "All supported I/O Command Sets" :
-		     (cc & 0x70) == 0x70 ? "Admin Command Set only" : "Reserved");
-	obj_add_str(r, "Enable (EN)", cc & 1 ? "Yes" : "No");
+	obj_add_str(r, "I/O Command Set Selected (CSS)",
+		    NVME_CC_CSS(cc) == NVME_CC_CSS_NVM ? "NVM Command Set" :
+		    NVME_CC_CSS(cc) == NVME_CC_CSS_CSI ? "All supported I/O Command Sets" :
+		    NVME_CC_CSS(cc) == NVME_CC_CSS_ADMIN ? "Admin Command Set only" : "Reserved");
+	obj_add_str(r, "Enable (EN)", NVME_CC_EN(cc) ? "Yes" : "No");
 }
 
 static void json_registers_csts_shst(__u8 shst, struct json_object *r)
@@ -981,13 +1000,13 @@ static void json_registers_csts_shst(__u8 shst, struct json_object *r)
 	char json_str[STR_LEN];
 
 	switch (shst) {
-	case 0:
+	case NVME_CSTS_SHST_NORMAL:
 		sprintf(json_str, "Normal operation (no shutdown has been requested)");
 		break;
-	case 1:
+	case NVME_CSTS_SHST_OCCUR:
 		sprintf(json_str, "Shutdown processing occurring");
 		break;
-	case 2:
+	case NVME_CSTS_SHST_CMPLT:
 		sprintf(json_str, "Shutdown processing complete");
 		break;
 	default:
@@ -1002,13 +1021,15 @@ static void json_registers_csts(__u32 csts, struct json_object *r)
 {
 	obj_add_uint_x(r, "csts", csts);
 
-	obj_add_str(r, "Processing Paused (PP)", csts & 0x20 ? "Yes" : "No");
-	obj_add_str(r, "NVM Subsystem Reset Occurred (NSSRO)", csts & 0x10 ? "Yes" : "No");
+	obj_add_str(r, "Shutdown Type (ST)", NVME_CSTS_ST(csts) ? "Subsystem" : "Controller");
+	obj_add_str(r, "Processing Paused (PP)", NVME_CSTS_PP(csts) ? "Yes" : "No");
+	obj_add_str(r, "NVM Subsystem Reset Occurred (NSSRO)",
+		    NVME_CSTS_NSSRO(csts) ? "Yes" : "No");
 
-	json_registers_csts_shst((csts & 0xc) >> 2, r);
+	json_registers_csts_shst(NVME_CSTS_SHST(csts), r);
 
-	obj_add_str(r, "Controller Fatal Status (CFS)", csts & 2 ? "True" : "False");
-	obj_add_str(r, "Ready (RDY)", csts & 1 ? "Yes" : "No");
+	obj_add_str(r, "Controller Fatal Status (CFS)", NVME_CSTS_CFS(csts) ? "True" : "False");
+	obj_add_str(r, "Ready (RDY)", NVME_CSTS_RDY(csts) ? "Yes" : "No");
 }
 
 static void json_registers_nssr(__u32 nssr, struct json_object *r)
@@ -1033,8 +1054,8 @@ static void json_registers_crto(__u32 crto, struct json_object *r)
 static void json_registers_aqa(uint32_t aqa, struct json_object *r)
 {
 	obj_add_uint_x(r, "aqa", aqa);
-	obj_add_uint(r, "Admin Completion Queue Size (ACQS)", ((aqa & 0xfff0000) >> 16) + 1);
-	obj_add_uint(r, "Admin Submission Queue Size (ASQS)", (aqa & 0xfff) + 1);
+	obj_add_uint(r, "Admin Completion Queue Size (ACQS)", NVME_AQA_ACQS(aqa) + 1);
+	obj_add_uint(r, "Admin Submission Queue Size (ASQS)", NVME_AQA_ASQS(aqa) + 1);
 }
 
 static void json_registers_asq(uint64_t asq, struct json_object *r)
@@ -1152,7 +1173,7 @@ static void json_registers_cmbmsc(uint64_t cmbmsc, struct json_object *r)
 		     cmbmsc & 1 ? "Enabled" : "Not enabled");
 }
 
-static void json_registers_cmbsts(uint32_t cmbsts , struct json_object *r)
+static void json_registers_cmbsts(uint32_t cmbsts, struct json_object *r)
 {
 	obj_add_uint_x(r, "cmbsts", cmbsts);
 
@@ -1164,61 +1185,64 @@ static void json_registers_pmrcap(uint32_t pmrcap, struct json_object *r)
 	obj_add_uint_x(r, "pmrcap", pmrcap);
 
 	obj_add_str(r, "Controller Memory Space Supported (CMSS)",
-	       ((pmrcap & 0x01000000) >> 24) ? "Supported" : "Not supported");
-	obj_add_uint_x(r, "Persistent Memory Region Timeout (PMRTO)", (pmrcap & 0xff0000) >> 16);
+		    NVME_PMRCAP_CMSS(pmrcap) ? "Supported" : "Not supported");
+	obj_add_uint_x(r, "Persistent Memory Region Timeout (PMRTO)", NVME_PMRCAP_PMRTO(pmrcap));
 	obj_add_uint_x(r, "Persistent Memory Region Write Barrier Mechanisms (PMRWBM)",
-			(pmrcap & 0x3c00) >> 10);
+		       NVME_PMRCAP_PMRWBM(pmrcap));
 	obj_add_str(r, "Persistent Memory Region Time Units (PMRTU)",
-		     (pmrcap & 0x300) >> 8 ? "minutes" : "500 milliseconds");
-	obj_add_uint_x(r, "Base Indicator Register (BIR)", (pmrcap & 0xe0) >> 5);
-	obj_add_str(r, "Write Data Support (WDS)", pmrcap & 0x10 ? "Supported" : "Not supported");
-	obj_add_str(r, "Read Data Support (RDS)", pmrcap & 8 ? "Supported" : "Not supported");
+		    NVME_PMRCAP_PMRTU(pmrcap) ? "minutes" : "500 milliseconds");
+	obj_add_uint_x(r, "Base Indicator Register (BIR)", NVME_PMRCAP_BIR(pmrcap));
+	obj_add_str(r, "Write Data Support (WDS)",
+		    NVME_PMRCAP_WDS(pmrcap) ? "Supported" : "Not supported");
+	obj_add_str(r, "Read Data Support (RDS)",
+		    NVME_PMRCAP_RDS(pmrcap) ? "Supported" : "Not supported");
 }
 
 static void json_registers_pmrctl(uint32_t pmrctl, struct json_object *r)
 {
 	obj_add_uint_x(r, "pmrctl", pmrctl);
 
-	obj_add_str(r, "Enable (EN)", pmrctl & 1 ? "Ready" : "Disabled");
+	obj_add_str(r, "Enable (EN)", NVME_PMRCTL_EN(pmrctl) ? "Ready" : "Disabled");
 }
 
 static void json_registers_pmrsts(uint32_t pmrsts, bool ready, struct json_object *r)
 {
 	obj_add_uint_x(r, "pmrsts", pmrsts);
 
-	obj_add_uint_x(r, "Controller Base Address Invalid (CBAI)", (pmrsts & 0x1000) >> 12);
+	obj_add_uint_x(r, "Controller Base Address Invalid (CBAI)", NVME_PMRSTS_CBAI(pmrsts));
 	obj_add_str(r, "Health Status (HSTS)",
-		    nvme_register_pmr_hsts_to_string((pmrsts & 0xe00) >> 9));
+		    nvme_register_pmr_hsts_to_string(NVME_PMRSTS_HSTS(pmrsts)));
 	obj_add_str(r, "Not Ready (NRDY)",
-		    !(pmrsts & 0x100) && ready ? "Ready" : "Not ready");
-	obj_add_uint_x(r, "Error (ERR)", pmrsts & 0xff);
+		    !NVME_PMRSTS_NRDY(pmrsts) && ready ? "Ready" : "Not ready");
+	obj_add_uint_x(r, "Error (ERR)", NVME_PMRSTS_ERR(pmrsts));
 }
 
 static void json_registers_pmrebs(uint32_t pmrebs, struct json_object *r)
 {
 	obj_add_uint_x(r, "pmrebs", pmrebs);
 
-	obj_add_uint_x(r, "PMR Elasticity Buffer Size Base (PMRWBZ)", (pmrebs & 0xffffff00) >> 8);
-	obj_add_str(r, "Read Bypass Behavior", pmrebs & 0x10 ? "Shall" : "May");
+	obj_add_uint_x(r, "PMR Elasticity Buffer Size Base (PMRWBZ)", NVME_PMREBS_PMRWBZ(pmrebs));
+	obj_add_str(r, "Read Bypass Behavior", NVME_PMREBS_RBB(pmrebs) ? "Shall" : "May");
 	obj_add_str(r, "PMR Elasticity Buffer Size Units (PMRSZU)",
-		    nvme_register_unit_to_string(pmrebs & 0xf));
+		    nvme_register_unit_to_string(NVME_PMREBS_PMRSZU(pmrebs)));
 }
 
 static void json_registers_pmrswtp(uint32_t pmrswtp, struct json_object *r)
 {
 	obj_add_uint_x(r, "pmrswtp", pmrswtp);
 
-	obj_add_uint_x(r, "PMR Sustained Write Throughput (PMRSWTV)", (pmrswtp & 0xffffff00) >> 8);
+	obj_add_uint_x(r, "PMR Sustained Write Throughput (PMRSWTV)",
+		       NVME_PMRSWTP_PMRSWTV(pmrswtp));
 	obj_add_key(r, "PMR Sustained Write Throughput Units (PMRSWTU)", "%s/second",
-		    nvme_register_unit_to_string(pmrswtp & 0xf));
+		    nvme_register_unit_to_string(NVME_PMRSWTP_PMRSWTU(pmrswtp)));
 }
 
 static void json_registers_pmrmscl(uint32_t pmrmscl, struct json_object *r)
 {
 	obj_add_uint_nx(r, "pmrmscl", pmrmscl);
 
-	obj_add_uint_nx(r, "Controller Base Address (CBA)", (pmrmscl & 0xfffff000) >> 12);
-	obj_add_uint_nx(r, "Controller Memory Space Enable (CMSE)", (pmrmscl & 2) >> 1);
+	obj_add_uint_nx(r, "Controller Base Address (CBA)", (uint32_t)NVME_PMRMSC_CBA(pmrmscl));
+	obj_add_uint_nx(r, "Controller Memory Space Enable (CMSE)", NVME_PMRMSC_CMSE(pmrmscl));
 }
 
 static void json_registers_pmrmscu(uint32_t pmrmscu, struct json_object *r)
@@ -1292,8 +1316,8 @@ static void json_single_property(int offset, uint64_t value64)
 	json_print(r);
 }
 
-struct json_object* json_effects_log(enum nvme_csi csi,
-			     struct nvme_cmd_effects_log *effects_log)
+struct json_object *json_effects_log(enum nvme_csi csi,
+				     struct nvme_cmd_effects_log *effects_log)
 {
 	struct json_object *r = json_create_object();
 	struct json_object *acs = json_create_object();
@@ -1517,7 +1541,7 @@ static void json_pel_smart_health(void *pevent_log_info, __u32 offset,
 		temp = le16_to_cpu(smart_event->temp_sensor[c]);
 		if (!temp)
 			continue;
-		sprintf(key, "temperature_sensor_%d",c + 1);
+		sprintf(key, "temperature_sensor_%d", c + 1);
 		obj_add_int(valid_attrs, key, temp);
 	}
 
@@ -1654,6 +1678,31 @@ static void json_pel_sanitize_completion(void *pevent_log_info, __u32 offset,
 	obj_add_uint(valid_attrs, "cmpln_info", le16_to_cpu(sanitize_cmpln_event->cmpln_info));
 }
 
+static void json_pel_set_feature(void *pevent_log_info, __u32 offset,
+				 struct json_object *valid_attrs)
+{
+	struct nvme_set_feature_event *set_feat_event = pevent_log_info + offset;
+	int fid = NVME_GET(le32_to_cpu(set_feat_event->cdw_mem[0]), FEATURES_CDW10_FID);
+	int cdw11 = le32_to_cpu(set_feat_event->cdw_mem[1]);
+	int dword_cnt = NVME_SET_FEAT_EVENT_DW_COUNT(set_feat_event->layout);
+	unsigned char *mem_buf;
+
+	obj_add_uint_02x(valid_attrs, "feature", fid);
+	obj_add_str(valid_attrs, "name", nvme_feature_to_string(fid));
+	obj_add_uint_0nx(valid_attrs, "value", cdw11, 8);
+
+	if (NVME_SET_FEAT_EVENT_MB_COUNT(set_feat_event->layout)) {
+		mem_buf = (unsigned char *)(set_feat_event + 4 + dword_cnt * 4);
+		json_feature_show_fields(fid, cdw11, mem_buf);
+	}
+}
+
+static void json_pel_telemetry_crt(void *pevent_log_info, __u32 offset,
+				   struct json_object *valid_attrs)
+{
+	obj_d(valid_attrs, "create", pevent_log_info + offset, 512, 16, 1);
+}
+
 static void json_pel_thermal_excursion(void *pevent_log_info, __u32 offset,
 				       struct json_object *valid_attrs)
 {
@@ -1729,6 +1778,12 @@ static void json_pevent_entry(void *pevent_log_info, __u8 action, __u32 size, co
 			break;
 		case NVME_PEL_SANITIZE_COMPLETION_EVENT:
 			json_pel_sanitize_completion(pevent_log_info, offset, valid_attrs);
+			break;
+		case NVME_PEL_SET_FEATURE_EVENT:
+			json_pel_set_feature(pevent_log_info, offset, valid_attrs);
+			break;
+		case NVME_PEL_TELEMETRY_CRT:
+			json_pel_telemetry_crt(pevent_log_info, offset, valid_attrs);
 			break;
 		case NVME_PEL_THERMAL_EXCURSION_EVENT:
 			json_pel_thermal_excursion(pevent_log_info, offset, valid_attrs);
@@ -1813,7 +1868,7 @@ static void json_lba_status(struct nvme_lba_status *list,
 		sprintf(json_str, "LSD entry %d", idx);
 		obj_add_array(r, json_str, lsde);
 		e = &list->descs[idx];
-		sprintf(json_str, "0x%016"PRIu64"", le64_to_cpu(e->dslba));
+		sprintf(json_str, "0x%016"PRIx64"", le64_to_cpu(e->dslba));
 		obj_add_str(lsde, "DSLBA", json_str);
 		sprintf(json_str, "0x%08x", le32_to_cpu(e->nlb));
 		obj_add_str(lsde, "NLB", json_str);
@@ -1952,8 +2007,8 @@ static void json_boot_part_log(void *bp_log, const char *devname,
 	struct json_object *r = json_create_object();
 
 	obj_add_uint(r, "count", hdr->lid);
-	obj_add_uint(r, "abpid", (le32_to_cpu(hdr->bpinfo) >> 31) & 0x1);
-	obj_add_uint(r, "bpsz", le32_to_cpu(hdr->bpinfo) & 0x7fff);
+	obj_add_uint(r, "abpid", NVME_BOOT_PARTITION_INFO_ABPID(le32_to_cpu(hdr->bpinfo)));
+	obj_add_uint(r, "bpsz", NVME_BOOT_PARTITION_INFO_BPSZ(le32_to_cpu(hdr->bpinfo)));
 
 	json_print(r);
 }
@@ -2141,7 +2196,7 @@ static void json_supported_cap_config_log(
 				array_add_obj(set_list, set);
 			}
 			chan_desc = (struct nvme_end_grp_chan_desc *)
-			    (cap_log->cap_config_desc[i].egcd[j].nvmsetid[0] * sizeof(__u16) * egsets);
+			    &cap_log->cap_config_desc[i].egcd[j].nvmsetid[egsets];
 			egchans = le16_to_cpu(chan_desc->egchans);
 			obj_add_uint(endurance, "egchans", le16_to_cpu(chan_desc->egchans));
 			chan_list = json_create_array();
@@ -2288,6 +2343,7 @@ static void json_nvme_fdp_events(struct nvme_fdp_events_log *log)
 
 		if (event->type == NVME_FDP_EVENT_REALLOC) {
 			struct nvme_fdp_event_realloc *mr;
+
 			mr = (struct nvme_fdp_event_realloc *)&event->type_specific;
 
 			obj_add_uint(obj_event, "nlbam", le16_to_cpu(mr->nlbam));
@@ -3376,7 +3432,7 @@ static void json_timestamp(struct json_object *r, struct nvme_timestamp *ts)
 
 	obj_add_uint64(r, "timestamp", int48_to_long(ts->timestamp));
 
-	if(!strftime(buffer, sizeof(buffer), "%c %Z", tm))
+	if (!strftime(buffer, sizeof(buffer), "%c %Z", tm))
 		sprintf(buffer, "%s", "-");
 
 	obj_add_str(r, "timestamp string", buffer);
@@ -3776,11 +3832,9 @@ void json_d(unsigned char *buf, int len, int width, int group)
 {
 	struct json_object *r = json_r ? json_r : json_create_object();
 	char json_str[STR_LEN];
-	struct json_object *data = json_create_array();
 
 	sprintf(json_str, "data: buf=%p len=%d width=%d group=%d", buf, len, width, group);
-	d_json(buf, len, width, group, data);
-	obj_add_array(r, json_str, data);
+	obj_d(r, json_str, buf, len, width, group);
 
 	obj_print(r);
 }
@@ -4034,7 +4088,7 @@ static void json_detail_list(nvme_root_t t)
 		if (hostid)
 			obj_add_str(hss, "HostID", hostid);
 
-		nvme_for_each_subsystem(h , s) {
+		nvme_for_each_subsystem(h, s) {
 			struct json_object *jss = json_create_object();
 			struct json_object *jctrls = json_create_array();
 			struct json_object *jnss = json_create_array();
@@ -4160,9 +4214,10 @@ static void json_simple_list(nvme_root_t t)
 			nvme_subsystem_for_each_ns(s, n)
 				array_add_obj(jdevices, json_list_item_obj(n));
 
-			nvme_subsystem_for_each_ctrl(s, c)
+			nvme_subsystem_for_each_ctrl(s, c) {
 				nvme_ctrl_for_each_ns(c, n)
-				array_add_obj(jdevices, json_list_item_obj(n));
+					array_add_obj(jdevices, json_list_item_obj(n));
+			}
 		}
 	}
 
@@ -4432,7 +4487,7 @@ static void json_discovery_log(struct nvmf_discovery_log *log, int numrec)
 		obj_add_str(entry, "trtype", nvmf_trtype_str(e->trtype));
 		obj_add_str(entry, "adrfam", nvmf_adrfam_str(e->adrfam));
 		obj_add_str(entry, "subtype", nvmf_subtype_str(e->subtype));
-		obj_add_str(entry,"treq", nvmf_treq_str(e->treq));
+		obj_add_str(entry, "treq", nvmf_treq_str(e->treq));
 		obj_add_uint(entry, "portid", le16_to_cpu(e->portid));
 		obj_add_str(entry, "trsvcid", e->trsvcid);
 		obj_add_str(entry, "subnqn", e->subnqn);
@@ -4646,7 +4701,7 @@ static struct print_ops json_print_ops = {
 	.sanitize_log_page		= json_sanitize_log,
 	.secondary_ctrl_list		= json_nvme_list_secondary_ctrl,
 	.select_result			= json_select_result,
-	.self_test_log 			= json_self_test_log,
+	.self_test_log			= json_self_test_log,
 	.single_property		= json_single_property,
 	.smart_log			= json_smart_log,
 	.supported_cap_config_list_log	= json_supported_cap_config_log,

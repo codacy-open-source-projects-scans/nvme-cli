@@ -717,7 +717,10 @@ static int get_log_telemetry_ctrl(struct nvme_dev *dev, bool rae, size_t size,
 	err = nvme_cli_get_log_telemetry_ctrl(dev, rae, 0, size, log);
 	if (err) {
 		free(log);
-		return -errno;
+		if (errno)
+			return -errno;
+		else
+			return err;
 	}
 
 	*buf = log;
@@ -737,7 +740,10 @@ static int get_log_telemetry_host(struct nvme_dev *dev, size_t size,
 	err = nvme_cli_get_log_telemetry_host(dev, 0, size, log);
 	if (err) {
 		free(log);
-		return -errno;
+		if (errno)
+			return -errno;
+		else
+			return err;
 	}
 
 	*buf = log;
@@ -757,8 +763,12 @@ static int __create_telemetry_log_host(struct nvme_dev *dev,
 		return -ENOMEM;
 
 	err = nvme_cli_get_log_create_telemetry_host(dev, log);
-	if (err)
-		return -errno;
+	if (err) {
+		if (errno)
+			return -errno;
+		else
+			return err;
+	}
 
 	err = parse_telemetry_da(dev, da, log, size);
 	if (err)
@@ -6083,7 +6093,7 @@ static int format_cmd(int argc, char **argv, struct command *cmd, struct plugin 
 		"Can also be used to change LBAF to change the namespaces reported physical block format.";
 	const char *lbaf = "LBA format to apply (required)";
 	const char *ses = "[0-2]: secure erase";
-	const char *pil = "[0-1]: protection info location last/first 8 bytes of metadata";
+	const char *pil = "[0-1]: protection info location last/first bytes of metadata";
 	const char *pi = "[0-3]: protection info off/Type 1/Type 2/Type 3";
 	const char *ms = "[0-1]: extended format off/on";
 	const char *reset = "Automatically reset the controller after successful format";
@@ -6820,15 +6830,15 @@ static int invalid_tags(__u64 storage_tag, __u64 ref_tag, __u8 sts, __u8 pif)
 	}
 
 	switch (pif) {
-	case 0:
+	case NVME_NVM_PIF_16B_GUARD:
 		if (ref_tag >= (1LL << (32 - sts)))
 			result = 1;
 		break;
-	case 1:
+	case NVME_NVM_PIF_32B_GUARD:
 		if (sts > 16 && ref_tag >= (1LL << (80 - sts)))
 			result = 1;
 		break;
-	case 2:
+	case NVME_NVM_PIF_64B_GUARD:
 		if (sts > 0 && ref_tag >= (1LL << (48 - sts)))
 			result = 1;
 		break;

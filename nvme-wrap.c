@@ -119,8 +119,11 @@ int nvme_cli_get_features(struct nvme_dev *dev,
 	return do_admin_args_op(get_features, dev, args);
 }
 
-int nvme_cli_ns_mgmt_delete(struct nvme_dev *dev, __u32 nsid)
+int nvme_cli_ns_mgmt_delete(struct nvme_dev *dev, __u32 nsid, __u32 timeout)
 {
+	if (dev->type == NVME_DEV_DIRECT)
+		return nvme_ns_mgmt_delete_timeout(dev_fd(dev), nsid, timeout);
+
 	return do_admin_op(ns_mgmt_delete, dev, nsid);
 }
 
@@ -256,11 +259,11 @@ int nvme_cli_get_log_predictable_lat_event(struct nvme_dev *dev, bool rae,
 			   len, log);
 }
 
-int nvme_cli_get_log_ana(struct nvme_dev *dev,
-			 enum nvme_log_ana_lsp lsp, bool rae,
-			 __u64 offset, __u32 len, void *log)
+int nvme_cli_get_ana_log_atomic(struct nvme_dev *dev, bool rgo, bool rae,
+				unsigned int retries,
+				struct nvme_ana_log *log, __u32 *len)
 {
-	return do_admin_op(get_log_ana, dev, lsp, rae, offset, len, log);
+	return do_admin_op(get_ana_log_atomic, dev, rgo, rae, retries, log, len);
 }
 
 int nvme_cli_get_log_lba_status(struct nvme_dev *dev, bool rae,

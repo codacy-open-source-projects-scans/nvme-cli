@@ -261,7 +261,7 @@ static void save_discovery_log(char *raw, struct nvmf_discovery_log *log)
 
 static int __discover(nvme_ctrl_t c, struct nvme_fabrics_config *defcfg,
 		      char *raw, bool connect, bool persistent,
-		      enum nvme_print_flags flags)
+		      nvme_print_flags_t flags)
 {
 	struct nvmf_discovery_log *log = NULL;
 	nvme_subsystem_t s = nvme_ctrl_get_subsystem(c);
@@ -406,8 +406,8 @@ static int discover_from_conf_file(nvme_root_t r, nvme_host_t h,
 	char *ptr, **argv, *p, line[4096];
 	int argc, ret = 0;
 	unsigned int verbose = 0;
-	FILE *f;
-	enum nvme_print_flags flags;
+	_cleanup_file_ FILE *f = NULL;
+	nvme_print_flags_t flags;
 	char *format = "normal";
 	struct nvme_fabrics_config cfg;
 	bool force = false;
@@ -431,15 +431,12 @@ static int discover_from_conf_file(nvme_root_t r, nvme_host_t h,
 	f = fopen(PATH_NVMF_DISC, "r");
 	if (f == NULL) {
 		fprintf(stderr, "No params given and no %s\n", PATH_NVMF_DISC);
-		errno = ENOENT;
-		return -1;
+		return -ENOENT;
 	}
 
 	argv = calloc(MAX_DISC_ARGS, sizeof(char *));
-	if (!argv) {
-		ret = -1;
-		goto out;
-	}
+	if (!argv)
+		return -1;
 
 	argv[0] = "discover";
 	memset(line, 0, sizeof(line));
@@ -497,15 +494,14 @@ next:
 		memset(&cfg, 0, sizeof(cfg));
 	}
 	free(argv);
-out:
-	fclose(f);
+
 	return ret;
 }
 
 static int discover_from_json_config_file(nvme_root_t r, nvme_host_t h,
 					  const char *desc, bool connect,
 					  const struct nvme_fabrics_config *defcfg,
-					  enum nvme_print_flags flags,
+					  nvme_print_flags_t flags,
 					  bool force)
 {
 	const char *transport, *traddr, *host_traddr, *host_iface, *trsvcid, *subsysnqn;
@@ -693,7 +689,7 @@ int nvmf_discover(const char *desc, int argc, char **argv, bool connect)
 	char *config_file = PATH_NVMF_CONFIG;
 	char *hnqn = NULL, *hid = NULL;
 	char *context = NULL;
-	enum nvme_print_flags flags;
+	nvme_print_flags_t flags;
 	nvme_root_t r;
 	nvme_host_t h;
 	nvme_ctrl_t c = NULL;
@@ -747,6 +743,7 @@ int nvmf_discover(const char *desc, int argc, char **argv, bool connect)
 	}
 	if (context)
 		nvme_root_set_application(r, context);
+	nvme_root_skip_namespaces(r);
 	ret = nvme_scan_topology(r, NULL, NULL);
 	if (ret < 0) {
 		if (errno != ENOENT)
@@ -916,7 +913,7 @@ int nvmf_connect(const char *desc, int argc, char **argv)
 	nvme_host_t h;
 	nvme_ctrl_t c;
 	int ret;
-	enum nvme_print_flags flags;
+	nvme_print_flags_t flags;
 	struct nvme_fabrics_config cfg = { 0 };
 	char *format = "normal";
 	char *hostnqn_arg, *hostid_arg;
@@ -976,6 +973,7 @@ int nvmf_connect(const char *desc, int argc, char **argv)
 	}
 	if (context)
 		nvme_root_set_application(r, context);
+	nvme_root_skip_namespaces(r);
 	ret = nvme_scan_topology(r, NULL, NULL);
 	if (ret < 0) {
 		if (errno != ENOENT)
@@ -1136,6 +1134,7 @@ int nvmf_disconnect(const char *desc, int argc, char **argv)
 			nvme_strerror(errno));
 		return -errno;
 	}
+	nvme_root_skip_namespaces(r);
 	ret = nvme_scan_topology(r, NULL, NULL);
 	if (ret < 0) {
 		if (errno != ENOENT)
@@ -1207,6 +1206,7 @@ int nvmf_disconnect_all(const char *desc, int argc, char **argv)
 			nvme_strerror(errno));
 		return -errno;
 	}
+	nvme_root_skip_namespaces(r);
 	ret = nvme_scan_topology(r, NULL, NULL);
 	if (ret < 0) {
 		if (errno != ENOENT)
@@ -1279,6 +1279,7 @@ int nvmf_config(const char *desc, int argc, char **argv)
 		return -errno;
 	}
 	if (scan_tree) {
+		nvme_root_skip_namespaces(r);
 		ret = nvme_scan_topology(r, NULL, NULL);
 		if (ret < 0) {
 			if (errno != ENOENT)
@@ -1433,6 +1434,7 @@ int nvmf_dim(const char *desc, int argc, char **argv)
 			nvme_strerror(errno));
 		return -errno;
 	}
+	nvme_root_skip_namespaces(r);
 	ret = nvme_scan_topology(r, NULL, NULL);
 	if (ret < 0) {
 		if (errno != ENOENT)

@@ -33,12 +33,14 @@
 #include "util/cleanup.h"
 
 enum nvme_print_flags {
-	NORMAL	= 0,
-	VERBOSE	= 1 << 0,	/* verbosely decode complex values for humans */
-	JSON	= 1 << 1,	/* display in json format */
-	VS	= 1 << 2,	/* hex dump vendor specific data areas */
-	BINARY	= 1 << 3,	/* binary dump raw bytes */
+	NORMAL		= 0,
+	VERBOSE		= 1 << 0,	/* verbosely decode complex values for humans */
+	JSON		= 1 << 1,	/* display in json format */
+	VS		= 1 << 2,	/* hex dump vendor specific data areas */
+	BINARY		= 1 << 3,	/* binary dump raw bytes */
 };
+
+typedef uint32_t nvme_print_flags_t;
 
 enum nvme_cli_topo_ranking {
 	NVME_CLI_TOPO_NAMESPACE,
@@ -70,6 +72,25 @@ struct nvme_dev {
 };
 
 #define dev_fd(d) __dev_fd(d, __func__, __LINE__)
+
+struct nvme_config {
+	char *output_format;
+	int verbose;
+	__u32 timeout;
+};
+
+/*
+ * the ordering of the arguments matters, as the argument parser uses the first match, thus any
+ * command which defines -t shorthand will match first.
+ */
+#define NVME_ARGS(n, ...)                                                              \
+	struct argconfig_commandline_options n[] = {                                   \
+		OPT_INCR("verbose",      'v', &nvme_cfg.verbose,       verbose),       \
+		OPT_FMT("output-format", 'o', &nvme_cfg.output_format, output_format), \
+		##__VA_ARGS__,                                                         \
+		OPT_UINT("timeout",      't', &nvme_cfg.timeout,       timeout),       \
+		OPT_END()                                                              \
+	}
 
 static inline int __dev_fd(struct nvme_dev *dev, const char *func, int line)
 {
@@ -107,8 +128,11 @@ static inline DEFINE_CLEANUP_FUNC(
 #define _cleanup_nvme_dev_ __cleanup__(cleanup_nvme_dev)
 
 extern const char *output_format;
+extern const char *timeout;
+extern const char *verbose;
+extern struct nvme_config nvme_cfg;
 
-int validate_output_format(const char *format, enum nvme_print_flags *flags);
+int validate_output_format(const char *format, nvme_print_flags_t *flags);
 bool nvme_is_output_format_json(void);
 int __id_ctrl(int argc, char **argv, struct command *cmd,
 	struct plugin *plugin, void (*vs)(uint8_t *vs, struct json_object *root));

@@ -11,7 +11,6 @@
 #include "common.h"
 
 #define ERROR_MSG_LEN 100
-#define STR_LEN 100
 #define NAME_LEN 128
 #define BUF_LEN 320
 #define VAL_LEN 4096
@@ -144,6 +143,7 @@ static void obj_add_result(struct json_object *o, const char *v, ...)
 	else
 		obj_add_str(o, "Result", "Could not allocate string");
 
+	va_end(ap);
 	free(value);
 }
 
@@ -162,6 +162,7 @@ static void obj_add_key(struct json_object *o, const char *k, const char *v, ...
 	else
 		obj_add_str(o, k, "Could not allocate string");
 
+	va_end(ap);
 	free(value);
 }
 
@@ -3048,15 +3049,17 @@ static void json_nvme_nvm_id_ns(struct nvme_nvm_id_ns *nvm_ns,
 		obj_add_uint64(r, "lbstm", le64_to_cpu(nvm_ns->lbstm));
 
 	obj_add_int(r, "pic", nvm_ns->pic);
+	obj_add_int(r, "pifa", nvm_ns->pifa);
 
 	obj_add_array(r, "elbafs", elbafs);
 
-	for (i = 0; i <= ns->nlbaf; i++) {
+	for (i = 0; i <= ns->nlbaf + ns->nulbaf; i++) {
 		struct json_object *elbaf = json_create_object();
 		unsigned int elbaf_val = le32_to_cpu(nvm_ns->elbaf[i]);
 
 		obj_add_uint(elbaf, "sts", elbaf_val & 0x7F);
 		obj_add_uint(elbaf, "pif", (elbaf_val >> 7) & 0x3);
+		obj_add_uint(elbaf, "qpif", (elbaf_val >> 9) & 0xF);
 
 		array_add_obj(elbafs, elbaf);
 	}
@@ -3294,7 +3297,7 @@ static void json_feature_show_fields_temp_thresh(struct json_object *r, unsigned
 	obj_add_uint(r, "Threshold Temperature Select (TMPSEL)", field);
 	obj_add_str(r, "TMPSEL description", nvme_feature_temp_sel_to_string(field));
 
-	sprintf(json_str, "%ld Celsius", kelvin_to_celsius(result & 0xffff));
+	sprintf(json_str, "%s", nvme_degrees_string(result & 0xffff));
 	obj_add_str(r, "Temperature Threshold (TMPTH)", json_str);
 
 	sprintf(json_str, "%u K", result & 0xffff);
@@ -3464,13 +3467,13 @@ static void json_feature_show_fields_hctm(struct json_object *r, unsigned int re
 	sprintf(json_str, "%u K", result >> 16);
 	obj_add_str(r, "Thermal Management Temperature 1 (TMT1)", json_str);
 
-	sprintf(json_str, "%ld Celsius", kelvin_to_celsius(result >> 16));
+	sprintf(json_str, "%s", nvme_degrees_string(result >> 16));
 	obj_add_str(r, "TMT1 celsius", json_str);
 
 	sprintf(json_str, "%u K", result & 0xffff);
 	obj_add_str(r, "Thermal Management Temperature 2", json_str);
 
-	sprintf(json_str, "%ld Celsius", kelvin_to_celsius(result & 0xffff));
+	sprintf(json_str, "%s", nvme_degrees_string(result & 0xffff));
 	obj_add_str(r, "TMT2 celsius", json_str);
 }
 
@@ -4736,7 +4739,7 @@ static struct print_ops json_print_ops = {
 	.show_error_status		= json_output_error_status,
 };
 
-struct print_ops *nvme_get_json_print_ops(enum nvme_print_flags flags)
+struct print_ops *nvme_get_json_print_ops(nvme_print_flags_t flags)
 {
 	json_print_ops.flags = flags;
 	return &json_print_ops;

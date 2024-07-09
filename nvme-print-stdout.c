@@ -162,9 +162,7 @@ static void nvme_resources_free(struct nvme_resources *res)
 static void stdout_feature_show_fields(enum nvme_features_id fid,
 				       unsigned int result,
 				       unsigned char *buf);
-static void stdout_smart_log(struct nvme_smart_log *smart,
-			     unsigned int nsid,
-			     const char *devname);
+static void stdout_smart_log(struct nvme_smart_log *smart, unsigned int nsid, const char *devname);
 
 static void stdout_predictable_latency_per_nvmset(
 		struct nvme_nvmset_predictable_lat_log *plpns_log,
@@ -1048,6 +1046,18 @@ static void stdout_subsystem_ctrls(nvme_subsystem_t s)
 	}
 }
 
+static void stdout_subsys_config(nvme_subsystem_t s)
+{
+	int len = strlen(nvme_subsystem_get_name(s));
+
+	printf("%s - NQN=%s\n", nvme_subsystem_get_name(s),
+	       nvme_subsystem_get_nqn(s));
+	printf("%*s   hostnqn=%s\n", len, " ",
+	       nvme_host_get_hostnqn(nvme_subsystem_get_host(s)));
+	printf("%*s   iopolicy=%s\n", len, " ",
+	       nvme_subsystem_get_iopolicy(s));
+}
+
 static void stdout_subsystem(nvme_root_t r, bool show_ana)
 {
 	nvme_host_t h;
@@ -1057,18 +1067,11 @@ static void stdout_subsystem(nvme_root_t r, bool show_ana)
 		nvme_subsystem_t s;
 
 		nvme_for_each_subsystem(h, s) {
-			int len = strlen(nvme_subsystem_get_name(s));
-
 			if (!first)
 				printf("\n");
 			first = false;
 
-			printf("%s - NQN=%s\n", nvme_subsystem_get_name(s),
-			       nvme_subsystem_get_nqn(s));
-			printf("%*s   hostnqn=%s\n", len, " ",
-			       nvme_host_get_hostnqn(nvme_subsystem_get_host(s)));
-			printf("%*s   iopolicy=%s\n", len, " ",
-			       nvme_subsystem_get_iopolicy(s));
+			stdout_subsys_config(s);
 			printf("\\\n");
 
 			if (!show_ana || !stdout_subsystem_multipath(s))
@@ -1965,15 +1968,15 @@ static void stdout_id_ctrl_apsta(__u8 apsta)
 
 static void stdout_id_ctrl_wctemp(__le16 wctemp)
 {
-	printf(" [15:0] : %ld °C (%u K)\tWarning Composite Temperature Threshold (WCTEMP)\n",
-	       kelvin_to_celsius(le16_to_cpu(wctemp)), le16_to_cpu(wctemp));
+	printf(" [15:0] : %s (%u K)\tWarning Composite Temperature Threshold (WCTEMP)\n",
+	       nvme_degrees_string(le16_to_cpu(wctemp)), le16_to_cpu(wctemp));
 	printf("\n");
 }
 
 static void stdout_id_ctrl_cctemp(__le16 cctemp)
 {
-	printf(" [15:0] : %ld °C (%u K)\tCritical Composite Temperature Threshold (CCTEMP)\n",
-	       kelvin_to_celsius(le16_to_cpu(cctemp)), le16_to_cpu(cctemp));
+	printf(" [15:0] : %s (%u K)\tCritical Composite Temperature Threshold (CCTEMP)\n",
+	       nvme_degrees_string(le16_to_cpu(cctemp)), le16_to_cpu(cctemp));
 	printf("\n");
 }
 
@@ -2022,15 +2025,15 @@ static void stdout_id_ctrl_hctma(__le16 ctrl_hctma)
 
 static void stdout_id_ctrl_mntmt(__le16 mntmt)
 {
-	printf(" [15:0] : %ld °C (%u K)\tMinimum Thermal Management Temperature (MNTMT)\n",
-	       kelvin_to_celsius(le16_to_cpu(mntmt)), le16_to_cpu(mntmt));
+	printf(" [15:0] : %s (%u K)\tMinimum Thermal Management Temperature (MNTMT)\n",
+	       nvme_degrees_string(le16_to_cpu(mntmt)), le16_to_cpu(mntmt));
 	printf("\n");
 }
 
 static void stdout_id_ctrl_mxtmt(__le16 mxtmt)
 {
-	printf(" [15:0] : %ld °C (%u K)\tMaximum Thermal Management Temperature (MXTMT)\n",
-	       kelvin_to_celsius(le16_to_cpu(mxtmt)), le16_to_cpu(mxtmt));
+	printf(" [15:0] : %s (%u K)\tMaximum Thermal Management Temperature (MXTMT)\n",
+	       nvme_degrees_string(le16_to_cpu(mxtmt)), le16_to_cpu(mxtmt));
 	printf("\n");
 }
 
@@ -3041,22 +3044,40 @@ static void stdout_id_ctrl_nvm(struct nvme_id_ctrl_nvm *ctrl_nvm)
 
 static void stdout_nvm_id_ns_pic(__u8 pic)
 {
-	__u8 rsvd = (pic & 0xF8) >> 3;
-	__u8 stcrs = (pic & 0x3) >> 2;
+	__u8 rsvd = (pic & 0xF0) >> 4;
+	__u8 qpifs = (pic & 0x8) >> 3;
+	__u8 stcrs = (pic & 0x4) >> 2;
 	__u8 pic_16bpistm = (pic & 0x2) >> 1;
 	__u8 pic_16bpists = pic & 0x1;
 
 	if (rsvd)
-		printf("  [7:3] : %#x\tReserved\n", rsvd);
-	printf("  [2:2] : %#x\tStorage Tag Check Read Support\n", stcrs);
+		printf("  [7:4] : %#x\tReserved\n", rsvd);
+	printf("  [3:3] : %#x\tQualified Protection Information Format %sSupported\n",
+		qpifs, qpifs ? "" : "Not ");
+	printf("  [2:2] : %#x\tStorage Tag Check Read %sSupported\n",
+		stcrs, stcrs ? "" : "Not ");
 	printf("  [1:1] : %#x\t16b Guard Protection Information Storage Tag Mask\n",
 		pic_16bpistm);
-	printf("  [0:0] : %#x\t16b Guard Protection Information Storage Tag Support\n",
-		pic_16bpists);
+	printf("  [0:0] : %#x\t16b Guard Protection Information Storage Tag %sSupported\n",
+		pic_16bpists, pic_16bpists ? "" : "Not ");
 	printf("\n");
 }
 
-static char *pif_to_string(__u8 pif)
+static void stdout_nvm_id_ns_pifa(__u8 pifa)
+{
+	__u8 rsvd = (pifa & 0xF8) >> 3;
+	__u8 stmla = pifa & 0x7;
+
+	if (rsvd)
+		printf("  [7:3] : %#x\tReserved\n", rsvd);
+	printf("  [2:0] : %#x\tStorage Tag Masking Level Attribute : %s\n", stmla,
+		stmla == 0 ? "Bit Granularity Masking" :
+		stmla == 1 ? "Byte Granularity Masking" :
+		stmla == 2 ? "Masking Not Supported" : "Reserved");
+	printf("\n");
+}
+
+static char *pif_to_string(__u8 pif, bool qpifs, bool pif_field)
 {
 	switch (pif) {
 	case NVME_NVM_PIF_16B_GUARD:
@@ -3065,6 +3086,9 @@ static char *pif_to_string(__u8 pif)
 		return "32b Guard";
 	case NVME_NVM_PIF_64B_GUARD:
 		return "64b Guard";
+	case NVME_NVM_PIF_QTYPE:
+		if (pif_field && qpifs)
+			return "Qualified Type";
 	default:
 		return "Reserved";
 	}
@@ -3075,9 +3099,10 @@ static void stdout_nvm_id_ns(struct nvme_nvm_id_ns *nvm_ns, unsigned int nsid,
 			     bool cap_only)
 {
 	int i, verbose = stdout_print_ops.flags & VERBOSE;
+	bool qpifs = (nvm_ns->pic & 0x8) >> 3;
 	__u32 elbaf;
 	__u8 lbaf;
-	int pif, sts;
+	int pif, sts, qpif;
 	char *in_use = "(in use)";
 
 	nvme_id_ns_flbas_to_lbaf_inuse(ns->flbas, &lbaf);
@@ -3092,18 +3117,23 @@ static void stdout_nvm_id_ns(struct nvme_nvm_id_ns *nvm_ns, unsigned int nsid,
 	printf("pic   : %#x\n", nvm_ns->pic);
 	if (verbose)
 		stdout_nvm_id_ns_pic(nvm_ns->pic);
+	printf("pifa  : %#x\n", nvm_ns->pifa);
+	if (verbose)
+		stdout_nvm_id_ns_pifa(nvm_ns->pifa);
 
 	for (i = 0; i <= ns->nlbaf + ns->nulbaf; i++) {
 		elbaf = le32_to_cpu(nvm_ns->elbaf[i]);
+		qpif = (elbaf >> 9) & 0xF;
 		pif = (elbaf >> 7) & 0x3;
 		sts = elbaf & 0x7f;
 		if (verbose)
-			printf("Extended LBA Format %2d : Protection Information Format: "
-				"%s(%d) - Storage Tag Size (MSB): %-2d %s\n",
-				i, pif_to_string(pif), pif, sts, i == lbaf ? in_use : "");
+			printf("Extended LBA Format %2d : Qualified Protection Information Format: "
+				"%s(%d) - Protection Information Format: %s(%d) - Storage Tag Size "
+				"(MSB): %-2d %s\n", i, pif_to_string(qpif, qpifs, false), qpif,
+				pif_to_string(pif, qpifs, true), pif, sts, i == lbaf ? in_use : "");
 		else
-			printf("elbaf %2d : pif:%d sts:%-2d %s\n", i,
-				pif, sts, i == lbaf ? in_use : "");
+			printf("elbaf %2d : qpif:%d pif:%d sts:%-2d %s\n", i,
+				qpif, pif, sts, i == lbaf ? in_use : "");
 	}
 }
 
@@ -3848,80 +3878,79 @@ static void stdout_endurance_log(struct nvme_endurance_group_log *endurance_log,
 	       uint128_t_to_l10n_string(le128_to_cpu(endurance_log->unalloc_end_grp_cap)));
 }
 
-static void stdout_smart_log(struct nvme_smart_log *smart, unsigned int nsid,
-			     const char *devname)
+static void stdout_smart_log(struct nvme_smart_log *smart, unsigned int nsid, const char *devname)
 {
 	__u16 temperature = smart->temperature[1] << 8 | smart->temperature[0];
 	int i;
 	bool human = stdout_print_ops.flags & VERBOSE;
 
 	printf("Smart Log for NVME device:%s namespace-id:%x\n", devname, nsid);
-	printf("critical_warning			: %#x\n",
-		smart->critical_warning);
+	printf("critical_warning			: %#x\n", smart->critical_warning);
 
 	if (human) {
-		printf("      Available Spare[0]             : %d\n", smart->critical_warning & 0x01);
-		printf("      Temp. Threshold[1]             : %d\n", (smart->critical_warning & 0x02) >> 1);
-		printf("      NVM subsystem Reliability[2]   : %d\n", (smart->critical_warning & 0x04) >> 2);
-		printf("      Read-only[3]                   : %d\n", (smart->critical_warning & 0x08) >> 3);
-		printf("      Volatile mem. backup failed[4] : %d\n", (smart->critical_warning & 0x10) >> 4);
-		printf("      Persistent Mem. RO[5]          : %d\n", (smart->critical_warning & 0x20) >> 5);
+		printf("      Available Spare[0]             : %d\n",
+		       smart->critical_warning & 0x01);
+		printf("      Temp. Threshold[1]             : %d\n",
+		       (smart->critical_warning & 0x02) >> 1);
+		printf("      NVM subsystem Reliability[2]   : %d\n",
+		       (smart->critical_warning & 0x04) >> 2);
+		printf("      Read-only[3]                   : %d\n",
+		       (smart->critical_warning & 0x08) >> 3);
+		printf("      Volatile mem. backup failed[4] : %d\n",
+		       (smart->critical_warning & 0x10) >> 4);
+		printf("      Persistent Mem. RO[5]          : %d\n",
+		       (smart->critical_warning & 0x20) >> 5);
 	}
 
-	printf("temperature				: %ld °C (%u K)\n",
-		kelvin_to_celsius(temperature), temperature);
-	printf("available_spare				: %u%%\n",
-		smart->avail_spare);
-	printf("available_spare_threshold		: %u%%\n",
-		smart->spare_thresh);
-	printf("percentage_used				: %u%%\n",
-		smart->percent_used);
-	printf("endurance group critical warning summary: %#x\n",
-		smart->endu_grp_crit_warn_sumry);
+	printf("temperature				: %s (%u K)\n",
+	       nvme_degrees_string(temperature), temperature);
+	printf("available_spare				: %u%%\n", smart->avail_spare);
+	printf("available_spare_threshold		: %u%%\n", smart->spare_thresh);
+	printf("percentage_used				: %u%%\n", smart->percent_used);
+	printf("endurance group critical warning summary: %#x\n", smart->endu_grp_crit_warn_sumry);
 	printf("Data Units Read				: %s (%s)\n",
-		uint128_t_to_l10n_string(le128_to_cpu(smart->data_units_read)),
-		uint128_t_to_si_string(le128_to_cpu(smart->data_units_read),
-				       1000 * 512));
+	       uint128_t_to_l10n_string(le128_to_cpu(smart->data_units_read)),
+	       uint128_t_to_si_string(le128_to_cpu(smart->data_units_read), 1000 * 512));
 	printf("Data Units Written			: %s (%s)\n",
-		uint128_t_to_l10n_string(le128_to_cpu(smart->data_units_written)),
-		uint128_t_to_si_string(le128_to_cpu(smart->data_units_written),
-				       1000 * 512));
+	       uint128_t_to_l10n_string(le128_to_cpu(smart->data_units_written)),
+	       uint128_t_to_si_string(le128_to_cpu(smart->data_units_written), 1000 * 512));
 	printf("host_read_commands			: %s\n",
-		uint128_t_to_l10n_string(le128_to_cpu(smart->host_reads)));
+	       uint128_t_to_l10n_string(le128_to_cpu(smart->host_reads)));
 	printf("host_write_commands			: %s\n",
-		uint128_t_to_l10n_string(le128_to_cpu(smart->host_writes)));
+	       uint128_t_to_l10n_string(le128_to_cpu(smart->host_writes)));
 	printf("controller_busy_time			: %s\n",
-		uint128_t_to_l10n_string(le128_to_cpu(smart->ctrl_busy_time)));
+	       uint128_t_to_l10n_string(le128_to_cpu(smart->ctrl_busy_time)));
 	printf("power_cycles				: %s\n",
-		uint128_t_to_l10n_string(le128_to_cpu(smart->power_cycles)));
+	       uint128_t_to_l10n_string(le128_to_cpu(smart->power_cycles)));
 	printf("power_on_hours				: %s\n",
-		uint128_t_to_l10n_string(le128_to_cpu(smart->power_on_hours)));
+	       uint128_t_to_l10n_string(le128_to_cpu(smart->power_on_hours)));
 	printf("unsafe_shutdowns			: %s\n",
-		uint128_t_to_l10n_string(le128_to_cpu(smart->unsafe_shutdowns)));
+	       uint128_t_to_l10n_string(le128_to_cpu(smart->unsafe_shutdowns)));
 	printf("media_errors				: %s\n",
-		uint128_t_to_l10n_string(le128_to_cpu(smart->media_errors)));
+	       uint128_t_to_l10n_string(le128_to_cpu(smart->media_errors)));
 	printf("num_err_log_entries			: %s\n",
-		uint128_t_to_l10n_string(le128_to_cpu(smart->num_err_log_entries)));
+	       uint128_t_to_l10n_string(le128_to_cpu(smart->num_err_log_entries)));
 	printf("Warning Temperature Time		: %u\n",
-		le32_to_cpu(smart->warning_temp_time));
+	       le32_to_cpu(smart->warning_temp_time));
 	printf("Critical Composite Temperature Time	: %u\n",
-		le32_to_cpu(smart->critical_comp_time));
-	for (i = 0; i < 8; i++) {
-		__s32 temp = le16_to_cpu(smart->temp_sensor[i]);
+	       le32_to_cpu(smart->critical_comp_time));
 
-		if (temp == 0)
+	for (i = 0; i < ARRAY_SIZE(smart->temp_sensor); i++) {
+		temperature = le16_to_cpu(smart->temp_sensor[i]);
+		if (!temperature)
 			continue;
-		printf("Temperature Sensor %d           : %ld °C (%u K)\n",
-		       i + 1, kelvin_to_celsius(temp), temp);
+		printf("Temperature Sensor %d			: %s (%u K)\n", i + 1,
+		       nvme_degrees_string(temperature), temperature);
 	}
+
 	printf("Thermal Management T1 Trans Count	: %u\n",
-		le32_to_cpu(smart->thm_temp1_trans_count));
+	       le32_to_cpu(smart->thm_temp1_trans_count));
 	printf("Thermal Management T2 Trans Count	: %u\n",
-		le32_to_cpu(smart->thm_temp2_trans_count));
+	       le32_to_cpu(smart->thm_temp2_trans_count));
 	printf("Thermal Management T1 Total Time	: %u\n",
-		le32_to_cpu(smart->thm_temp1_total_time));
+	       le32_to_cpu(smart->thm_temp1_total_time));
 	printf("Thermal Management T2 Total Time	: %u\n",
-		le32_to_cpu(smart->thm_temp2_total_time));
+	       le32_to_cpu(smart->thm_temp2_total_time));
 }
 
 static void stdout_ana_log(struct nvme_ana_log *ana_log, const char *devname,
@@ -4423,8 +4452,8 @@ static void stdout_feature_show_fields(enum nvme_features_id fid,
 		field = (result & 0x000f0000) >> 16;
 		printf("\tThreshold Temperature Select (TMPSEL): %u - %s\n",
 		       field, nvme_feature_temp_sel_to_string(field));
-		printf("\tTemperature Threshold         (TMPTH): %ld °C (%u K)\n",
-		       kelvin_to_celsius(result & 0x0000ffff), result & 0x0000ffff);
+		printf("\tTemperature Threshold         (TMPTH): %s (%u K)\n",
+		       nvme_degrees_string(result & 0x0000ffff), result & 0x0000ffff);
 		break;
 	case NVME_FEAT_FID_ERR_RECOVERY:
 		printf("\tDeallocated or Unwritten Logical Block Error Enable (DULBE): %s\n",
@@ -4489,10 +4518,10 @@ static void stdout_feature_show_fields(enum nvme_features_id fid,
 		printf("\tKeep Alive Timeout (KATO) in milliseconds: %u\n", result);
 		break;
 	case NVME_FEAT_FID_HCTM:
-		printf("\tThermal Management Temperature 1 (TMT1) : %u K (%ld °C)\n",
-		       result >> 16, kelvin_to_celsius(result >> 16));
-		printf("\tThermal Management Temperature 2 (TMT2) : %u K (%ld °C)\n",
-		       result & 0x0000ffff, kelvin_to_celsius(result & 0x0000ffff));
+		printf("\tThermal Management Temperature 1 (TMT1) : %u K (%s)\n",
+		       result >> 16, nvme_degrees_string(result >> 16));
+		printf("\tThermal Management Temperature 2 (TMT2) : %u K (%s)\n",
+		       result & 0x0000ffff, nvme_degrees_string(result & 0x0000ffff));
 		break;
 	case NVME_FEAT_FID_NOPSC:
 		printf("\tNon-Operational Power State Permissive Mode Enable (NOPPME): %s\n",
@@ -5016,18 +5045,11 @@ static void stdout_simple_topology(nvme_root_t r,
 
 	nvme_for_each_host(r, h) {
 		nvme_for_each_subsystem(h, s) {
-			int len = strlen(nvme_subsystem_get_name(s));
-
 			if (!first)
 				printf("\n");
 			first = false;
 
-			printf("%s - NQN=%s\n", nvme_subsystem_get_name(s),
-			       nvme_subsystem_get_nqn(s));
-			printf("%*s   hostnqn=%s\n", len, " ",
-			       nvme_host_get_hostnqn(nvme_subsystem_get_host(s)));
-			printf("%*s   iopolicy=%s\n", len, " ",
-			       nvme_subsystem_get_iopolicy(s));
+			stdout_subsys_config(s);
 			printf("\\\n");
 
 			if (nvme_is_multipath(s))
@@ -5191,7 +5213,7 @@ static struct print_ops stdout_print_ops = {
 	.show_error_status		= stdout_error_status,
 };
 
-struct print_ops *nvme_get_stdout_print_ops(enum nvme_print_flags flags)
+struct print_ops *nvme_get_stdout_print_ops(nvme_print_flags_t flags)
 {
 	stdout_print_ops.flags = flags;
 	return &stdout_print_ops;

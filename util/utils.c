@@ -3,12 +3,13 @@
  * Copyright (c) Micron, Inc 2024.
  *
  * @file: micron-utils.h
- * @brief: This module contains all the utilities needed for micron nvme plugin
- *         and other micron modules.
+ * @brief: This module contains all the utilities needed for other modules.
  * @author: Chaithanya Shoba <ashoba@micron.com>
  */
 
-#include "micron-utils.h"
+#include "utils.h"
+#include "types.h"
+#include "json.h"
 
 int hex_to_int(char c)
 {
@@ -186,7 +187,7 @@ void process_field_size_8(int offset, char *sfield, __u8 *buf, char *datastr)
 
 		lval_lo = *((__u64 *)(&buf[offset]));
 
-		sprintf(buffer, "%lx", __builtin_bswap64(lval_lo));
+		sprintf(buffer, "%"PRIx64, __builtin_bswap64(lval_lo));
 		sprintf(datastr, "%s", hex_to_ascii(buffer));
 	} else if (strstr(sfield, "Timestamp")) {
 		char ts_buf[128];
@@ -247,15 +248,15 @@ void process_field_size_default(int offset, char *sfield, __u8 *buf, int size, c
 	sprintf(datastr, "%s", description_str);
 }
 
-void print_micron_vs_logs(__u8 *buf, struct micron_vs_logpage *log_page, int field_count,
+void generic_structure_parser(__u8 *buf, struct request_data *req_data, int field_count,
 	struct json_object *stats, __u8 spec, FILE *fp)
 {
 	int offset = 0;
 
 	for (int field = 0; field < field_count; field++) {
 		char datastr[1024] = { 0 };
-		char *sfield = log_page[field].field;
-		int size = !spec ? log_page[field].size : log_page[field].size2;
+		char *sfield = req_data[field].field;
+		int size = !spec ? req_data[field].size : req_data[field].size2;
 
 		if (!size || sfield == NULL)
 			continue;

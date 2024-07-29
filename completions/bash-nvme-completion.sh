@@ -889,10 +889,6 @@ plugin_micron_opts () {
 		"vs-smbus-option")
 		opts+=" --option= -o --value= -v --save= -s"
 			;;
-		"ocp-telemetry-log-parse")
-		opts+=" --format= -f --telemetry-log= -l --string-log= -s \
-			--output-file= -o"
-			;;
 		"help")
 		opts+=$NO_OPTS
 			;;
@@ -1448,8 +1444,9 @@ plugin_ocp_opts () {
 			--latency_monitor_feature_enable= -e"
 			;;
 		"internal-log")
-		opts+=" --telemetry_type= -t --telemetry_data_area= -a \
-			--output-file= -o"
+		opts+=" --telemetry-log= -l --string-log= -s \
+			--output-file= -o --output-format= -f \
+			--data-area= -a --telemetry-type= -t"
 			;;
 		"clear-fw-activate-history")
 		opts+=" --no-uuid -n"
@@ -1486,6 +1483,13 @@ plugin_ocp_opts () {
 			;;
 		"tcg-configuration-log")
 		opts+=" --output-file= -o"
+			;;
+		"get-error-injection")
+		opts+=" --sel= -s --no-uuid -n"
+			;;
+		"set-error-injection")
+		opts+=" --data= -d --number= -n --no-uuid -N --type= -t \
+			--nrtdp= -r --verbose -v --output-format -o --timeout="
 			;;
 		"help")
 		opts+=$NO_OPTS
@@ -1564,7 +1568,8 @@ _nvme_subcmds () {
 			vs-fw-activate-history device-capability-log \
 			set-dssd-power-state-feature get-dssd-power-state-feature \
 			telemetry-string-log set-telemetry-profile \
-			set-dssd-async-event-config get-dssd-async-event-config"
+			set-dssd-async-event-config get-dssd-async-event-config \
+			get-error-injection set-error-injection"
 	)
 
 	# Associative array mapping plugins to corresponding option completions

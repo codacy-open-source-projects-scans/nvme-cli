@@ -269,10 +269,11 @@ static void json_nvme_id_ns(struct nvme_id_ns *ns, unsigned int nsid,
 		obj_add_int(r, "nsattr", ns->nsattr);
 		obj_add_int(r, "nvmsetid", le16_to_cpu(ns->nvmsetid));
 
-		if (ns->nsfeat & 0x10) {
+		if (ns->nsfeat & 0x30) {
 			obj_add_int(r, "npwg", le16_to_cpu(ns->npwg));
 			obj_add_int(r, "npwa", le16_to_cpu(ns->npwa));
-			obj_add_int(r, "npdg", le16_to_cpu(ns->npdg));
+			if (ns->nsfeat & 0x10)
+				obj_add_int(r, "npdg", le16_to_cpu(ns->npdg));
 			obj_add_int(r, "npda", le16_to_cpu(ns->npda));
 			obj_add_int(r, "nows", le16_to_cpu(ns->nows));
 		}
@@ -3063,6 +3064,8 @@ static void json_nvme_nvm_id_ns(struct nvme_nvm_id_ns *nvm_ns,
 
 		array_add_obj(elbafs, elbaf);
 	}
+	if (ns->nsfeat & 0x20)
+		obj_add_int(r, "npdgl", le32_to_cpu(nvm_ns->npdgl));
 
 	json_print(r);
 }
@@ -3422,6 +3425,10 @@ static void json_feature_show_fields_host_mem_buf(struct json_object *r, unsigne
 						  unsigned char *buf)
 {
 	obj_add_str(r, "Enable Host Memory (EHM)", result & 1 ? "Enabled" : "Disabled");
+	obj_add_str(r, "Host Memory Non-operational Access Restriction Enable (HMNARE)",
+			(result & 0x00000004) ? "True" : "False");
+	obj_add_str(r, "Host Memory Non-operational Access Restricted (HMNAR)",
+			(result & 0x00000008) ? "True" : "False");
 
 	if (buf)
 		json_host_mem_buffer((struct nvme_host_mem_buf_attrs *)buf, r);

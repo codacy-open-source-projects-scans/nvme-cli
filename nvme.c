@@ -556,7 +556,7 @@ static int get_smart_log(int argc, char **argv, struct command *cmd, struct plug
 	if (cfg.raw_binary)
 		flags = BINARY;
 
-	if (cfg.human_readable)
+	if (cfg.human_readable || argconfig_parse_seen(opts, "verbose"))
 		flags |= VERBOSE;
 
 	smart_log = nvme_alloc(sizeof(*smart_log));
@@ -1066,7 +1066,7 @@ static int get_effects_log(int argc, char **argv, struct command *cmd, struct pl
 	if (cfg.raw_binary)
 		flags = BINARY;
 
-	if (cfg.human_readable)
+	if (cfg.human_readable || argconfig_parse_seen(opts, "verbose"))
 		flags |= VERBOSE;
 
 	list_head_init(&log_pages);
@@ -2071,7 +2071,7 @@ static int io_mgmt_send(int argc, char **argv, struct command *cmd, struct plugi
 	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
 	_cleanup_free_ void *buf = NULL;
 	int err = -1;
-	_cleanup_fd_ int dfd = -1;
+	_cleanup_fd_ int dfd = STDIN_FILENO;
 
 	struct config {
 		__u16 mos;
@@ -2116,8 +2116,7 @@ static int io_mgmt_send(int argc, char **argv, struct command *cmd, struct plugi
 			nvme_show_perror(cfg.file);
 			return -errno;
 		}
-	} else
-		dfd = dup(STDIN_FILENO);
+	}
 
 	err = read(dfd, buf, cfg.data_len);
 	if (err < 0) {
@@ -2405,7 +2404,7 @@ static int sanitize_log(int argc, char **argv, struct command *command, struct p
 	if (cfg.raw_binary)
 		flags = BINARY;
 
-	if (cfg.human_readable)
+	if (cfg.human_readable || argconfig_parse_seen(opts, "verbose"))
 		flags |= VERBOSE;
 
 	sanitize_log = nvme_alloc(sizeof(*sanitize_log));
@@ -2454,7 +2453,7 @@ static int get_fid_support_effects_log(int argc, char **argv, struct command *cm
 		return err;
 	}
 
-	if (cfg.human_readable)
+	if (cfg.human_readable || argconfig_parse_seen(opts, "verbose"))
 		flags |= VERBOSE;
 
 	fid_support_log = nvme_alloc(sizeof(*fid_support_log));
@@ -2503,7 +2502,7 @@ static int get_mi_cmd_support_effects_log(int argc, char **argv, struct command 
 		return err;
 	}
 
-	if (cfg.human_readable)
+	if (cfg.human_readable || argconfig_parse_seen(opts, "verbose"))
 		flags |= VERBOSE;
 
 	mi_cmd_support_log = nvme_alloc(sizeof(*mi_cmd_support_log));
@@ -2804,9 +2803,9 @@ static int delete_ns(int argc, char **argv, struct command *cmd, struct plugin *
 static int nvme_attach_ns(int argc, char **argv, int attach, const char *desc, struct command *cmd)
 {
 	_cleanup_free_ struct nvme_ctrl_list *cntlist = NULL;
-	_cleanup_free_ __u16 *ctrlist = NULL;
 	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
-	int err, num, i, list[2048];
+	int err, num;
+	__u16 list[NVME_ID_CTRL_LIST_MAX];
 
 	const char *namespace_id = "namespace to attach";
 	const char *cont = "optional comma-sep controller id list";
@@ -2834,7 +2833,8 @@ static int nvme_attach_ns(int argc, char **argv, int attach, const char *desc, s
 		return -EINVAL;
 	}
 
-	num = argconfig_parse_comma_sep_array(cfg.cntlist, list, 2047);
+	num = argconfig_parse_comma_sep_array_u16(cfg.cntlist,
+						  list, ARRAY_SIZE(list));
 	if (!num)
 		fprintf(stderr, "warning: empty controller-id list will result in no actual change in namespace attachment\n");
 
@@ -2847,14 +2847,7 @@ static int nvme_attach_ns(int argc, char **argv, int attach, const char *desc, s
 	if (!cntlist)
 		return -ENOMEM;
 
-	ctrlist = nvme_alloc(sizeof(*ctrlist) * 2048);
-	if (!ctrlist)
-		return -ENOMEM;
-
-	for (i = 0; i < num; i++)
-		ctrlist[i] = (__u16)list[i];
-
-	nvme_init_ctrl_list(cntlist, num, ctrlist);
+	nvme_init_ctrl_list(cntlist, num, list);
 
 	if (attach)
 		err = nvme_cli_ns_attach_ctrls(dev, cfg.namespace_id,
@@ -3428,7 +3421,7 @@ int __id_ctrl(int argc, char **argv, struct command *cmd, struct plugin *plugin,
 	if (cfg.vendor_specific)
 		flags |= VS;
 
-	if (cfg.human_readable)
+	if (cfg.human_readable || argconfig_parse_seen(opts, "verbose"))
 		flags |= VERBOSE;
 
 	ctrl = nvme_alloc(sizeof(*ctrl));
@@ -3748,7 +3741,7 @@ static int id_ns(int argc, char **argv, struct command *cmd, struct plugin *plug
 	if (cfg.vendor_specific)
 		flags |= VS;
 
-	if (cfg.human_readable)
+	if (cfg.human_readable || argconfig_parse_seen(opts, "verbose"))
 		flags |= VERBOSE;
 
 	if (!cfg.namespace_id) {
@@ -3820,7 +3813,7 @@ static int cmd_set_independent_id_ns(int argc, char **argv, struct command *cmd,
 	if (cfg.raw_binary)
 		flags = BINARY;
 
-	if (cfg.human_readable)
+	if (cfg.human_readable || argconfig_parse_seen(opts, "verbose"))
 		flags |= VERBOSE;
 
 	if (!cfg.namespace_id) {
@@ -3974,7 +3967,7 @@ static int id_uuid(int argc, char **argv, struct command *cmd, struct plugin *pl
 	if (cfg.raw_binary)
 		flags = BINARY;
 
-	if (cfg.human_readable)
+	if (cfg.human_readable || argconfig_parse_seen(opts, "verbose"))
 		flags |= VERBOSE;
 
 	uuid_list = nvme_alloc(sizeof(*uuid_list));
@@ -4214,7 +4207,7 @@ static int primary_ctrl_caps(int argc, char **argv, struct command *cmd, struct 
 		return err;
 	}
 
-	if (cfg.human_readable)
+	if (cfg.human_readable || argconfig_parse_seen(opts, "verbose"))
 		flags |= VERBOSE;
 
 	caps = nvme_alloc(sizeof(*caps));
@@ -5410,7 +5403,7 @@ static int show_registers(int argc, char **argv, struct command *cmd, struct plu
 		return err;
 	}
 
-	if (cfg.human_readable)
+	if (cfg.human_readable || argconfig_parse_seen(opts, "verbose"))
 		flags |= VERBOSE;
 
 	bar = mmap_registers(dev, false);
@@ -5686,7 +5679,7 @@ static int get_register(int argc, char **argv, struct command *cmd, struct plugi
 		return err;
 	}
 
-	if (cfg.human_readable)
+	if (cfg.human_readable || argconfig_parse_seen(opts, "verbose"))
 		flags |= VERBOSE;
 
 	bar = mmap_registers(dev, false);
@@ -6271,8 +6264,8 @@ static int format_cmd(int argc, char **argv, struct command *cmd, struct plugin 
 	struct nvme_format_nvm_args args = {
 		.args_size	= sizeof(args),
 		.nsid		= cfg.namespace_id,
-		.lbafu		= (cfg.lbaf & NVME_NS_FLBAS_HIGHER_MASK) >> 4,
-		.lbaf		= cfg.lbaf & NVME_NS_FLBAS_LOWER_MASK,
+		.lbafu		= (cfg.lbaf >> 4) & 0x3,
+		.lbaf		= cfg.lbaf & 0xf,
 		.mset		= cfg.ms,
 		.pi		= cfg.pi,
 		.pil		= cfg.pil,
@@ -6422,7 +6415,8 @@ static int set_feature(int argc, char **argv, struct command *cmd, struct plugin
 		 * should use the buffer method if the value exceeds this
 		 * length.
 		 */
-		if (cfg.feature_id == NVME_FEAT_FID_TIMESTAMP && cfg.value) {
+		if (cfg.feature_id == NVME_FEAT_FID_TIMESTAMP &&
+		    argconfig_parse_seen(opts, "value")) {
 			memcpy(buf, &cfg.value, NVME_FEAT_TIMESTAMP_DATA_SIZE);
 		} else {
 			if (strlen(cfg.file))
@@ -7691,7 +7685,7 @@ static int submit_io(int opcode, char *command, const char *desc, int argc, char
 	_cleanup_free_ void *mbuffer = NULL;
 	int err = 0;
 	_cleanup_fd_ int dfd = -1, mfd = -1;
-	int flags;
+	int flags, pi_size;
 	int mode = 0644;
 	__u16 control = 0, nblocks = 0;
 	__u32 dsmgmt = 0;
@@ -7887,13 +7881,23 @@ static int submit_io(int opcode, char *command, const char *desc, int argc, char
 	nvme_id_ns_flbas_to_lbaf_inuse(ns->flbas, &lba_index);
 	logical_block_size = 1 << ns->lbaf[lba_index].ds;
 	ms = ns->lbaf[lba_index].ms;
+
+	nvm_ns = nvme_alloc(sizeof(*nvm_ns));
+	if (!nvm_ns)
+		return -ENOMEM;
+
+	err = nvme_identify_ns_csi(dev_fd(dev), cfg.namespace_id, 0, NVME_CSI_NVM, nvm_ns);
+	if (!err)
+		get_pif_sts(ns, nvm_ns, &pif, &sts);
+
+	pi_size = (pif == NVME_NVM_PIF_16B_GUARD) ? 8 : 16;
 	if (NVME_FLBAS_META_EXT(ns->flbas)) {
 		/*
-		 * No meta data is transferred for PRACT=1 and MD=8:
+		 * No meta data is transferred for PRACT=1 and MD=PI size:
 		 *   5.2.2.1 Protection Information and Write Commands
 		 *   5.2.2.2 Protection Information and Read Commands
 		 */
-		if (!((cfg.prinfo & 0x8) != 0 && ms == 8))
+		if (!((cfg.prinfo & 0x8) != 0 && ms == pi_size))
 			logical_block_size += ms;
 	}
 
@@ -7918,16 +7922,7 @@ static int submit_io(int opcode, char *command, const char *desc, int argc, char
 	if (!buffer)
 		return -ENOMEM;
 
-	nvm_ns = nvme_alloc(sizeof(*nvm_ns));
-	if (!nvm_ns)
-		return -ENOMEM;
-
 	if (cfg.metadata_size) {
-		err = nvme_identify_ns_csi(dev_fd(dev), 1, 0, NVME_CSI_NVM, nvm_ns);
-		if (!err) {
-			get_pif_sts(ns, nvm_ns, &pif, &sts);
-		}
-
 		mbuffer_size = ((unsigned long long)cfg.block_count + 1) * ms;
 		if (ms && cfg.metadata_size < mbuffer_size)
 			nvme_show_error("Rounding metadata size to fit block count (%lld bytes)",
@@ -8479,7 +8474,7 @@ static int dir_receive(int argc, char **argv, struct command *cmd, struct plugin
 	if (err)
 		return err;
 
-	if (cfg.human_readable)
+	if (cfg.human_readable || argconfig_parse_seen(opts, "verbose"))
 		flags |= VERBOSE;
 	if (cfg.raw_binary)
 		flags = BINARY;

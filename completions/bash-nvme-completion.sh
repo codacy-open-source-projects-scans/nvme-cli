@@ -388,7 +388,7 @@ nvme_list_opts () {
 			--tos= -T --hdr-digest= -g --data-digest -G \
 			--nr-io-queues= -i --nr-write-queues= -W \
 			--nr-poll-queues= -P --queue-size= -Q \
-			--persistent -p --quiet -S \
+			--persistent -p --quiet \
 			--output-format= -o"
 			;;
 		"connect-all")
@@ -400,7 +400,7 @@ nvme_list_opts () {
 			--tos= -T --hdr-digest= -g --data-digest -G \
 			--nr-io-queues= -i --nr-write-queues= -W \
 			--nr-poll-queues= -P --queue-size= -Q \
-			--persistent -p --quiet -S \
+			--persistent -p --quiet \
 			--output-format= -o"
 			;;
 		"connect")
@@ -409,7 +409,7 @@ nvme_list_opts () {
 			--nr-poll-queues= -P --queue-size= -Q \
 			--keep-alive-tmo= -k --reconnect-delay= -r \
 			--ctrl-loss-tmo= -l --fast-io-fail-tmo= -f \
-			--tos= -T --duplicate-connect -D --disable-sqflow -d\
+			--tos= -T --duplicate-connect -D --disable-sqflow \
 			--hdr-digest -g --data-digest -G --output-format= -o"
 			;;
 		"dim")

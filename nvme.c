@@ -417,13 +417,14 @@ static int get_dev(struct nvme_dev **dev, int argc, char **argv, int flags)
 		return ret;
 
 	devname = argv[optind];
+	errno = ENXIO;
 
 	if (!strncmp(devname, "mctp:", strlen("mctp:")))
 		ret = open_dev_mi_mctp(dev, devname);
 	else
 		ret = open_dev_direct(dev, devname, flags);
 
-	return ret != 0 ? -errno : 0;
+	return ret ? -errno : 0;
 }
 
 static int parse_args(int argc, char *argv[], const char *desc,
@@ -3324,8 +3325,7 @@ static int list_subsys(int argc, char **argv, struct command *cmd,
 
 	err = nvme_scan_topology(r, filter, (void *)devname);
 	if (err) {
-		if (errno != ENOENT)
-			nvme_show_error("Failed to scan topology: %s", nvme_strerror(errno));
+		nvme_show_error("Failed to scan topology: %s", nvme_strerror(errno));
 		return -errno;
 	}
 
@@ -3363,8 +3363,7 @@ static int list(int argc, char **argv, struct command *cmd, struct plugin *plugi
 	}
 	err = nvme_scan_topology(r, NULL, NULL);
 	if (err < 0) {
-		if (errno != ENOENT)
-			nvme_show_error("Failed to scan topology: %s", nvme_strerror(errno));
+		nvme_show_error("Failed to scan topology: %s", nvme_strerror(errno));
 		return err;
 	}
 
@@ -5354,7 +5353,7 @@ static void *mmap_registers(struct nvme_dev *dev, bool writable)
 	sprintf(path, "/sys/class/nvme/%s/device/resource0", dev->name);
 	fd = open(path, writable ? O_RDWR : O_RDONLY);
 	if (fd < 0) {
-		if (log_level >= LOG_DEBUG)
+		if (log_level >= LOG_INFO)
 			nvme_show_error("%s did not find a pci resource, open failed %s",
 					dev->name, strerror(errno));
 		return NULL;
@@ -5362,9 +5361,12 @@ static void *mmap_registers(struct nvme_dev *dev, bool writable)
 
 	membase = mmap(NULL, getpagesize(), prot, MAP_SHARED, fd, 0);
 	if (membase == MAP_FAILED) {
-		if (log_level >= LOG_DEBUG) {
-			fprintf(stderr, "%s failed to map. ", dev->name);
-			fprintf(stderr, "Did your kernel enable CONFIG_IO_STRICT_DEVMEM?\n");
+		if (log_level >= LOG_INFO) {
+			fprintf(stderr, "Failed to map registers to userspace.\n\n"
+				"Did your kernel enable CONFIG_IO_STRICT_DEVMEM?\n"
+				"You can disable this feature with command line argument\n\n"
+				"\tio_memory=relaxed\n\n"
+				"Also ensure secure boot is disabled.\n\n");
 		}
 		membase = NULL;
 	}
@@ -9582,9 +9584,7 @@ static int show_topology_cmd(int argc, char **argv, struct command *command, str
 
 	err = nvme_scan_topology(r, NULL, NULL);
 	if (err < 0) {
-		if (errno != ENOENT)
-			nvme_show_error("Failed to scan topology: %s", nvme_strerror(errno));
-		nvme_free_tree(r);
+		nvme_show_error("Failed to scan topology: %s", nvme_strerror(errno));
 		return err;
 	}
 

@@ -400,6 +400,7 @@ void json_nvme_id_ctrl(struct nvme_id_ctrl *ctrl,
 	obj_add_uint(r, "pels", le32_to_cpu(ctrl->pels));
 	obj_add_int(r, "domainid", le16_to_cpu(ctrl->domainid));
 	obj_add_uint128(r, "megcap", megcap);
+	obj_add_int(r, "tmpthha", ctrl->tmpthha);
 	obj_add_int(r, "sqes", ctrl->sqes);
 	obj_add_int(r, "cqes", ctrl->cqes);
 	obj_add_int(r, "maxcmd", le16_to_cpu(ctrl->maxcmd));
@@ -1853,13 +1854,20 @@ static void json_lba_status(struct nvme_lba_status *list,
 	obj_add_uint(r, "Completion Condition (CMPC)", list->cmpc);
 
 	switch (list->cmpc) {
-	case 1:
-		obj_add_str(r, "cmpc-definition",
-		    "Completed due to transferring the amount of data specified in the MNDW field");
+	case NVME_LBA_STATUS_CMPC_NO_CMPC:
+		obj_add_str(r, "cmpc-definition", "No indication of the completion condition");
 		break;
-	case 2:
+	case NVME_LBA_STATUS_CMPC_INCOMPLETE:
 		obj_add_str(r, "cmpc-definition",
-		    "Completed due to having performed the action specified in the Action Type field over the number of logical blocks specified in the Range Length field");
+			"Completed transferring the amount of data specified in the"\
+			"MNDW field. But, additional LBA Status Descriptor Entries are"\
+			"available to transfer or scan did not complete (if ATYPE = 10h)");
+		break;
+	case NVME_LBA_STATUS_CMPC_COMPLETE:
+		obj_add_str(r, "cmpc-definition",
+			"Completed the specified action over the number of LBAs specified"\
+			"in the Range Length field and transferred all available LBA Status"\
+			"Descriptor Entries");
 		break;
 	default:
 		break;
@@ -2457,7 +2465,13 @@ static void json_print_nvme_subsystem_list(nvme_root_t r, bool show_ana)
 			subsystem_attrs = json_create_object();
 			obj_add_str(subsystem_attrs, "Name", nvme_subsystem_get_name(s));
 			obj_add_str(subsystem_attrs, "NQN", nvme_subsystem_get_nqn(s));
-			obj_add_str(subsystem_attrs, "IOPolicy", nvme_subsystem_get_iopolicy(s));
+
+			if (json_print_ops.flags & VERBOSE) {
+				obj_add_str(subsystem_attrs, "IOPolicy",
+						nvme_subsystem_get_iopolicy(s));
+				obj_add_str(subsystem_attrs, "Type",
+						nvme_subsystem_get_type(s));
+			}
 
 			array_add_obj(subsystems, subsystem_attrs);
 			paths = json_create_array();
@@ -3033,6 +3047,7 @@ static void json_nvme_id_ctrl_nvm(struct nvme_id_ctrl_nvm *ctrl_nvm)
 	obj_add_uint(r, "dmrl", ctrl_nvm->dmrl);
 	obj_add_uint(r, "dmrsl", le32_to_cpu(ctrl_nvm->dmrsl));
 	obj_add_uint64(r, "dmsl", le64_to_cpu(ctrl_nvm->dmsl));
+	obj_add_uint(r, "aocs", le16_to_cpu(ctrl_nvm->aocs));
 
 	json_print(r);
 }
@@ -3066,6 +3081,7 @@ static void json_nvme_nvm_id_ns(struct nvme_nvm_id_ns *nvm_ns,
 	}
 	if (ns->nsfeat & 0x20)
 		obj_add_int(r, "npdgl", le32_to_cpu(nvm_ns->npdgl));
+	obj_add_uint(r, "tlbaag", le32_to_cpu(nvm_ns->tlbaag));
 
 	json_print(r);
 }
@@ -3289,9 +3305,17 @@ static void json_feature_show_fields_lba_range(struct json_object *r, __u8 field
 
 static void json_feature_show_fields_temp_thresh(struct json_object *r, unsigned int result)
 {
-	__u8 field = (result & 0x300000) >> 20;
 	char json_str[STR_LEN];
+	__u8 field;
 
+	field = (result & 0x1c00000) >> 22;
+	sprintf(json_str, "%s", nvme_degrees_string(field));
+	obj_add_str(r, "Temperature Threshold Hysteresis (TMPTHH)", json_str);
+
+	sprintf(json_str, "%u K", field);
+	obj_add_str(r, "TMPTHH kelvin", json_str);
+
+	field = (result & 0x300000) >> 20;
 	obj_add_uint(r, "Threshold Type Select (THSEL)", field);
 	obj_add_str(r, "THSEL description", nvme_feature_temp_type_to_string(field));
 
@@ -4341,7 +4365,13 @@ static void json_simple_topology(nvme_root_t r)
 			subsystem_attrs = json_create_object();
 			obj_add_str(subsystem_attrs, "Name", nvme_subsystem_get_name(s));
 			obj_add_str(subsystem_attrs, "NQN", nvme_subsystem_get_nqn(s));
-			obj_add_str(subsystem_attrs, "IOPolicy", nvme_subsystem_get_iopolicy(s));
+
+			if (json_print_ops.flags & VERBOSE) {
+				obj_add_str(subsystem_attrs, "IOPolicy",
+						nvme_subsystem_get_iopolicy(s));
+				obj_add_str(subsystem_attrs, "Type",
+						nvme_subsystem_get_type(s));
+			}
 
 			array_add_obj(subsystems, subsystem_attrs);
 			namespaces = json_create_array();

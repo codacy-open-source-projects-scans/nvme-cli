@@ -86,6 +86,7 @@
 #define WDC_NVME_SN560_DEV_ID_3				0x2714
 #define WDC_NVME_SN861_DEV_ID				0x2750
 #define WDC_NVME_SN861_DEV_ID_1				0x2751
+#define WDC_NVME_SN861_DEV_ID_2				0x2752
 
 /* This id's are no longer supported, delete ?? */
 #define WDC_NVME_SN550_DEV_ID				0x2708
@@ -1530,7 +1531,8 @@ static int wdc_get_vendor_id(struct nvme_dev *dev, uint32_t *vendor_id)
 static bool wdc_is_sn861(__u32 device_id)
 {
 	if ((device_id == WDC_NVME_SN861_DEV_ID) ||
-	    (device_id == WDC_NVME_SN861_DEV_ID_1))
+	    (device_id == WDC_NVME_SN861_DEV_ID_1) ||
+	    (device_id == WDC_NVME_SN861_DEV_ID_2))
 		return true;
 	else
 		return false;
@@ -1872,6 +1874,7 @@ static __u64 wdc_get_drive_capabilities(nvme_root_t r, struct nvme_dev *dev)
 
 		case WDC_NVME_SN861_DEV_ID:
 		case WDC_NVME_SN861_DEV_ID_1:
+		case WDC_NVME_SN861_DEV_ID_2:
 			capabilities |= (WDC_DRIVE_CAP_C0_LOG_PAGE |
 				WDC_DRIVE_CAP_C3_LOG_PAGE |
 				WDC_DRIVE_CAP_CA_LOG_PAGE |
@@ -10832,13 +10835,13 @@ static void wdc_print_nand_stats_json(__u16 version, void *data)
 				le32_to_cpu(nand_stats_v3->ssd_correction_counts[12]));
 		json_object_add_value_uint(root, "System data % life-used",
 				nand_stats_v3->percent_life_used);
-		json_object_add_value_uint64(root, "User Data Erase Counts - SLC Min",
-				le64_to_cpu(nand_stats_v3->user_data_erase_counts[0]));
-		json_object_add_value_uint64(root, "User Data Erase Counts - SLC Max",
-				le64_to_cpu(nand_stats_v3->user_data_erase_counts[1]));
 		json_object_add_value_uint64(root, "User Data Erase Counts - TLC Min",
-				le64_to_cpu(nand_stats_v3->user_data_erase_counts[2]));
+				le64_to_cpu(nand_stats_v3->user_data_erase_counts[0]));
 		json_object_add_value_uint64(root, "User Data Erase Counts - TLC Max",
+				le64_to_cpu(nand_stats_v3->user_data_erase_counts[1]));
+		json_object_add_value_uint64(root, "User Data Erase Counts - SLC Min",
+				le64_to_cpu(nand_stats_v3->user_data_erase_counts[2]));
+		json_object_add_value_uint64(root, "User Data Erase Counts - SLC Max",
 				le64_to_cpu(nand_stats_v3->user_data_erase_counts[3]));
 		temp_ptr = (__u64 *)nand_stats_v3->program_fail_count;
 		temp_norm = (__u16)(*temp_ptr & 0x000000000000FFFF);
@@ -11429,6 +11432,7 @@ static int wdc_vs_drive_info(int argc, char **argv,
 			break;
 		case WDC_NVME_SN861_DEV_ID:
 		case WDC_NVME_SN861_DEV_ID_1:
+		case WDC_NVME_SN861_DEV_ID_2:
 			data_len = sizeof(info);
 			num_dwords = data_len / 4;
 			if (data_len % 4 != 0)

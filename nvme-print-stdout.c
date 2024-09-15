@@ -3662,7 +3662,7 @@ static void stdout_error_log(struct nvme_error_log_page *err_log, int entries,
 			le64_to_cpu(err_log[i].error_count));
 		printf("sqid		: %d\n", err_log[i].sqid);
 		printf("cmdid		: %#x\n", err_log[i].cmdid);
-		printf("status_field	: %#x(%s)\n", status,
+		printf("status_field	: %#x (%s)\n", status,
 			nvme_status_to_string(status, false));
 		printf("phase_tag	: %#x\n",
 			le16_to_cpu(err_log[i].status_field & 0x1));
@@ -3672,7 +3672,7 @@ static void stdout_error_log(struct nvme_error_log_page *err_log, int entries,
 			le64_to_cpu(err_log[i].lba));
 		printf("nsid		: %#x\n", err_log[i].nsid);
 		printf("vs		: %d\n", err_log[i].vs);
-		printf("trtype		: %s\n",
+		printf("trtype		: %#x (%s)\n", err_log[i].trtype,
 			nvme_trtype_to_string(err_log[i].trtype));
 		printf("csi		: %d\n", err_log[i].csi);
 		printf("opcode		: %#x\n", err_log[i].opcode);
@@ -5318,4 +5318,17 @@ struct print_ops *nvme_get_stdout_print_ops(nvme_print_flags_t flags)
 {
 	stdout_print_ops.flags = flags;
 	return &stdout_print_ops;
+}
+
+void print_array(char *name, __u8 *data, int size)
+{
+	int i;
+
+	if (!name || !data || !size)
+		return;
+
+	printf("%s: 0x", name);
+	for (i = 0; i < size; i++)
+		printf("%02X", data[size - i - 1]);
+	printf("\n");
 }

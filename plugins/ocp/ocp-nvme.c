@@ -912,6 +912,7 @@ __u8 *pC9_string_buffer;
 static void get_serial_number(struct nvme_id_ctrl *ctrl, char *sn)
 {
 	int i;
+
 	/* Remove trailing spaces from the name */
 	for (i = 0; i < sizeof(ctrl->sn); i++) {
 		if (ctrl->sn[i] == ' ')
@@ -920,8 +921,7 @@ static void get_serial_number(struct nvme_id_ctrl *ctrl, char *sn)
 	}
 }
 
-static void print_telemetry_header(struct telemetry_initiated_log *logheader,
-		int tele_type)
+static void print_telemetry_header(struct telemetry_initiated_log *logheader, int tele_type)
 {
 	if (logheader) {
 		unsigned int i = 0, j = 0;
@@ -1588,12 +1588,14 @@ exit_status:
 
 static int get_c9_log_page_data(struct nvme_dev *dev, int print_data, int save_bin)
 {
-	int ret = 0, fd;
+	int ret = 0;
 	__le64 stat_id_str_table_ofst = 0;
 	__le64 event_str_table_ofst = 0;
 	__le64 vu_event_str_table_ofst = 0;
 	__le64 ascii_table_ofst = 0;
 	char file_path[PATH_MAX];
+
+	_cleanup_fd_ int fd = STDIN_FILENO;
 
 	header_data = (__u8 *)malloc(sizeof(__u8) * C9_TELEMETRY_STR_LOG_LEN);
 	if (!header_data) {
@@ -1608,22 +1610,21 @@ static int get_c9_log_page_data(struct nvme_dev *dev, int print_data, int save_b
 	if (!ret) {
 		log_data = (struct telemetry_str_log_format *)header_data;
 		if (print_data) {
-			printf("Statistics Identifier String Table Size = %lld\n",
-			       log_data->sitsz);
+			printf("Statistics Identifier String Table Size = %lld\n", log_data->sitsz);
 			printf("Event String Table Size = %lld\n", log_data->estsz);
 			printf("VU Event String Table Size = %lld\n", log_data->vu_eve_st_sz);
 			printf("ASCII Table Size = %lld\n", log_data->asctsz);
 		}
 
-		//Calculating the offset for dynamic fields.
+		/* Calculating the offset for dynamic fields. */
 
 		stat_id_str_table_ofst = log_data->sits * 4;
 		event_str_table_ofst = log_data->ests * 4;
 		vu_event_str_table_ofst = log_data->vu_eve_sts * 4;
 		ascii_table_ofst = log_data->ascts * 4;
 		total_log_page_sz = C9_TELEMETRY_STR_LOG_LEN +
-		(log_data->sitsz * 4) + (log_data->estsz * 4) +
-		(log_data->vu_eve_st_sz * 4) + (log_data->asctsz * 4);
+		    (log_data->sitsz * 4) + (log_data->estsz * 4) +
+		    (log_data->vu_eve_st_sz * 4) + (log_data->asctsz * 4);
 
 		if (print_data) {
 			printf("stat_id_str_table_ofst = %lld\n", stat_id_str_table_ofst);
@@ -1642,26 +1643,24 @@ static int get_c9_log_page_data(struct nvme_dev *dev, int print_data, int save_b
 
 		ret = nvme_get_log_simple(dev_fd(dev), C9_TELEMETRY_STRING_LOG_ENABLE_OPCODE,
 					  total_log_page_sz, pC9_string_buffer);
-	} else
+	} else {
 		fprintf(stderr, "ERROR : OCP : Unable to read C9 data.\n");
+	}
 
 	if (save_bin) {
 		sprintf(file_path, DEFAULT_STRING_BIN);
 		fd = open(file_path, O_WRONLY | O_CREAT | O_TRUNC, 0666);
 		if (fd < 0) {
-			fprintf(stderr, "Failed to open output file %s: %s!\n",
-				file_path, strerror(errno));
-			goto exit_status;
+			fprintf(stderr, "Failed to open output file %s: %s!\n", file_path,
+				strerror(errno));
+			return fd;
 		}
 
 		ret = write(fd, (void *)pC9_string_buffer, total_log_page_sz);
 		if (ret != total_log_page_sz)
 			fprintf(stderr, "Failed to flush all data to file!\n");
-
-		close(fd);
 	}
 
-exit_status:
 	return 0;
 }
 
@@ -3142,7 +3141,7 @@ static int ocp_telemetry_str_log_format(int argc, char **argv, struct command *c
 					struct plugin *plugin);
 
 
-static int ocp_print_C9_log_normal(struct telemetry_str_log_format *log_data, __u8 *log_data_buf)
+static int ocp_print_c9_log_normal(struct telemetry_str_log_format *log_data, __u8 *log_data_buf)
 {
 	//calculating the index value for array
 	__le64 stat_id_index = (log_data->sitsz * 4) / 16;
@@ -3343,7 +3342,7 @@ static int ocp_print_C9_log_normal(struct telemetry_str_log_format *log_data, __
 	return 0;
 }
 
-static int ocp_print_C9_log_json(struct telemetry_str_log_format *log_data, __u8 *log_data_buf)
+static int ocp_print_c9_log_json(struct telemetry_str_log_format *log_data, __u8 *log_data_buf)
 {
 	struct json_object *root = json_create_object();
 	char res_arr[48];
@@ -3589,9 +3588,7 @@ static void ocp_print_c9_log_binary(__u8 *log_data_buf, int total_log_page_size)
 
 static int get_c9_log_page(struct nvme_dev *dev, char *format)
 {
-
 	int ret = 0;
-
 	nvme_print_flags_t fmt;
 
 	ret = validate_output_format(format, &fmt);
@@ -3600,15 +3597,14 @@ static int get_c9_log_page(struct nvme_dev *dev, char *format)
 		return ret;
 	}
 
-	get_c9_log_page_data(dev, 1, 0);
-
+	ret = get_c9_log_page_data(dev, 1, 0);
 	if (!ret) {
 		switch (fmt) {
 		case NORMAL:
-			ocp_print_C9_log_normal(log_data, pC9_string_buffer);
+			ocp_print_c9_log_normal(log_data, pC9_string_buffer);
 			break;
 		case JSON:
-			ocp_print_C9_log_json(log_data, pC9_string_buffer);
+			ocp_print_c9_log_json(log_data, pC9_string_buffer);
 			break;
 		case BINARY:
 			ocp_print_c9_log_binary(pC9_string_buffer, total_log_page_sz);
@@ -3617,8 +3613,10 @@ static int get_c9_log_page(struct nvme_dev *dev, char *format)
 			fprintf(stderr, "unhandled output format\n");
 			break;
 		}
-	} else
+	} else {
 		fprintf(stderr, "ERROR : OCP : Unable to read C9 data from buffer\n");
+	}
+
 	free(header_data);
 	return ret;
 }

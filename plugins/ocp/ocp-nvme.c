@@ -22,6 +22,7 @@
 #include "plugin.h"
 #include "linux/types.h"
 #include "util/types.h"
+#include "util/logging.h"
 #include "nvme-print.h"
 #include "nvme-wrap.h"
 
@@ -29,6 +30,7 @@
 #include "ocp-clear-features.h"
 #include "ocp-fw-activation-history.h"
 #include "ocp-telemetry-decode.h"
+#include "ocp-hardware-component-log.h"
 
 #define CREATE_CMD
 #include "ocp-nvme.h"
@@ -192,6 +194,11 @@ struct erri_config {
 	__u8 number;
 	__u16 type;
 	__u16 nrtdp;
+};
+
+struct ieee1667_get_cq_entry {
+	__u32 enabled:3;
+	__u32 rsvd3:29;
 };
 
 static const char *sel = "[0-3]: current/default/saved/supported";
@@ -2147,6 +2154,8 @@ static int ocp_unsupported_requirements_log(int argc, char **argv, struct comman
 #define C1_ERROR_RECOVERY_OPCODE            0xC1
 #define C1_ERROR_RECOVERY_VERSION           0x0002
 #define C1_GUID_LENGTH                      16
+#define C1_PREV_PANIC_IDS_LENGTH            4
+
 static __u8 error_recovery_guid[C1_GUID_LENGTH] = {
 	0x44, 0xd9, 0x31, 0x21,
 	0xfe, 0x30, 0x34, 0xae,
@@ -2168,6 +2177,8 @@ static __u8 error_recovery_guid[C1_GUID_LENGTH] = {
  * @vendor_specific_command_timeout:	Vendor Specific Command Timeout
  * @device_recover_action_2:		Device Recovery Action 2
  * @device_recover_action_2_timeout:	Device Recovery Action 2 Timeout
+ * @panic_count:			Panic Count
+ * @prev_panic_id:			Previous Panic IDs
  * @reserved2:				Reserved
  * @log_page_version:			Log Page Version
  * @log_page_guid:			Log Page GUID
@@ -2185,7 +2196,9 @@ struct __packed ocp_error_recovery_log_page {
 	__u8    vendor_specific_command_timeout;         /* 1 byte       - 0x1C */
 	__u8    device_recover_action_2;                 /* 1 byte       - 0x1D */
 	__u8    device_recover_action_2_timeout;         /* 1 byte       - 0x1E */
-	__u8    reserved2[0x1cf];                        /* 463 bytes    - 0x1F - 0x1ED */
+	__u8    panic_count;                             /* 1 byte       - 0x1F */
+	__le64  prev_panic_id[C1_PREV_PANIC_IDS_LENGTH]; /* 32 bytes     - 0x20 - 0x3F */
+	__u8    reserved2[0x1ae];                        /* 430 bytes    - 0x40 - 0x1ED */
 	__le16  log_page_version;                        /* 2 bytes      - 0x1EE - 0x1EF */
 	__u8    log_page_guid[0x10];                     /* 16 bytes     - 0x1F0 - 0x1FF */
 };
@@ -2212,8 +2225,13 @@ static void ocp_print_c1_log_normal(struct ocp_error_recovery_log_page *log_data
 	printf("  Vendor Specific Command Timeout   : 0x%x\n", log_data->vendor_specific_command_timeout);
 	printf("  Device Recovery Action 2          : 0x%x\n", log_data->device_recover_action_2);
 	printf("  Device Recovery Action 2 Timeout  : 0x%x\n", log_data->device_recover_action_2_timeout);
+	printf("  Panic Count                       : 0x%x\n", log_data->panic_count);
+	printf("  Previous Panic IDs:");
+	for (i = 0; i < C1_PREV_PANIC_IDS_LENGTH; i++)
+		printf("%s Panic ID N-%d : 0x%lx\n", i ? "                     " : "", i + 1,
+		       le64_to_cpu(log_data->prev_panic_id[i]));
 	printf("  Log Page Version                  : 0x%x\n", le16_to_cpu(log_data->log_page_version));
-	printf("  Log page GUID			    : 0x");
+	printf("  Log page GUID                     : 0x");
 	for (i = C1_GUID_LENGTH - 1; i >= 0; i--)
 		printf("%x", log_data->log_page_guid[i]);
 	printf("\n");
@@ -3905,7 +3923,6 @@ out:
 	return ret;
 }
 
-
 static int ocp_tcg_configuration_log(int argc, char **argv, struct command *cmd,
 					    struct plugin *plugin)
 {
@@ -4140,4 +4157,73 @@ static int set_error_injection(int argc, char **argv, struct command *cmd, struc
 		return err;
 
 	return error_injection_set(dev, &cfg, !argconfig_parse_seen(opts, "no-uuid"));
+}
+
+static int enable_ieee1667_silo_get(struct nvme_dev *dev, const __u8 sel, bool uuid)
+{
+	struct ieee1667_get_cq_entry cq_entry;
+	int err;
+	const __u8 fid = 0xc4;
+
+	struct nvme_get_features_args args = {
+		.result = (__u32 *)&cq_entry,
+		.args_size = sizeof(args),
+		.fd = dev_fd(dev),
+		.timeout = NVME_DEFAULT_IOCTL_TIMEOUT,
+		.sel = sel,
+		.fid = fid,
+	};
+
+	if (uuid) {
+		/* OCP 2.0 requires UUID index support */
+		err = ocp_get_uuid_index(dev, &args.uuidx);
+		if (err || !args.uuidx) {
+			nvme_show_error("ERROR: No OCP UUID index found");
+			return err;
+		}
+	}
+
+	err = nvme_cli_get_features(dev, &args);
+	if (!err) {
+		if (sel == NVME_GET_FEATURES_SEL_SUPPORTED)
+			nvme_show_select_result(fid, *args.result);
+		else
+			nvme_show_result("IEEE1667 Sifo Enabled (feature: 0x%02x): 0x%0x (%s: %s)",
+					 fid, cq_entry.enabled, nvme_select_to_string(sel),
+					 cq_entry.enabled ? "enabled" : "disabled");
+	} else {
+		nvme_show_error("Could not get feature: 0x%02x.", fid);
+	}
+
+	return err;
+}
+
+static int get_enable_ieee1667_silo(int argc, char **argv, struct command *cmd,
+				    struct plugin *plugin)
+{
+	const char *desc = "return set of enable IEEE1667 silo";
+	int err;
+	struct config {
+		__u8 sel;
+	};
+	struct config cfg = { 0 };
+
+	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
+
+	OPT_ARGS(opts) = {
+		OPT_BYTE("sel", 's', &cfg.sel, sel),
+		OPT_FLAG("no-uuid", 'n', NULL, no_uuid),
+		OPT_END()
+	};
+
+	err = parse_and_open(&dev, argc, argv, desc, opts);
+	if (err)
+		return err;
+
+	return enable_ieee1667_silo_get(dev, cfg.sel, !argconfig_parse_seen(opts, "no-uuid"));
+}
+
+static int hwcomp_log(int argc, char **argv, struct command *cmd, struct plugin *plugin)
+{
+	return ocp_hwcomp_log(argc, argv, cmd, plugin);
 }

@@ -1109,6 +1109,8 @@ static void stdout_subsystem_list(nvme_root_t r, bool show_ana)
 
 static void stdout_registers_cap(struct nvme_bar_cap *cap)
 {
+	printf("\tNVM Subsystem Shutdown Enhancements Supported (NSSES): %s\n",
+		cap->nsses ? "Supported" : "Not Supported");
 	printf("\tController Ready With Media Support (CRWMS): %s\n",
 	       cap->crwms ? "Supported" : "Not Supported");
 	printf("\tController Ready Independent of Media Support (CRIMS): %s\n",
@@ -1686,19 +1688,19 @@ static void stdout_id_ctrl_cmic(__u8 cmic)
 static void stdout_id_ctrl_oaes(__le32 ctrl_oaes)
 {
 	__u32 oaes = le32_to_cpu(ctrl_oaes);
-	__u32 disc = (oaes >> 31) & 0x1;
+	__u32 disc = (oaes & NVME_CTRL_OAES_DL) >> 31;
 	__u32 rsvd0 = (oaes & 0x70000000) >> 28;
-	__u32 zicn = (oaes & 0x08000000) >> 27;
+	__u32 zicn = (oaes & NVME_CTRL_OAES_ZD) >> 27;
 	__u32 rsvd1 = (oaes & 0x7fe0000) >> 17;
 	__u32 tthr = (oaes & 0x10000) >> 16;
-	__u32 normal_shn = (oaes >> 15) & 0x1;
-	__u32 egealpcn = (oaes & 0x4000) >> 14;
-	__u32 lbasin = (oaes & 0x2000) >> 13;
-	__u32 plealcn = (oaes & 0x1000) >> 12;
-	__u32 anacn = (oaes & 0x800) >> 11;
+	__u32 normal_shn = (oaes & NVME_CTRL_OAES_NS) >> 15;
+	__u32 egealpcn = (oaes & NVME_CTRL_OAES_EGE) >> 14;
+	__u32 lbasin = (oaes & NVME_CTRL_OAES_LBAS) >> 13;
+	__u32 plealcn = (oaes & NVME_CTRL_OAES_PLEA) >> 12;
+	__u32 anacn = (oaes & NVME_CTRL_OAES_ANA) >> 11;
 	__u32 rsvd2 = (oaes >> 10) & 0x1;
-	__u32 fan = (oaes & 0x200) >> 9;
-	__u32 nace = (oaes & 0x100) >> 8;
+	__u32 fan = (oaes & NVME_CTRL_OAES_FA) >> 9;
+	__u32 nace = (oaes & NVME_CTRL_OAES_NA) >> 8;
 	__u32 rsvd3 = oaes & 0xFF;
 
 	printf("  [31:31] : %#x\tDiscovery Log Change Notice %sSupported\n",
@@ -3664,8 +3666,7 @@ static void stdout_error_log(struct nvme_error_log_page *err_log, int entries,
 		printf("cmdid		: %#x\n", err_log[i].cmdid);
 		printf("status_field	: %#x (%s)\n", status,
 			nvme_status_to_string(status, false));
-		printf("phase_tag	: %#x\n",
-			le16_to_cpu(err_log[i].status_field & 0x1));
+		printf("phase_tag	: %#x\n", le16_to_cpu(err_log[i].status_field) & 0x1);
 		printf("parm_err_loc	: %#x\n",
 			err_log[i].parm_error_location);
 		printf("lba		: %#"PRIx64"\n",
@@ -3769,8 +3770,10 @@ static void stdout_changed_ns_list_log(struct nvme_ns_list *log,
 	if (log->ns[0] != cpu_to_le32(NVME_NSID_ALL)) {
 		for (i = 0; i < NVME_ID_NS_LIST_MAX; i++) {
 			nsid = le32_to_cpu(log->ns[i]);
-			if (nsid == 0)
+			if (nsid == 0) {
+				printf("no ns changed\n");
 				break;
+			}
 
 			printf("[%4u]:%#x\n", i, nsid);
 		}

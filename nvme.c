@@ -76,10 +76,11 @@ struct feat_cfg {
 	enum nvme_get_features_sel sel;
 	__u32 cdw11;
 	__u32 cdw12;
-	__u8  uuid_index;
+	__u8 uuid_index;
 	__u32 data_len;
-	bool  raw_binary;
-	bool  human_readable;
+	bool raw_binary;
+	bool human_readable;
+	bool changed;
 };
 
 struct passthru_config {
@@ -1168,7 +1169,7 @@ static int get_error_log(int argc, char **argv, struct command *cmd, struct plug
 
 	_cleanup_free_ struct nvme_error_log_page *err_log = NULL;
 	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
-	struct nvme_id_ctrl ctrl;
+	struct nvme_id_ctrl ctrl = { 0 };
 	nvme_print_flags_t flags;
 	int err = -1;
 
@@ -2965,7 +2966,7 @@ static int parse_lba_num_si(struct nvme_dev *dev, const char *opt,
 	}
 
 	nvme_id_ns_flbas_to_lbaf_inuse(flbas, &lbaf);
-	lbas = (1 << ns->lbaf[lbaf].ds) + ns->lbaf[lbaf].ms;
+	lbas = (1 << ns->lbaf[lbaf].ds) + le16_to_cpu(ns->lbaf[lbaf].ms);
 
 	if (suffix_si_parse(val, &endptr, (uint64_t *)num)) {
 		nvme_show_error("Expected long suffixed integer argument for '%s-si' but got '%s'!",
@@ -4583,8 +4584,7 @@ static int filter_out_flags(int status)
 			 NVME_GET(NVME_SC_MASK, SC));
 }
 
-static void get_feature_id_print(struct feat_cfg cfg, int err, __u32 result,
-				 void *buf)
+static void get_feature_id_print(struct feat_cfg cfg, int err, __u32 result, void *buf)
 {
 	int status = filter_out_flags(err);
 	enum nvme_status_type type = NVME_STATUS_TYPE_NVME;
@@ -4595,8 +4595,7 @@ static void get_feature_id_print(struct feat_cfg cfg, int err, __u32 result,
 			if (NVME_CHECK(cfg.sel, GET_FEATURES_SEL, SUPPORTED))
 				nvme_show_select_result(cfg.feature_id, result);
 			else if (cfg.human_readable)
-				nvme_feature_show_fields(cfg.feature_id, result,
-							 buf);
+				nvme_feature_show_fields(cfg.feature_id, result, buf);
 			else if (buf)
 				d(buf, cfg.data_len, 16, 1);
 		} else if (buf) {
@@ -4604,15 +4603,14 @@ static void get_feature_id_print(struct feat_cfg cfg, int err, __u32 result,
 		}
 	} else if (err > 0) {
 		if (!nvme_status_equals(status, type, NVME_SC_INVALID_FIELD) &&
-		    !nvme_status_equals(status,  type, NVME_SC_INVALID_NS))
+		    !nvme_status_equals(status, type, NVME_SC_INVALID_NS))
 			nvme_show_status(err);
 	} else {
 		nvme_show_error("get-feature: %s", nvme_strerror(errno));
 	}
 }
 
-static int get_feature_id_changed(struct nvme_dev *dev, struct feat_cfg cfg,
-				  bool changed)
+static int get_feature_id_changed(struct nvme_dev *dev, struct feat_cfg cfg)
 {
 	int err;
 	int err_def = 0;
@@ -4621,20 +4619,17 @@ static int get_feature_id_changed(struct nvme_dev *dev, struct feat_cfg cfg,
 	_cleanup_free_ void *buf = NULL;
 	_cleanup_free_ void *buf_def = NULL;
 
-	if (changed)
-		cfg.sel = 0;
+	if (cfg.changed)
+		cfg.sel = NVME_GET_FEATURES_SEL_CURRENT;
 
 	err = get_feature_id(dev, &cfg, &buf, &result);
 
-	if (!err && changed) {
-		cfg.sel = 1;
+	if (!err && cfg.changed) {
+		cfg.sel = NVME_GET_FEATURES_SEL_DEFAULT;
 		err_def = get_feature_id(dev, &cfg, &buf_def, &result_def);
 	}
 
-	if (changed)
-		cfg.sel = 8;
-
-	if (err || !changed || err_def || result != result_def ||
+	if (err || !cfg.changed || err_def || result != result_def ||
 	    (buf && buf_def && !strcmp(buf, buf_def)))
 		get_feature_id_print(cfg, err, result, buf);
 
@@ -4647,19 +4642,15 @@ static int get_feature_ids(struct nvme_dev *dev, struct feat_cfg cfg)
 	int i;
 	int feat_max = 0x100;
 	int feat_num = 0;
-	bool changed = false;
 	int status = 0;
 	enum nvme_status_type type = NVME_STATUS_TYPE_NVME;
-
-	if (cfg.sel == 8)
-		changed = true;
 
 	if (cfg.feature_id)
 		feat_max = cfg.feature_id + 1;
 
 	for (i = cfg.feature_id; i < feat_max; i++, feat_num++) {
 		cfg.feature_id = i;
-		err = get_feature_id_changed(dev, cfg, changed);
+		err = get_feature_id_changed(dev, cfg);
 		if (!err)
 			continue;
 		status = filter_out_flags(err);
@@ -4691,9 +4682,10 @@ static int get_feature(int argc, char **argv, struct command *cmd,
 		"change saveable Features.";
 	const char *raw = "show feature in binary format";
 	const char *feature_id = "feature identifier";
-	const char *sel = "[0-3,8]: current/default/saved/supported/changed";
+	const char *sel = "[0-3]: current/default/saved/supported";
 	const char *cdw11 = "feature specific dword 11";
 	const char *human_readable = "show feature in readable format";
+	const char *changed = "show feature changed";
 
 	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
 	int err;
@@ -4701,7 +4693,7 @@ static int get_feature(int argc, char **argv, struct command *cmd,
 	struct feat_cfg cfg = {
 		.feature_id	= 0,
 		.namespace_id	= 0,
-		.sel		= 0,
+		.sel		= NVME_GET_FEATURES_SEL_CURRENT,
 		.data_len	= 0,
 		.raw_binary	= false,
 		.cdw11		= 0,
@@ -4717,7 +4709,8 @@ static int get_feature(int argc, char **argv, struct command *cmd,
 		  OPT_FLAG("raw-binary",     'b', &cfg.raw_binary,     raw),
 		  OPT_UINT("cdw11",          'c', &cfg.cdw11,          cdw11),
 		  OPT_BYTE("uuid-index",     'U', &cfg.uuid_index,     uuid_index_specify),
-		  OPT_FLAG("human-readable", 'H', &cfg.human_readable, human_readable));
+		  OPT_FLAG("human-readable", 'H', &cfg.human_readable, human_readable),
+		  OPT_FLAG("changed",        'C', &cfg.changed,        changed));
 
 	err = parse_and_open(&dev, argc, argv, desc, opts);
 	if (err)
@@ -4734,7 +4727,7 @@ static int get_feature(int argc, char **argv, struct command *cmd,
 		}
 	}
 
-	if (cfg.sel > 8) {
+	if (cfg.sel > NVME_GET_FEATURES_SEL_SUPPORTED) {
 		nvme_show_error("invalid 'select' param:%d", cfg.sel);
 		return -EINVAL;
 	}
@@ -7700,7 +7693,8 @@ static int submit_io(int opcode, char *command, const char *desc, int argc, char
 	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
 	_cleanup_free_ struct nvme_nvm_id_ns *nvm_ns = NULL;
 	_cleanup_free_ struct nvme_id_ns *ns = NULL;
-	__u8 lba_index, ms = 0, sts = 0, pif = 0;
+	__u8 lba_index, sts = 0, pif = 0;
+	__u16 ms;
 
 	const char *start_block_addr = "64-bit addr of first block to access";
 	const char *data_size = "size of data in bytes";
@@ -7885,7 +7879,7 @@ static int submit_io(int opcode, char *command, const char *desc, int argc, char
 
 	nvme_id_ns_flbas_to_lbaf_inuse(ns->flbas, &lba_index);
 	logical_block_size = 1 << ns->lbaf[lba_index].ds;
-	ms = ns->lbaf[lba_index].ms;
+	ms = le16_to_cpu(ns->lbaf[lba_index].ms);
 
 	nvm_ns = nvme_alloc(sizeof(*nvm_ns));
 	if (!nvm_ns)

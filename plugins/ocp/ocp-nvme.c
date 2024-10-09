@@ -44,7 +44,6 @@
 
 #define C3_LATENCY_MON_LOG_BUF_LEN		0x200
 #define C3_LATENCY_MON_OPCODE			0xC3
-#define C3_LATENCY_MON_VERSION			0x0001
 #define C3_GUID_LENGTH				16
 #define NVME_FEAT_OCP_LATENCY_MONITOR		0xC5
 
@@ -88,8 +87,9 @@ struct __packed ssd_latency_monitor_log {
 	__le64	static_latency_timestamp[4][3];	/* 0x130 - 0x18F */
 	__le16	static_measured_latency[4][3];	/* 0x190 - 0x1A7 */
 	__le16	static_latency_stamp_units;	/* 0x1A8 */
-	__u8	rsvd4[0x16];			/* 0x1AA */
+	__u8	rsvd4[0x0A];			/* 0x1AA */
 
+	__u8	latency_monitor_debug_log_size[0x0C]; /* 0x1B4 */
 	__le16	debug_log_trigger_enable;	/* 0x1C0 */
 	__le16	debug_log_measured_latency;	/* 0x1C2 */
 	__le64	debug_log_latency_stamp;	/* 0x1C4 */
@@ -213,6 +213,7 @@ static int ocp_print_C3_log_normal(struct nvme_dev *dev,
 {
 	char ts_buf[128];
 	int i, j;
+	__u16 log_page_version = le16_to_cpu(log_data->log_page_version);
 
 	printf("-Latency Monitor/C3 Log Page Data-\n");
 	printf("  Controller   :  %s\n", dev->name);
@@ -245,6 +246,15 @@ static int ocp_print_C3_log_normal(struct nvme_dev *dev,
 	       le16_to_cpu(log_data->active_latency_stamp_units));
 	printf("  Static Latency Stamp Units         %d\n",
 	       le16_to_cpu(log_data->static_latency_stamp_units));
+	if (log_page_version >= 0x4) {
+		printf("    Debug Telemetry Log Size         0x");
+		for (i = ARRAY_SIZE(log_data->latency_monitor_debug_log_size) - 1;
+			i > 0 && (log_data->latency_monitor_debug_log_size[i] == 0); i--)
+			;
+		while (i >= 0)
+			printf("%02x", log_data->latency_monitor_debug_log_size[i--]);
+		printf("\n");
+	}
 	printf("  Debug Log Trigger Enable           %d\n",
 	       le16_to_cpu(log_data->debug_log_trigger_enable));
 	printf("  Debug Log Measured Latency         %d\n",
@@ -261,8 +271,7 @@ static int ocp_print_C3_log_normal(struct nvme_dev *dev,
 	       le16_to_cpu(log_data->debug_log_counter_trigger));
 	printf("  Debug Log Stamp Units              %d\n",
 	       le16_to_cpu(log_data->debug_log_stamp_units));
-	printf("  Log Page Version                   %d\n",
-	       le16_to_cpu(log_data->log_page_version));
+	printf("  Log Page Version                   %d\n", log_page_version);
 
 	char guid[(C3_GUID_LENGTH * 2) + 1];
 	char *ptr = &guid[0];
@@ -343,6 +352,7 @@ static void ocp_print_C3_log_json(struct ssd_latency_monitor_log *log_data)
 	char buf[128];
 	int i, j;
 	char *operation[3] = {"Trim", "Write", "Read"};
+	__u16 log_page_version = le16_to_cpu(log_data->log_page_version);
 
 	root = json_create_object();
 
@@ -457,6 +467,19 @@ static void ocp_print_C3_log_json(struct ssd_latency_monitor_log *log_data)
 
 	json_object_add_value_uint(root, "Static Latency Stamp Units",
 		le16_to_cpu(log_data->static_latency_stamp_units));
+	if (log_page_version >= 0x4) {
+		strcpy(buf, "0x");
+		for (i = ARRAY_SIZE(log_data->latency_monitor_debug_log_size) - 1;
+			i > 0 && (log_data->latency_monitor_debug_log_size[i] == 0); i--)
+			;
+		while (i >= 0) {
+			char hex_string[3];
+
+			sprintf(hex_string, "%02x", log_data->latency_monitor_debug_log_size[i--]);
+			strcat(buf, hex_string);
+		}
+		json_object_add_value_string(root, "Debug Telemetry Log Size", buf);
+	}
 	json_object_add_value_uint(root, "Debug Log Trigger Enable",
 		le16_to_cpu(log_data->debug_log_trigger_enable));
 	json_object_add_value_uint(root, "Debug Log Measured Latency",
@@ -473,8 +496,7 @@ static void ocp_print_C3_log_json(struct ssd_latency_monitor_log *log_data)
 		le16_to_cpu(log_data->debug_log_counter_trigger));
 	json_object_add_value_uint(root, "Debug Log Stamp Units",
 		le16_to_cpu(log_data->debug_log_stamp_units));
-	json_object_add_value_uint(root, "Log Page Version",
-		le16_to_cpu(log_data->log_page_version));
+	json_object_add_value_uint(root, "Log Page Version", log_page_version);
 
 	char guid[(C3_GUID_LENGTH * 2) + 1];
 	char *ptr = &guid[0];
@@ -519,14 +541,6 @@ static int get_c3_log_page(struct nvme_dev *dev, char *format)
 
 	if (!ret) {
 		log_data = (struct ssd_latency_monitor_log *)data;
-
-		/* check log page version */
-		if (log_data->log_page_version != C3_LATENCY_MON_VERSION) {
-			fprintf(stderr,
-				"ERROR : OCP : invalid latency monitor version\n");
-			ret = -1;
-			goto out;
-		}
 
 		/*
 		 * check log page guid
@@ -990,6 +1004,7 @@ static int get_telemetry_data(struct nvme_dev *dev, __u32 ns, __u8 tele_type,
 	cmd.cdw14 = 0;
 	return nvme_submit_admin_passthru(dev_fd(dev), &cmd, NULL);
 }
+
 static void print_telemetry_data_area_1(struct telemetry_data_area_1 *da1,
 										int tele_type)
 {
@@ -1075,13 +1090,13 @@ static void print_telemetry_da_stat(struct telemetry_stats_desc *da_stat,
 	}
 }
 static void print_telemetry_da_fifo(struct telemetry_event_desc *da_fifo,
-		__le64 buf_size,
+		__u64 buf_size,
 		int tele_type,
 		int da,
 		int index)
 {
 	if (da_fifo) {
-		unsigned int i = 0;
+		__u64 i = 0;
 		struct telemetry_event_desc *next_da_fifo = da_fifo;
 
 		if (tele_type == TELEMETRY_TYPE_HOST)
@@ -1091,8 +1106,11 @@ static void print_telemetry_da_fifo(struct telemetry_event_desc *da_fifo,
 			printf("====== Telemetry Controller Data area %d Event FIFO %d ======\n",
 				da, index);
 
-
 		while ((i + 4) < buf_size) {
+			/* break if last entry  */
+			if (next_da_fifo->class == 0)
+				break;
+
 			/* Print Event Data */
 			print_telemetry_fifo_event(next_da_fifo->class, /* Event class type */
 				next_da_fifo->id,                           /* Event ID         */
@@ -1190,7 +1208,7 @@ static int get_telemetry_dump(struct nvme_dev *dev, char *filename, char *sn,
 			      enum TELEMETRY_TYPE tele_type, int data_area, bool header_print)
 {
 	__u32 err = 0, nsid = 0;
-	__le64 da1_sz = 512, m_512_sz = 0, da1_off = 0, m_512_off = 0, diff = 0,
+	__u64 da1_sz = 512, m_512_sz = 0, da1_off = 0, m_512_off = 0, diff = 0,
 		temp_sz = 0, temp_ofst = 0;
 	__u8 lsp = 0, rae = 0, flag = 0;
 	__u8 data[TELEMETRY_HEADER_SIZE] = { 0 };
@@ -1242,16 +1260,16 @@ static int get_telemetry_dump(struct nvme_dev *dev, char *filename, char *sn,
 	/* Print the Data Area 1 Stats */
 	if (da1->da1_stat_size != 0) {
 		diff = 0;
-		da1_sz = (da1->da1_stat_size) * 4;
-		m_512_sz = (da1->da1_stat_size) * 4;
-		da1_off = (da1->da1_stat_start) * 4;
-		m_512_off = (da1->da1_stat_start) * 4;
-		temp_sz = (da1->da1_stat_size) * 4;
-		temp_ofst = (da1->da1_stat_start) * 4;
+		da1_sz = le64_to_cpu(da1->da1_stat_size) * 4;
+		m_512_sz = le64_to_cpu(da1->da1_stat_size) * 4;
+		da1_off = le64_to_cpu(da1->da1_stat_start) * 4;
+		m_512_off = le64_to_cpu(da1->da1_stat_start) * 4;
+		temp_sz = le64_to_cpu(da1->da1_stat_size) * 4;
+		temp_ofst = le64_to_cpu(da1->da1_stat_start) * 4;
 		flag = 0;
 
 		if ((da1_off % 512) > 0) {
-			m_512_off = (__le64) ((da1_off / 512));
+			m_512_off = (da1_off / 512);
 			da1_off = m_512_off * 512;
 			diff = temp_ofst - da1_off;
 			flag = 1;
@@ -1261,7 +1279,7 @@ static int get_telemetry_dump(struct nvme_dev *dev, char *filename, char *sn,
 			da1_sz = 512;
 		else if ((da1_sz % 512) > 0) {
 			if (flag == 0) {
-				m_512_sz = (__le64) ((da1_sz / 512) + 1);
+				m_512_sz = (da1_sz / 512) + 1;
 				da1_sz = m_512_sz * 512;
 			} else {
 				if (diff < 512)
@@ -1269,7 +1287,7 @@ static int get_telemetry_dump(struct nvme_dev *dev, char *filename, char *sn,
 				else
 					diff = (diff / 512) * 512;
 
-				m_512_sz = (__le64) ((da1_sz / 512) + 1 + diff + 1);
+				m_512_sz = (da1_sz / 512) + 1 + diff + 1;
 				da1_sz = m_512_sz * 512;
 			}
 		}
@@ -1284,23 +1302,23 @@ static int get_telemetry_dump(struct nvme_dev *dev, char *filename, char *sn,
 		}
 
 		print_telemetry_da_stat((void *)(da1_stat + (temp_ofst - da1_off)),
-				tele_type, (da1->da1_stat_size) * 4, 1);
+				tele_type, le64_to_cpu(da1->da1_stat_size) * 4, 1);
 	}
 
 	/* Print the Data Area 1 Event FIFO's */
 	for (i = 0; i < 16 ; i++) {
 		if ((da1->event_fifo_da[i] == 1) && (da1->event_fifos[i].size != 0)) {
 			diff = 0;
-			da1_sz = da1->event_fifos[i].size * 4;
-			m_512_sz = da1->event_fifos[i].size * 4;
-			da1_off = da1->event_fifos[i].start * 4;
-			m_512_off = da1->event_fifos[i].start * 4;
-			temp_sz = da1->event_fifos[i].size * 4;
-			temp_ofst = da1->event_fifos[i].start * 4;
+			da1_sz = le64_to_cpu(da1->event_fifos[i].size) * 4;
+			m_512_sz = le64_to_cpu(da1->event_fifos[i].size) * 4;
+			da1_off = le64_to_cpu(da1->event_fifos[i].start) * 4;
+			m_512_off = le64_to_cpu(da1->event_fifos[i].start) * 4;
+			temp_sz = le64_to_cpu(da1->event_fifos[i].size) * 4;
+			temp_ofst = le64_to_cpu(da1->event_fifos[i].start) * 4;
 			flag = 0;
 
 			if ((da1_off % 512) > 0) {
-				m_512_off = (__le64) ((da1_off / 512));
+				m_512_off = ((da1_off / 512));
 				da1_off = m_512_off * 512;
 				diff = temp_ofst - da1_off;
 				flag = 1;
@@ -1310,7 +1328,7 @@ static int get_telemetry_dump(struct nvme_dev *dev, char *filename, char *sn,
 				da1_sz = 512;
 			else if ((da1_sz % 512) > 0) {
 				if (flag == 0) {
-					m_512_sz = (__le64) ((da1_sz / 512) + 1);
+					m_512_sz = (da1_sz / 512) + 1;
 					da1_sz = m_512_sz * 512;
 				} else {
 					if (diff < 512)
@@ -1318,15 +1336,17 @@ static int get_telemetry_dump(struct nvme_dev *dev, char *filename, char *sn,
 					else
 						diff = (diff / 512) * 512;
 
-					m_512_sz = (__le64) ((da1_sz / 512) + 1 + diff + 1);
+					m_512_sz = (da1_sz / 512) + 1 + diff + 1;
 					da1_sz = m_512_sz * 512;
 				}
 			}
 
 			char *da1_fifo = calloc(da1_sz, sizeof(char));
 
+			printf("Get DA 1 FIFO addr: %p, offset 0x%llx\n",
+					da1_fifo, da1_off);
 			err = get_telemetry_data(dev, nsid, tele_type,
-					(da1->event_fifos[i].size) * 4,
+					le64_to_cpu(da1->event_fifos[i].size) * 4,
 					(void *)da1_fifo, lsp, rae, da1_off);
 			if (err) {
 				printf("get_telemetry_data da1 event fifos failed, err: %d.\n",
@@ -1336,24 +1356,24 @@ static int get_telemetry_dump(struct nvme_dev *dev, char *filename, char *sn,
 			print_telemetry_da_fifo((void *)(da1_fifo + (temp_ofst - da1_off)),
 					temp_sz,
 					tele_type,
-					da1->event_fifo_da[i],
+					le64_to_cpu(da1->event_fifo_da[i]),
 					i);
 		}
 	}
 
 	/* Print the Data Area 2 Stats */
 	if (da1->da2_stat_size != 0) {
-		da1_off = (da1->da2_stat_start) * 4;
-		temp_ofst = (da1->da2_stat_start) * 4;
-		da1_sz = (da1->da2_stat_size) * 4;
+		da1_off = le64_to_cpu(da1->da2_stat_start) * 4;
+		temp_ofst = le64_to_cpu(da1->da2_stat_start) * 4;
+		da1_sz = le64_to_cpu(da1->da2_stat_size) * 4;
 		diff = 0;
 		flag = 0;
 
 		if (da1->da2_stat_start == 0) {
-			da1_off = 512 + (logheader->DataArea1LastBlock * 512);
+			da1_off = 512 + (le16_to_cpu(logheader->DataArea1LastBlock) * 512);
 			temp_ofst = 512 + (le16_to_cpu(logheader->DataArea1LastBlock) * 512);
 			if ((da1_off % 512) == 0) {
-				m_512_off = (__le64) (((da1_off) / 512));
+				m_512_off = ((da1_off) / 512);
 				da1_off = m_512_off * 512;
 				diff = temp_ofst - da1_off;
 				flag = 1;
@@ -1361,9 +1381,9 @@ static int get_telemetry_dump(struct nvme_dev *dev, char *filename, char *sn,
 		} else {
 
 			if (((da1_off * 4) % 512) > 0) {
-				m_512_off = (__le64) ((((da1->da2_stat_start) * 4) / 512));
+				m_512_off =  ((le64_to_cpu(da1->da2_stat_start) * 4) / 512);
 				da1_off = m_512_off * 512;
-				diff = ((da1->da2_stat_start) * 4) - da1_off;
+				diff = (le64_to_cpu(da1->da2_stat_start) * 4) - da1_off;
 				flag = 1;
 			}
 		}
@@ -1372,14 +1392,14 @@ static int get_telemetry_dump(struct nvme_dev *dev, char *filename, char *sn,
 			da1_sz = 512;
 		else if ((da1_sz % 512) > 0) {
 			if (flag == 0) {
-				m_512_sz = (__le64) ((da1->da2_stat_size / 512) + 1);
+				m_512_sz = (le64_to_cpu(da1->da2_stat_size) / 512) + 1;
 				da1_sz = m_512_sz * 512;
 			} else {
 				if (diff < 512)
 					diff = 1;
 				else
 					diff = (diff / 512) * 512;
-				m_512_sz = (__le64) ((da1->da2_stat_size / 512) + 1 + diff + 1);
+				m_512_sz =  (le64_to_cpu(da1->da2_stat_size) / 512) + 1 + diff + 1;
 				da1_sz = m_512_sz * 512;
 			}
 		}
@@ -1395,7 +1415,7 @@ static int get_telemetry_dump(struct nvme_dev *dev, char *filename, char *sn,
 
 		print_telemetry_da_stat((void *)(da2_stat + (temp_ofst - da1_off)),
 			tele_type,
-			(da1->da2_stat_size) * 4,
+			le64_to_cpu(da1->da2_stat_size) * 4,
 			2);
 	}
 
@@ -1403,16 +1423,16 @@ static int get_telemetry_dump(struct nvme_dev *dev, char *filename, char *sn,
 	for (i = 0; i < 16 ; i++) {
 		if ((da1->event_fifo_da[i] == 2) && (da1->event_fifos[i].size != 0)) {
 			diff = 0;
-			da1_sz = da1->event_fifos[i].size * 4;
-			m_512_sz = da1->event_fifos[i].size * 4;
-			da1_off = da1->event_fifos[i].start * 4;
-			m_512_off = da1->event_fifos[i].start * 4;
-			temp_sz = da1->event_fifos[i].size * 4;
-			temp_ofst = da1->event_fifos[i].start * 4;
+			da1_sz = le64_to_cpu(da1->event_fifos[i].size) * 4;
+			m_512_sz = le64_to_cpu(da1->event_fifos[i].size) * 4;
+			da1_off = le64_to_cpu(da1->event_fifos[i].start) * 4;
+			m_512_off = le64_to_cpu(da1->event_fifos[i].start) * 4;
+			temp_sz = le64_to_cpu(da1->event_fifos[i].size) * 4;
+			temp_ofst = le64_to_cpu(da1->event_fifos[i].start) * 4;
 			flag = 0;
 
 			if ((da1_off % 512) > 0) {
-				m_512_off = (__le64) ((da1_off / 512));
+				m_512_off = ((da1_off / 512));
 				da1_off = m_512_off * 512;
 				diff = temp_ofst - da1_off;
 				flag = 1;
@@ -1422,7 +1442,7 @@ static int get_telemetry_dump(struct nvme_dev *dev, char *filename, char *sn,
 				da1_sz = 512;
 			else if ((da1_sz % 512) > 0) {
 				if (flag == 0) {
-					m_512_sz = (__le64) ((da1_sz / 512) + 1);
+					m_512_sz = (da1_sz / 512) + 1;
 					da1_sz = m_512_sz * 512;
 				}
 
@@ -1432,7 +1452,7 @@ static int get_telemetry_dump(struct nvme_dev *dev, char *filename, char *sn,
 					else
 						diff = (diff / 512) * 512;
 
-					m_512_sz = (__le64) ((da1_sz / 512) + 1 + diff + 1);
+					m_512_sz = (da1_sz / 512) + 1 + diff + 1;
 					da1_sz = m_512_sz * 512;
 				}
 			}
@@ -1440,7 +1460,7 @@ static int get_telemetry_dump(struct nvme_dev *dev, char *filename, char *sn,
 			char *da1_fifo = calloc(da1_sz, sizeof(char));
 
 			err = get_telemetry_data(dev, nsid, tele_type,
-					(da1->event_fifos[i].size) * 4,
+					le64_to_cpu(da1->event_fifos[i].size) * 4,
 					(void *)da1_fifo, lsp, rae, da1_off);
 			if (err) {
 				printf("get_telemetry_data da2 event fifos failed, err: %d.\n",
@@ -1450,7 +1470,7 @@ static int get_telemetry_dump(struct nvme_dev *dev, char *filename, char *sn,
 			print_telemetry_da_fifo((void *)(da1_fifo + (temp_ofst - da1_off)),
 					temp_sz,
 					tele_type,
-					da1->event_fifo_da[i],
+					le64_to_cpu(da1->event_fifo_da[i]),
 					i);
 		}
 	}
@@ -1775,6 +1795,9 @@ static int ocp_telemetry_log(int argc, char **argv, struct command *cmd,
 	if (err)
 		return err;
 
+	if (opt.telemetry_type == 0)
+		opt.telemetry_type = "host";
+
 	err = fstat(dev_fd(dev), &nvme_stat);
 	if (err < 0)
 		return err;
@@ -1818,6 +1841,7 @@ static int ocp_telemetry_log(int argc, char **argv, struct command *cmd,
 		}
 	} else {
 		tele_type = TELEMETRY_TYPE_HOST; //Default Type - Host
+		opt.telemetry_type = "host";
 		nvme_show_result("Missing telemetry-type. Using default - host.\n");
 	}
 
@@ -1946,7 +1970,6 @@ out:
 #define C5_GUID_LENGTH                     16
 #define C5_UNSUPPORTED_REQS_LEN            4096
 #define C5_UNSUPPORTED_REQS_OPCODE         0xC5
-#define C5_UNSUPPORTED_REQS_LOG_VERSION    0x1
 #define C5_NUM_UNSUPPORTED_REQ_ENTRIES     253
 
 static __u8 unsupported_req_guid[C5_GUID_LENGTH] = {
@@ -2063,13 +2086,6 @@ static int get_c5_log_page(struct nvme_dev *dev, char *format)
 	if (!ret) {
 		log_data = (struct unsupported_requirement_log *)data;
 
-		/* check log page version */
-		if (log_data->log_page_version != C5_UNSUPPORTED_REQS_LOG_VERSION) {
-			fprintf(stderr, "ERROR : OCP : invalid unsupported requirement version\n");
-			ret = -1;
-			goto out;
-		}
-
 		/*
 		 * check log page guid
 		 * Verify GUID matches
@@ -2152,7 +2168,6 @@ static int ocp_unsupported_requirements_log(int argc, char **argv, struct comman
 
 #define C1_ERROR_RECOVERY_LOG_BUF_LEN       0x200
 #define C1_ERROR_RECOVERY_OPCODE            0xC1
-#define C1_ERROR_RECOVERY_VERSION           0x0002
 #define C1_GUID_LENGTH                      16
 #define C1_PREV_PANIC_IDS_LENGTH            4
 
@@ -2298,13 +2313,6 @@ static int get_c1_log_page(struct nvme_dev *dev, char *format)
 	if (!ret) {
 		log_data = (struct ocp_error_recovery_log_page *)data;
 
-		/* check log page version */
-		if (log_data->log_page_version != C1_ERROR_RECOVERY_VERSION) {
-			fprintf(stderr, "ERROR : OCP : invalid error recovery log page version\n");
-			ret = -1;
-			goto out;
-		}
-
 		/*
 		 * check log page guid
 		 * Verify GUID matches
@@ -2385,7 +2393,6 @@ static int ocp_error_recovery_log(int argc, char **argv, struct command *cmd, st
 
 #define C4_DEV_CAP_REQ_LEN			0x1000
 #define C4_DEV_CAP_REQ_OPCODE		0xC4
-#define C4_DEV_CAP_REQ_VERSION		0x0001
 #define C4_GUID_LENGTH				16
 static __u8 dev_cap_req_guid[C4_GUID_LENGTH] = {
 	0x97, 0x42, 0x05, 0x0d,
@@ -2513,13 +2520,6 @@ static int get_c4_log_page(struct nvme_dev *dev, char *format)
 
 	if (!ret) {
 		log_data = (struct ocp_device_capabilities_log_page *)data;
-
-		/* check log page version */
-		if (log_data->log_page_version != C4_DEV_CAP_REQ_VERSION) {
-			fprintf(stderr, "ERROR : OCP : invalid device capabilities log page version\n");
-			ret = -1;
-			goto out;
-		}
 
 		/*
 		 * check log page guid
@@ -3682,7 +3682,6 @@ static int ocp_telemetry_str_log_format(int argc, char **argv, struct command *c
 #define C7_GUID_LENGTH                     16
 #define C7_TCG_CONFIGURATION_LEN           512
 #define C7_TCG_CONFIGURATION_OPCODE        0xC7
-#define C7_TCG_CONFIGURATION_LOG_VERSION   0x1
 
 static __u8 tcg_configuration_guid[C7_GUID_LENGTH] = {
 	0x06, 0x40, 0x24, 0xBD,
@@ -3873,13 +3872,6 @@ static int get_c7_log_page(struct nvme_dev *dev, char *format)
 				  C7_TCG_CONFIGURATION_LEN, data);
 	if (!ret) {
 		log_data = (struct tcg_configuration_log *)data;
-
-		/* check log page version */
-		if (log_data->log_page_version != C7_TCG_CONFIGURATION_LOG_VERSION) {
-			fprintf(stderr, "ERROR : OCP : invalid TCG Configuration Log Page version\n");
-			ret = -1;
-			goto out;
-		}
 
 		/*
 		 * check log page guid

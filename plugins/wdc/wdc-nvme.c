@@ -88,6 +88,7 @@
 #define WDC_NVME_SN861_DEV_ID				0x2750
 #define WDC_NVME_SN861_DEV_ID_1				0x2751
 #define WDC_NVME_SN861_DEV_ID_2				0x2752
+#define WDC_NVME_SNTMP_DEV_ID				0x2761
 
 /* This id's are no longer supported, delete ?? */
 #define WDC_NVME_SN550_DEV_ID				0x2708
@@ -139,6 +140,10 @@
 #define WDC_NVME_ZN350_DEV_ID_1				0x5018
 #define WDC_NVME_SN810_DEV_ID				0x5011
 #define WDC_NVME_SN820CL_DEV_ID				0x5037
+
+#define WDC_NVME_SN5100S_DEV_ID_1			0x5061
+#define WDC_NVME_SN5100S_DEV_ID_2			0x5062
+#define WDC_NVME_SN5100S_DEV_ID_3			0x5063
 
 #define WDC_DRIVE_CAP_CAP_DIAG				0x0000000000000001
 #define WDC_DRIVE_CAP_INTERNAL_LOG			0x0000000000000002
@@ -1877,6 +1882,7 @@ static __u64 wdc_get_drive_capabilities(nvme_root_t r, struct nvme_dev *dev)
 		case WDC_NVME_SN861_DEV_ID:
 		case WDC_NVME_SN861_DEV_ID_1:
 		case WDC_NVME_SN861_DEV_ID_2:
+		case WDC_NVME_SNTMP_DEV_ID:
 			capabilities |= (WDC_DRIVE_CAP_C0_LOG_PAGE |
 				WDC_DRIVE_CAP_C3_LOG_PAGE |
 				WDC_DRIVE_CAP_CA_LOG_PAGE |
@@ -1974,6 +1980,12 @@ static __u64 wdc_get_drive_capabilities(nvme_root_t r, struct nvme_dev *dev)
 		case WDC_NVME_SN7100_DEV_ID_3:
 			fallthrough;
 		case WDC_NVME_SN8000S_DEV_ID:
+			fallthrough;
+		case WDC_NVME_SN5100S_DEV_ID_1:
+			fallthrough;
+		case WDC_NVME_SN5100S_DEV_ID_2:
+			fallthrough;
+		case WDC_NVME_SN5100S_DEV_ID_3:
 			fallthrough;
 		case WDC_NVME_SN740_DEV_ID:
 		case WDC_NVME_SN740_DEV_ID_1:
@@ -2362,28 +2374,24 @@ end:
 static bool get_dev_mgment_cbs_data(nvme_root_t r, struct nvme_dev *dev,
 				__u8 log_id, void **cbs_data)
 {
-	int ret = -1;
 	bool found = false;
 	__u8 uuid_ix = 0;
 	__u8 lid = 0;
 	*cbs_data = NULL;
-	__u32 device_id, read_vendor_id;
+	__u32 device_id = 0, vendor_id = 0;
 	bool uuid_present = false;
 	int index = 0, uuid_index = 0;
 	struct nvme_id_uuid_list uuid_list;
 
-	ret = wdc_get_pci_ids(r, dev, &device_id, &read_vendor_id);
-	if (ret == 0) {
-		if (device_id == WDC_NVME_ZN350_DEV_ID || device_id == WDC_NVME_ZN350_DEV_ID_1) {
-			lid = WDC_NVME_GET_DEV_MGMNT_LOG_PAGE_ID_C8;
-			uuid_ix = 0;
-		} else {
-			lid = WDC_NVME_GET_DEV_MGMNT_LOG_PAGE_ID;
-		}
-	} else {
-		fprintf(stderr, "ERROR: WDC: get pci ids: %d\n", ret);
-		return false;
-	}
+	/* The wdc_get_pci_ids function could fail when drives are connected
+	 * via a PCIe switch.  Therefore, the return code is intentionally
+	 * being ignored.  The device_id and vendor_id variables have been
+	 * initialized to 0 so the code can continue on without issue for
+	 * both cases: wdc_get_pci_ids successful or failed.
+	 */
+	wdc_get_pci_ids(r, dev, &device_id, &vendor_id);
+
+	lid = WDC_NVME_GET_DEV_MGMNT_LOG_PAGE_ID;
 
 	typedef struct nvme_id_uuid_list_entry *uuid_list_entry;
 
@@ -11318,6 +11326,7 @@ static int wdc_vs_drive_info(int argc, char **argv,
 		case WDC_NVME_SN550_DEV_ID:
 		case WDC_NVME_ZN350_DEV_ID:
 		case WDC_NVME_ZN350_DEV_ID_1:
+		case WDC_NVME_SNTMP_DEV_ID:
 			ret = wdc_do_drive_info(dev, &result);
 
 			if (!ret) {

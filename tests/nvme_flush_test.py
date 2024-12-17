@@ -53,8 +53,8 @@ class TestNVMeFlushCmd(TestNVMe):
            - Returns:
                - None
         """
-        flush_cmd = "nvme flush " + self.ctrl + " -n " + str(self.default_nsid)
-        print(flush_cmd)
+        flush_cmd = f"{self.nvme_bin} flush {self.ctrl} " + \
+            f"--namespace-id={str(self.default_nsid)}"
         return self.exec_cmd(flush_cmd)
 
     def test_nvme_flush(self):

@@ -179,6 +179,8 @@ static const char *pel_event_to_string(int type)
 		return "Set Telemetry CRT Event";
 	case NVME_PEL_THERMAL_EXCURSION_EVENT:
 		return "Thermal Excursion Event";
+	case NVME_PEL_SANITIZE_MEDIA_VERIF_EVENT:
+		return "Sanitize Media Verification Event";
 	case NVME_PEL_VENDOR_SPECIFIC_EVENT:
 		return "Vendor Specific Event";
 	case NVME_PEL_TCG_DEFINED_EVENT:
@@ -795,6 +797,10 @@ static bool is_fahrenheit_country(const char *country)
 	return false;
 }
 
+#ifndef LC_MEASUREMENT
+#define LC_MEASUREMENT LC_ALL
+#endif
+
 static bool is_temperature_fahrenheit(void)
 {
 	const char *locale, *underscore;
@@ -895,6 +901,7 @@ const char *nvme_feature_to_string(enum nvme_features_id feature)
 	case NVME_FEAT_FID_WRITE_PROTECT:	return "Namespace Write Protect";
 	case NVME_FEAT_FID_FDP:		return "Flexible Direct Placement";
 	case NVME_FEAT_FID_FDP_EVENTS:	return "Flexible Direct Placement Events";
+	case NVME_FEAT_FID_CTRL_DATA_QUEUE:	return "Controller Data Queue";
 	}
 	/*
 	 * We don't use the "default:" statement to let the compiler warning if
@@ -1177,6 +1184,28 @@ const char *nvme_pel_ehai_pit_to_string(enum nvme_pel_ehai_pit pit)
 		break;
 	}
 	return "Reserved";
+}
+
+const char *nvme_ssi_state_to_string(__u8 state)
+{
+	switch (state) {
+	case NVME_SANITIZE_SSI_IDLE:
+		return "Idle state";
+	case NVME_SANITIZE_SSI_RESTRICT_PROCESSING:
+		return "Restricted Processing State";
+	case NVME_SANITIZE_SSI_RESTRICT_FAILURE:
+		return "Restricted Failure State";
+	case NVME_SANITIZE_SSI_UNRESTRICT_PROCESSING:
+		return "Unrestricted Processing State";
+	case NVME_SANITIZE_SSI_UNRESTRICT_FAILURE:
+		return "Unrestricted Failure State";
+	case NVME_SANITIZE_SSI_MEDIA_VERIFICATION:
+		return "Media Verification State";
+	case NVME_SANITIZE_SSI_POST_VERIF_DEALLOC:
+		return "Post-Verification Deallocation State";
+	default:
+		return "Reserved";
+	}
 }
 
 const char *nvme_register_symbol_to_string(int offset)

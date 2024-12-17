@@ -49,6 +49,7 @@ int nvme_cli_sanitize_nvm(struct nvme_dev *dev,
 int nvme_cli_get_features(struct nvme_dev *dev,
 			  struct nvme_get_features_args *args);
 
+int nvme_cli_set_features(struct nvme_dev *dev, struct nvme_set_features_args *args);
 
 int nvme_cli_get_log(struct nvme_dev *dev, struct nvme_get_log_args *args);
 int nvme_cli_get_log_page(struct nvme_dev *dev,
@@ -75,7 +76,8 @@ int nvme_cli_get_log_cmd_effects(struct nvme_dev *dev, enum nvme_csi csi,
 				 struct nvme_cmd_effects_log *effects_log);
 int nvme_cli_get_log_device_self_test(struct nvme_dev *dev,
 				      struct nvme_self_test_log *log);
-int nvme_cli_get_log_create_telemetry_host(struct nvme_dev *dev,
+int nvme_cli_get_log_create_telemetry_host_mcda(struct nvme_dev *dev,
+					   enum nvme_telemetry_da mcda,
 					   struct nvme_telemetry_log *log);
 int nvme_cli_get_log_telemetry_host(struct nvme_dev *dev, __u64 offset,
 				    __u32 len, void *log);

@@ -29,8 +29,6 @@ NVMe Namespace Management Testcase:-
     5. Delete Namespace.
 """
 
-import time
-
 from nvme_test import TestNVMe
 
 
@@ -52,12 +50,13 @@ class TestNVMeAttachDetachNSCmd(TestNVMe):
         super().setUp()
         self.dps = 0
         self.flbas = 0
-        self.nsze = 0x1400000
-        self.ncap = 0x1400000
+        (ds, ms) = self.get_lba_format_size()
+        ncap = int(self.get_ncap() / (ds+ms))
+        self.nsze = ncap
+        self.ncap = ncap
         self.setup_log_dir(self.__class__.__name__)
         self.ctrl_id = self.get_ctrl_id()
         self.delete_all_ns()
-        time.sleep(1)
 
     def tearDown(self):
         """

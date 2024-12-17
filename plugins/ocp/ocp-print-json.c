@@ -65,7 +65,9 @@ static void json_hwcomp_log(struct hwcomp_log *log, __u32 id, bool list)
 {
 	struct json_object *r = json_create_object();
 
-	long double log_size = uint128_t_to_double(le128_to_cpu(log->size)) * sizeof(__le32);
+	long double log_size = uint128_t_to_double(le128_to_cpu(log->size));
+	if (log->ver == 1)
+		log_size *= sizeof(__le32);
 
 	obj_add_uint_02x(r, "Log Identifier", LID_HWCOMP);
 	obj_add_uint_0x(r, "Log Page Version", le16_to_cpu(log->ver));
@@ -73,7 +75,7 @@ static void json_hwcomp_log(struct hwcomp_log *log, __u32 id, bool list)
 	obj_add_byte_array(r, "Log page GUID", log->guid, ARRAY_SIZE(log->guid));
 	obj_add_nprix64(r, "Hardware Component Log Size", (unsigned long long)log_size);
 	obj_add_byte_array(r, "Reserved48", log->rsvd48, ARRAY_SIZE(log->rsvd48));
-	print_hwcomp_descs_json(log->desc, log_size, id, list,
+	print_hwcomp_descs_json(log->desc, log_size - offsetof(struct hwcomp_log, desc), id, list,
 				obj_create_array_obj(r, "Component Descriptions"));
 
 	json_print(r);
@@ -88,7 +90,7 @@ static void json_fw_activation_history(const struct fw_activation_history *fw_hi
 
 	struct json_object *entries = json_create_array();
 
-	for (int index = 0; index < fw_history->valid_entries; index++) {
+	for (int index = 0; index < le32_to_cpu(fw_history->valid_entries); index++) {
 		const struct fw_activation_history_entry *entry = &fw_history->entries[index];
 		struct json_object *entry_obj = json_create_object();
 
@@ -258,6 +260,7 @@ static void json_c3_log(struct nvme_dev *dev, struct ssd_latency_monitor_log *lo
 	char buf[128];
 	int i, j;
 	char *operation[3] = {"Trim", "Write", "Read"};
+	__u16 log_page_version = le16_to_cpu(log_data->log_page_version);
 
 	root = json_create_object();
 
@@ -374,6 +377,21 @@ static void json_c3_log(struct nvme_dev *dev, struct ssd_latency_monitor_log *lo
 
 	json_object_add_value_uint(root, "Static Latency Stamp Units",
 		le16_to_cpu(log_data->static_latency_stamp_units));
+
+	if (log_page_version >= 0x4) {
+		strcpy(buf, "0x");
+		for (i = ARRAY_SIZE(log_data->latency_monitor_debug_log_size) - 1;
+			i > 0 && (log_data->latency_monitor_debug_log_size[i] == 0); i--)
+			;
+		while (i >= 0) {
+			char hex_string[3];
+
+			sprintf(hex_string, "%02x", log_data->latency_monitor_debug_log_size[i--]);
+			strcat(buf, hex_string);
+		}
+		json_object_add_value_string(root, "Debug Telemetry Log Size", buf);
+	}
+
 	json_object_add_value_uint(root, "Debug Log Trigger Enable",
 		le16_to_cpu(log_data->debug_log_trigger_enable));
 	json_object_add_value_uint(root, "Debug Log Measured Latency",
@@ -390,13 +408,12 @@ static void json_c3_log(struct nvme_dev *dev, struct ssd_latency_monitor_log *lo
 		le16_to_cpu(log_data->debug_log_counter_trigger));
 	json_object_add_value_uint(root, "Debug Log Stamp Units",
 		le16_to_cpu(log_data->debug_log_stamp_units));
-	json_object_add_value_uint(root, "Log Page Version",
-		le16_to_cpu(log_data->log_page_version));
+	json_object_add_value_uint(root, "Log Page Version", log_page_version);
 
-	char guid[(C3_GUID_LENGTH * 2) + 1];
+	char guid[(GUID_LEN * 2) + 1];
 	char *ptr = &guid[0];
 
-	for (i = C3_GUID_LENGTH - 1; i >= 0; i--)
+	for (i = GUID_LEN - 1; i >= 0; i--)
 		ptr += sprintf(ptr, "%02X", log_data->log_page_guid[i]);
 
 	json_object_add_value_string(root, "Log Page GUID", guid);
@@ -412,7 +429,7 @@ static void json_c5_log(struct nvme_dev *dev, struct unsupported_requirement_log
 	int j;
 	struct json_object *root;
 	char unsup_req_list_str[40];
-	char guid_buf[C5_GUID_LENGTH];
+	char guid_buf[GUID_LEN];
 	char *guid = guid_buf;
 
 	root = json_create_object();
@@ -430,8 +447,8 @@ static void json_c5_log(struct nvme_dev *dev, struct unsupported_requirement_log
 	json_object_add_value_int(root, "Log Page Version",
 				  le16_to_cpu(log_data->log_page_version));
 
-	memset((void *)guid, 0, C5_GUID_LENGTH);
-	for (j = C5_GUID_LENGTH - 1; j >= 0; j--)
+	memset((void *)guid, 0, GUID_LEN);
+	for (j = GUID_LEN - 1; j >= 0; j--)
 		guid += sprintf(guid, "%02x", log_data->log_page_guid[j]);
 	json_object_add_value_string(root, "Log page GUID", guid_buf);
 
@@ -526,7 +543,7 @@ static void json_c9_log(struct telemetry_str_log_format *log_data, __u8 *log_dat
 	struct json_object *root = json_create_object();
 	char res_arr[48];
 	char *res = res_arr;
-	char guid_buf[C9_GUID_LENGTH];
+	char guid_buf[GUID_LEN];
 	char *guid = guid_buf;
 	char fifo_arr[16];
 	char *fifo = fifo_arr;
@@ -552,19 +569,20 @@ static void json_c9_log(struct telemetry_str_log_format *log_data, __u8 *log_dat
 	json_object_add_value_int(root, "Log Page Version",
 				  le16_to_cpu(log_data->log_page_version));
 
-	memset((__u8 *)res, 0, 15);
+	memset((__u8 *)res, 0, 48);
 	for (j = 0; j < 15; j++)
 		res += sprintf(res, "%d", log_data->reserved1[j]);
 	json_object_add_value_string(root, "Reserved", res_arr);
 
-	memset((void *)guid, 0, C9_GUID_LENGTH);
-	for (j = C9_GUID_LENGTH - 1; j >= 0; j--)
+	memset((void *)guid, 0, GUID_LEN);
+	for (j = GUID_LEN - 1; j >= 0; j--)
 		guid += sprintf(guid, "%02x", log_data->log_page_guid[j]);
 	json_object_add_value_string(root, "Log page GUID", guid_buf);
 
 	json_object_add_value_int(root, "Telemetry String Log Size", le64_to_cpu(log_data->sls));
 
-	memset((__u8 *)res, 0, 24);
+	res = res_arr;
+	memset((__u8 *)res, 0, 48);
 	for (j = 0; j < 24; j++)
 		res += sprintf(res, "%d", log_data->reserved2[j]);
 	json_object_add_value_string(root, "Reserved", res_arr);
@@ -587,81 +605,97 @@ static void json_c9_log(struct telemetry_str_log_format *log_data, __u8 *log_dat
 		fifo += sprintf(fifo, "%c", log_data->fifo1[j]);
 	json_object_add_value_string(root, "FIFO 1 ASCII String", fifo_arr);
 
+	fifo = fifo_arr;
 	memset((void *)fifo, 0, 16);
 	for (j = 0; j < 16; j++)
 		fifo += sprintf(fifo, "%c", log_data->fifo2[j]);
 	json_object_add_value_string(root, "FIFO 2 ASCII String", fifo_arr);
 
+	fifo = fifo_arr;
 	memset((void *)fifo, 0, 16);
 	for (j = 0; j < 16; j++)
 		fifo += sprintf(fifo, "%c", log_data->fifo3[j]);
 	json_object_add_value_string(root, "FIFO 3 ASCII String", fifo_arr);
 
+	fifo = fifo_arr;
 	memset((void *)fifo, 0, 16);
 	for (j = 0; j < 16; j++)
 		fifo += sprintf(fifo, "%c", log_data->fifo4[j]);
 	json_object_add_value_string(root, "FIFO 4 ASCII String", fifo_arr);
 
+	fifo = fifo_arr;
 	memset((void *)fifo, 0, 16);
 	for (j = 0; j < 16; j++)
 		fifo += sprintf(fifo, "%c", log_data->fifo5[j]);
 	json_object_add_value_string(root, "FIFO 5 ASCII String", fifo_arr);
 
+	fifo = fifo_arr;
 	memset((void *)fifo, 0, 16);
 	for (j = 0; j < 16; j++)
 		fifo += sprintf(fifo, "%c", log_data->fifo6[j]);
 	json_object_add_value_string(root, "FIFO 6 ASCII String", fifo_arr);
 
+	fifo = fifo_arr;
 	memset((void *)fifo, 0, 16);
 	for (j = 0; j < 16; j++)
 		fifo += sprintf(fifo, "%c", log_data->fifo7[j]);
 	json_object_add_value_string(root, "FIFO 7 ASCII String", fifo_arr);
 
+	fifo = fifo_arr;
 	memset((void *)fifo, 0, 16);
 	for (j = 0; j < 16; j++)
 		fifo += sprintf(fifo, "%c", log_data->fifo8[j]);
 	json_object_add_value_string(root, "FIFO 8 ASCII String", fifo_arr);
 
+	fifo = fifo_arr;
 	memset((void *)fifo, 0, 16);
 	for (j = 0; j < 16; j++)
 		fifo += sprintf(fifo, "%c", log_data->fifo9[j]);
 	json_object_add_value_string(root, "FIFO 9 ASCII String", fifo_arr);
 
+	fifo = fifo_arr;
 	memset((void *)fifo, 0, 16);
 	for (j = 0; j < 16; j++)
 		fifo += sprintf(fifo, "%c", log_data->fifo10[j]);
 	json_object_add_value_string(root, "FIFO 10 ASCII String", fifo_arr);
 
+	fifo = fifo_arr;
 	memset((void *)fifo, 0, 16);
 	for (j = 0; j < 16; j++)
 		fifo += sprintf(fifo, "%c", log_data->fifo11[j]);
 	json_object_add_value_string(root, "FIFO 11 ASCII String", fifo_arr);
 
+	fifo = fifo_arr;
 	memset((void *)fifo, 0, 16);
 	for (j = 0; j < 16; j++)
 		fifo += sprintf(fifo, "%c", log_data->fifo12[j]);
 	json_object_add_value_string(root, "FIFO 12 ASCII String", fifo_arr);
 
+	fifo = fifo_arr;
 	memset((void *)fifo, 0, 16);
 	for (j = 0; j < 16; j++)
 		fifo += sprintf(fifo, "%c", log_data->fifo13[j]);
 	json_object_add_value_string(root, "FIFO 13 ASCII String", fifo_arr);
 
+	fifo = fifo_arr;
 	memset((void *)fifo, 0, 16);
 	for (j = 0; j < 16; j++)
 		fifo += sprintf(fifo, "%c", log_data->fifo14[j]);
 	json_object_add_value_string(root, "FIFO 14 ASCII String", fifo_arr);
 
+	fifo = fifo_arr;
 	memset((void *)fifo, 0, 16);
 	for (j = 0; j < 16; j++)
 		fifo += sprintf(fifo, "%c", log_data->fifo15[j]);
 	json_object_add_value_string(root, "FIFO 15 ASCII String", fifo_arr);
 
+	fifo = fifo_arr;
 	memset((void *)fifo, 0, 16);
 	for (j = 0; j < 16; j++)
 		fifo += sprintf(fifo, "%c", log_data->fifo16[j]);
 	json_object_add_value_string(root, "FIFO 16 ASCII String", fifo_arr);
 
+	res = res_arr;
 	memset((__u8 *)res, 0, 48);
 	for (j = 0; j < 48; j++)
 		res += sprintf(res, "%d", log_data->reserved3[j]);
@@ -768,60 +802,69 @@ static void json_c7_log(struct nvme_dev *dev, struct tcg_configuration_log *log_
 {
 	int j;
 	struct json_object *root;
-	char guid_buf[C7_GUID_LENGTH];
+	char guid_buf[GUID_LEN];
 	char *guid = guid_buf;
 	char res_arr[458];
 	char *res = res_arr;
+	__u16 log_page_version = le16_to_cpu(log_data->log_page_version);
 
 	root = json_create_object();
 
-	json_object_add_value_int(root, "State", le16_to_cpu(log_data->state));
+	json_object_add_value_int(root, "State", log_data->state);
 	memset((__u8 *)res, 0, 3);
 	for (j = 0; j < 3; j++)
 		res += sprintf(res, "%d", log_data->rsvd1[j]);
 	json_object_add_value_string(root, "Reserved1", res_arr);
 	json_object_add_value_int(root, "Locking SP Activation Count",
-				  le16_to_cpu(log_data->locking_sp_act_count));
+				  log_data->locking_sp_act_count);
 	json_object_add_value_int(root, "Tper Revert Count",
-				  le16_to_cpu(log_data->locking_sp_rev_count));
+				  log_data->locking_sp_rev_count);
 	json_object_add_value_int(root, "Number of Locking Objects",
-				  le16_to_cpu(log_data->no_of_locking_obj));
+				  log_data->no_of_locking_obj);
 	json_object_add_value_int(root, "Number of Single User Mode Locking Objects",
-				  le16_to_cpu(log_data->no_of_single_um_locking_obj));
+				  log_data->no_of_single_um_locking_obj);
 	json_object_add_value_int(root, "Number of Range Provisioned Locking Objects",
-				  le16_to_cpu(log_data->no_of_range_prov_locking_obj));
+				  log_data->no_of_range_prov_locking_obj);
 	json_object_add_value_int(root, "Number of Namespace Provisioned Locking Objects",
-				  le16_to_cpu(log_data->no_of_ns_prov_locking_obj));
+				  log_data->no_of_ns_prov_locking_obj);
 	json_object_add_value_int(root, "Number of Read Locked Locking Objects",
-				  le16_to_cpu(log_data->no_of_read_lock_locking_obj));
+				  log_data->no_of_read_lock_locking_obj);
 	json_object_add_value_int(root, "Number of Write Locked Locking Objects",
-				  le16_to_cpu(log_data->no_of_write_lock_locking_obj));
+				  log_data->no_of_write_lock_locking_obj);
 	json_object_add_value_int(root, "Number of Read Unlocked Locking Objects",
-				  le16_to_cpu(log_data->no_of_read_unlock_locking_obj));
+				  log_data->no_of_read_unlock_locking_obj);
 	json_object_add_value_int(root, "Number of Write Unlocked Locking Objects",
-				  le16_to_cpu(log_data->no_of_write_unlock_locking_obj));
-	json_object_add_value_int(root, "Reserved2", le16_to_cpu(log_data->rsvd2));
+				  log_data->no_of_write_unlock_locking_obj);
+	json_object_add_value_int(root, "Reserved2", log_data->rsvd15);
 
 	json_object_add_value_int(root, "SID Authentication Try Count",
-				  le16_to_cpu(log_data->sid_auth_try_count));
+				  le32_to_cpu(log_data->sid_auth_try_count));
 	json_object_add_value_int(root, "SID Authentication Try Limit",
-				  le16_to_cpu(log_data->sid_auth_try_limit));
+				  le32_to_cpu(log_data->sid_auth_try_limit));
 	json_object_add_value_int(root, "Programmatic TCG Reset Count",
-				  le16_to_cpu(log_data->pro_tcg_rc));
+				  le32_to_cpu(log_data->pro_tcg_rc));
 	json_object_add_value_int(root, "Programmatic Reset Lock Count",
-				  le16_to_cpu(log_data->pro_rlc));
-	json_object_add_value_int(root, "TCG Error Count", le16_to_cpu(log_data->tcg_ec));
+				  le32_to_cpu(log_data->pro_rlc));
+	json_object_add_value_int(root, "TCG Error Count", le32_to_cpu(log_data->tcg_ec));
 
 	memset((__u8 *)res, 0, 458);
-	for (j = 0; j < 458; j++)
-		res += sprintf(res, "%d", log_data->rsvd3[j]);
+	if (log_page_version == 1) {
+		res += sprintf(res, "%d%d", *(__u8 *)&log_data->no_of_ns_prov_locking_obj_ext,
+			*((__u8 *)&log_data->no_of_ns_prov_locking_obj_ext + 1));
+	} else {
+		json_object_add_value_int(root,
+			"Number of Namespace Provisioned Locking Objects Extended",
+			log_data->no_of_ns_prov_locking_obj_ext);
+	}
+
+	for (j = 0; j < 456; j++)
+		res += sprintf(res, "%d", log_data->rsvd38[j]);
 	json_object_add_value_string(root, "Reserved3", res_arr);
 
-	json_object_add_value_int(root, "Log Page Version",
-				  le16_to_cpu(log_data->log_page_version));
+	json_object_add_value_int(root, "Log Page Version", log_page_version);
 
-	memset((void *)guid, 0, C7_GUID_LENGTH);
-	for (j = C7_GUID_LENGTH - 1; j >= 0; j--)
+	memset((void *)guid, 0, GUID_LEN);
+	for (j = GUID_LEN - 1; j >= 0; j--)
 		guid += sprintf(guid, "%02x", log_data->log_page_guid[j]);
 	json_object_add_value_string(root, "Log page GUID", guid_buf);
 

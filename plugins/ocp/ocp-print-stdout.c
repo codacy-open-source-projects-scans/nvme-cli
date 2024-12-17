@@ -32,7 +32,9 @@ static void stdout_hwcomp_log(struct hwcomp_log *log, __u32 id, bool list)
 	int num = 1;
 	struct hwcomp_desc_entry e = { log->desc };
 
-	long double log_size = uint128_t_to_double(le128_to_cpu(log->size)) * sizeof(__le32);
+	long double log_size = uint128_t_to_double(le128_to_cpu(log->size));
+	if (log->ver == 1)
+		log_size *= sizeof(__le32);
 
 	printf("Log Identifier: 0x%02xh\n", LID_HWCOMP);
 	printf("Log Page Version: 0x%x\n", le16_to_cpu(log->ver));
@@ -41,6 +43,7 @@ static void stdout_hwcomp_log(struct hwcomp_log *log, __u32 id, bool list)
 	printf("Hardware Component Log Size: 0x%"PRIx64"\n", (uint64_t)log_size);
 	print_array("Reserved48", log->rsvd48, ARRAY_SIZE(log->rsvd48));
 	printf("Component Descriptions\n");
+	log_size -= offsetof(struct hwcomp_log, desc);
 	while (log_size > 0) {
 		e.date_lot_size = le64_to_cpu(e.desc->date_lot_size) * sizeof(__le32);
 		e.date_lot_code = e.date_lot_size ? (__u8 *)e.desc + date_lot_code_offset : NULL;
@@ -64,10 +67,10 @@ static void stdout_fw_activation_history(const struct fw_activation_history *fw_
 
 	printf("  entries:\n");
 
-	for (int index = 0; index < fw_history->valid_entries; index++) {
+	for (int index = 0; index < le32_to_cpu(fw_history->valid_entries); index++) {
 		const struct fw_activation_history_entry *entry = &fw_history->entries[index];
 
-		printf("    entry[%d]:\n", le32_to_cpu(index));
+		printf("    entry[%d]:\n", index);
 		printf("      %-22s%d\n", "version number:", entry->ver_num);
 		printf("      %-22s%d\n", "entry length:", entry->entry_length);
 		printf("      %-22s%d\n", "activation count:",
@@ -205,6 +208,7 @@ static void stdout_c3_log(struct nvme_dev *dev, struct ssd_latency_monitor_log *
 {
 	char ts_buf[128];
 	int i, j;
+	__u16 log_page_version = le16_to_cpu(log_data->log_page_version);
 
 	printf("-Latency Monitor/C3 Log Page Data-\n");
 	printf("  Controller   :  %s\n", dev->name);
@@ -237,6 +241,17 @@ static void stdout_c3_log(struct nvme_dev *dev, struct ssd_latency_monitor_log *
 	       le16_to_cpu(log_data->active_latency_stamp_units));
 	printf("  Static Latency Stamp Units         %d\n",
 	       le16_to_cpu(log_data->static_latency_stamp_units));
+
+	if (log_page_version >= 0x4) {
+		printf("    Debug Telemetry Log Size         0x");
+		for (i = ARRAY_SIZE(log_data->latency_monitor_debug_log_size) - 1;
+			i > 0 && (log_data->latency_monitor_debug_log_size[i] == 0); i--)
+			;
+		while (i >= 0)
+			printf("%02x", log_data->latency_monitor_debug_log_size[i--]);
+		printf("\n");
+	}
+
 	printf("  Debug Log Trigger Enable           %d\n",
 	       le16_to_cpu(log_data->debug_log_trigger_enable));
 	printf("  Debug Log Measured Latency         %d\n",
@@ -253,13 +268,12 @@ static void stdout_c3_log(struct nvme_dev *dev, struct ssd_latency_monitor_log *
 	       le16_to_cpu(log_data->debug_log_counter_trigger));
 	printf("  Debug Log Stamp Units              %d\n",
 	       le16_to_cpu(log_data->debug_log_stamp_units));
-	printf("  Log Page Version                   %d\n",
-	       le16_to_cpu(log_data->log_page_version));
+	printf("  Log Page Version                   %d\n", log_page_version);
 
-	char guid[(C3_GUID_LENGTH * 2) + 1];
+	char guid[(GUID_LEN * 2) + 1];
 	char *ptr = &guid[0];
 
-	for (i = C3_GUID_LENGTH - 1; i >= 0; i--)
+	for (i = GUID_LEN - 1; i >= 0; i--)
 		ptr += sprintf(ptr, "%02X", log_data->log_page_guid[i]);
 
 	printf("  Log Page GUID                      %s\n", guid);
@@ -344,7 +358,7 @@ static void stdout_c5_log(struct nvme_dev *dev, struct unsupported_requirement_l
 	printf("  Log Page Version			: 0x%x\n",
 	       le16_to_cpu(log_data->log_page_version));
 	printf("  Log page GUID				: 0x");
-	for (j = C5_GUID_LENGTH - 1; j >= 0; j--)
+	for (j = GUID_LEN - 1; j >= 0; j--)
 		printf("%02x", log_data->log_page_guid[j]);
 	printf("\n");
 }
@@ -381,7 +395,7 @@ static void stdout_c1_log(struct ocp_error_recovery_log_page *log_data)
 	printf("  Log Page Version                  : 0x%x\n",
 	       le16_to_cpu(log_data->log_page_version));
 	printf("  Log page GUID                     : 0x");
-	for (i = C1_GUID_LENGTH - 1; i >= 0; i--)
+	for (i = GUID_LEN - 1; i >= 0; i--)
 		printf("%02x", log_data->log_page_guid[i]);
 	printf("\n");
 }
@@ -414,7 +428,7 @@ static void stdout_c4_log(struct ocp_device_capabilities_log_page *log_data)
 	printf("  Log Page Version						: 0x%x\n",
 	       le16_to_cpu(log_data->log_page_version));
 	printf("  Log page GUID							: 0x");
-	for (i = C4_GUID_LENGTH - 1; i >= 0; i--)
+	for (i = GUID_LEN - 1; i >= 0; i--)
 		printf("%02x", log_data->log_page_guid[i]);
 	printf("\n");
 }
@@ -446,7 +460,7 @@ static void stdout_c9_log(struct telemetry_str_log_format *log_data, __u8 *log_d
 	printf("\n");
 
 	printf("  Log page GUID                                   : 0x");
-	for (j = C9_GUID_LENGTH - 1; j >= 0; j--)
+	for (j = GUID_LEN - 1; j >= 0; j--)
 		printf("%02x", log_data->log_page_guid[j]);
 	printf("\n");
 
@@ -632,60 +646,68 @@ static void stdout_c9_log(struct telemetry_str_log_format *log_data, __u8 *log_d
 static void stdout_c7_log(struct nvme_dev *dev, struct tcg_configuration_log *log_data)
 {
 	int j;
+	__u16 log_page_version = le16_to_cpu(log_data->log_page_version);
 
 	printf("TCG Configuration C7 Log Page Data-\n");
 
-	printf("  State                                                  : 0x%x\n",
-	       log_data->state);
-	printf("  Reserved1                                              : 0x");
+	printf("  State                                                    : 0x%x\n",
+		log_data->state);
+	printf("  Reserved1                                              : ");
 	for (j = 0; j < 3; j++)
 		printf("%d", log_data->rsvd1[j]);
 	printf("\n");
-	printf("  Locking SP Activation Count                            : 0x%x\n",
+	printf("  Locking SP Activation Count                              : 0x%x\n",
 	       log_data->locking_sp_act_count);
-	printf("  Tper Revert Count                                      : 0x%x\n",
+	printf("  Tper Revert Count                                        : 0x%x\n",
 	       log_data->type_rev_count);
-	printf("  Locking SP Revert Count                                : 0x%x\n",
+	printf("  Locking SP Revert Count                                  : 0x%x\n",
 	       log_data->locking_sp_rev_count);
-	printf("  Number of Locking Objects                              : 0x%x\n",
+	printf("  Number of Locking Objects                                : 0x%x\n",
 	       log_data->no_of_locking_obj);
-	printf("  Number of Single User Mode Locking Objects             : 0x%x\n",
+	printf("  Number of Single User Mode Locking Objects               : 0x%x\n",
 	       log_data->no_of_single_um_locking_obj);
-	printf("  Number of Range Provisioned Locking Objects            : 0x%x\n",
+	printf("  Number of Range Provisioned Locking Objects              : 0x%x\n",
 	       log_data->no_of_range_prov_locking_obj);
-	printf("  Number of Namespace Provisioned Locking Objects        : 0x%x\n",
+	printf("  Number of Namespace Provisioned Locking Objects          : 0x%x\n",
 	       log_data->no_of_ns_prov_locking_obj);
-	printf("  Number of Read Locked Locking Objects                  : 0x%x\n",
+	printf("  Number of Read Locked Locking Objects                    : 0x%x\n",
 	       log_data->no_of_read_lock_locking_obj);
-	printf("  Number of Write Locked Locking Objects                 : 0x%x\n",
+	printf("  Number of Write Locked Locking Objects                   : 0x%x\n",
 	       log_data->no_of_write_lock_locking_obj);
-	printf("  Number of Read Unlocked Locking Objects                : 0x%x\n",
+	printf("  Number of Read Unlocked Locking Objects                  : 0x%x\n",
 	       log_data->no_of_read_unlock_locking_obj);
-	printf("  Number of Write Unlocked Locking Objects               : 0x%x\n",
+	printf("  Number of Write Unlocked Locking Objects                 : 0x%x\n",
 	       log_data->no_of_write_unlock_locking_obj);
-	printf("  Reserved2                                              : 0x%x\n",
-	       log_data->rsvd2);
-
-	printf("  SID Authentication Try Count                           : 0x%x\n",
+	printf("  Reserved2                                              : %x\n",
+		log_data->rsvd15);
+	printf("  SID Authentication Try Count                             : 0x%x\n",
 	       le32_to_cpu(log_data->sid_auth_try_count));
-	printf("  SID Authentication Try Limit                           : 0x%x\n",
+	printf("  SID Authentication Try Limit                             : 0x%x\n",
 	       le32_to_cpu(log_data->sid_auth_try_limit));
-	printf("  Programmatic TCG Reset Count                           : 0x%x\n",
+	printf("  Programmatic TCG Reset Count                             : 0x%x\n",
 	       le32_to_cpu(log_data->pro_tcg_rc));
-	printf("  Programmatic Reset Lock Count                          : 0x%x\n",
+	printf("  Programmatic Reset Lock Count                            : 0x%x\n",
 	       le32_to_cpu(log_data->pro_rlc));
-	printf("  TCG Error Count                                        : 0x%x\n",
+	printf("  TCG Error Count                                          : 0x%x\n",
 	       le32_to_cpu(log_data->tcg_ec));
 
-	printf("  Reserved3                                              : 0x");
-	for (j = 0; j < 458; j++)
-		printf("%d", log_data->rsvd3[j]);
+	if (log_page_version == 1) {
+		printf("  Reserved3                                                : %d%d",
+			*(__u8 *)&log_data->no_of_ns_prov_locking_obj_ext,
+			*((__u8 *)&log_data->no_of_ns_prov_locking_obj_ext + 1));
+	} else {
+		printf("  Number of Namespace Provisioned Locking Objects Extended : 0x%x\n",
+			le16_to_cpu(log_data->no_of_ns_prov_locking_obj_ext));
+		printf("  Reserved3                                                : ");
+	}
+	for (j = 0; j < 456; j++)
+		printf("%d", log_data->rsvd38[j]);
 	printf("\n");
 
-	printf("  Log Page Version                                       : 0x%x\n",
-	       le16_to_cpu(log_data->log_page_version));
-	printf("  Log page GUID                                          : 0x");
-	for (j = C7_GUID_LENGTH - 1; j >= 0; j--)
+	printf("  Log Page Version                                         : 0x%x\n",
+	       log_page_version);
+	printf("  Log page GUID                                            : 0x");
+	for (j = GUID_LEN - 1; j >= 0; j--)
 		printf("%02x", log_data->log_page_guid[j]);
 	printf("\n");
 }

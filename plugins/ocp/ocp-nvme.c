@@ -32,6 +32,7 @@
 #include "ocp-telemetry-decode.h"
 #include "ocp-hardware-component-log.h"
 #include "ocp-print.h"
+#include "ocp-types.h"
 
 #define CREATE_CMD
 #include "ocp-nvme.h"
@@ -47,7 +48,7 @@
 #define C3_LATENCY_MON_OPCODE			0xC3
 #define NVME_FEAT_OCP_LATENCY_MONITOR		0xC5
 
-static __u8 lat_mon_guid[C3_GUID_LENGTH] = {
+static __u8 lat_mon_guid[GUID_LEN] = {
 	0x92, 0x7a, 0xc0, 0x8c,
 	0xd0, 0x84, 0x6c, 0x9c,
 	0x70, 0x43, 0xe6, 0xd4,
@@ -57,17 +58,17 @@ static __u8 lat_mon_guid[C3_GUID_LENGTH] = {
 #define RESERVED	0
 
 struct __packed feature_latency_monitor {
-	__u16 active_bucket_timer_threshold;
-	__u8  active_threshold_a;
-	__u8  active_threshold_b;
-	__u8  active_threshold_c;
-	__u8  active_threshold_d;
-	__u16 active_latency_config;
-	__u8  active_latency_minimum_window;
-	__u16 debug_log_trigger_enable;
-	__u8  discard_debug_log;
-	__u8  latency_monitor_feature_enable;
-	__u8  reserved[4083];
+	__le16 active_bucket_timer_threshold;
+	__u8 active_threshold_a;
+	__u8 active_threshold_b;
+	__u8 active_threshold_c;
+	__u8 active_threshold_d;
+	__le16 active_latency_config;
+	__u8 active_latency_minimum_window;
+	__le16 debug_log_trigger_enable;
+	__u8 discard_debug_log;
+	__u8 latency_monitor_feature_enable;
+	__u8 reserved[4083];
 };
 
 struct erri_entry {
@@ -104,6 +105,17 @@ enum erri_type {
 	ERRI_TYPE_HW_MALFUNCTION,
 	ERRI_TYPE_NO_MORE_NAND_SPARES,
 	ERRI_TYPE_INCOMPLETE_SHUTDOWN,
+	ERRI_TYPE_METADATA_CORRUPTION,
+	ERRI_TYPE_CRITICAL_GC,
+	ERRI_TYPE_LATENCY_SPIKE,
+	ERRI_TYPE_IO_CMD_FAILURE,
+	ERRI_TYPE_IO_CMD_TIMEOUT,
+	ERRI_TYPE_ADMIN_CMD_FAILURE,
+	ERRI_TYPE_ADMIN_CMD_TIMEOUT,
+	ERRI_TYPE_THERMAL_THROTTLE_ENGAGED,
+	ERRI_TYPE_THERMAL_THROTTLE_DISENGAGED,
+	ERRI_TYPE_CRITICAL_TEMPERATURE_EVENT,
+	ERRI_TYPE_DIE_OFFLINE,
 };
 
 const char *erri_type_to_string(__le16 type)
@@ -131,6 +143,28 @@ const char *erri_type_to_string(__le16 type)
 		return "no more NAND spares available";
 	case ERRI_TYPE_INCOMPLETE_SHUTDOWN:
 		return "incomplete shutdown";
+	case ERRI_TYPE_METADATA_CORRUPTION:
+		return "Metadata Corruption";
+	case ERRI_TYPE_CRITICAL_GC:
+		return "Critical Garbage Collection";
+	case ERRI_TYPE_LATENCY_SPIKE:
+		return "Latency Spike";
+	case ERRI_TYPE_IO_CMD_FAILURE:
+		return "I/O command failure";
+	case ERRI_TYPE_IO_CMD_TIMEOUT:
+		return "I/O command timeout";
+	case ERRI_TYPE_ADMIN_CMD_FAILURE:
+		return "Admin command failure";
+	case ERRI_TYPE_ADMIN_CMD_TIMEOUT:
+		return "Admin command timeout";
+	case ERRI_TYPE_THERMAL_THROTTLE_ENGAGED:
+		return "Thermal Throttle Engaged";
+	case ERRI_TYPE_THERMAL_THROTTLE_DISENGAGED:
+		return "Thermal Throttle Disengaged";
+	case ERRI_TYPE_CRITICAL_TEMPERATURE_EVENT:
+		return "Critical Temperature Event";
+	case ERRI_TYPE_DIE_OFFLINE:
+		return "Die Offline";
 	default:
 		break;
 	}
@@ -161,6 +195,8 @@ const char *data = "Error injection data structure entries";
 const char *number = "Number of valid error injection data entries";
 static const char *type = "Error injection type";
 static const char *nrtdp = "Number of reads to trigger device panic";
+static const char *save = "Specifies that the controller shall save the attribute";
+static const char *enable_ieee1667_silo = "enable IEEE1667 silo";
 
 static int get_c3_log_page(struct nvme_dev *dev, char *format)
 {
@@ -265,7 +301,7 @@ int ocp_set_latency_monitor_feature(int argc, char **argv, struct command *cmd, 
 	int err = -1;
 	struct nvme_dev *dev;
 	__u32 result;
-	struct feature_latency_monitor buf = {0,};
+	struct feature_latency_monitor buf = { 0 };
 	__u32  nsid = NVME_NSID_ALL;
 	struct stat nvme_stat;
 	struct nvme_id_ctrl ctrl;
@@ -342,16 +378,14 @@ int ocp_set_latency_monitor_feature(int argc, char **argv, struct command *cmd, 
 	if (err)
 		return err;
 
-	memset(&buf, 0, sizeof(struct feature_latency_monitor));
-
-	buf.active_bucket_timer_threshold = cfg.active_bucket_timer_threshold;
+	buf.active_bucket_timer_threshold = cpu_to_le16(cfg.active_bucket_timer_threshold);
 	buf.active_threshold_a = cfg.active_threshold_a;
 	buf.active_threshold_b = cfg.active_threshold_b;
 	buf.active_threshold_c = cfg.active_threshold_c;
 	buf.active_threshold_d = cfg.active_threshold_d;
-	buf.active_latency_config = cfg.active_latency_config;
+	buf.active_latency_config = cpu_to_le16(cfg.active_latency_config);
 	buf.active_latency_minimum_window = cfg.active_latency_minimum_window;
-	buf.debug_log_trigger_enable = cfg.debug_log_trigger_enable;
+	buf.debug_log_trigger_enable = cpu_to_le16(cfg.debug_log_trigger_enable);
 	buf.discard_debug_log = cfg.discard_debug_log;
 	buf.latency_monitor_feature_enable = cfg.latency_monitor_feature_enable;
 
@@ -373,14 +407,16 @@ int ocp_set_latency_monitor_feature(int argc, char **argv, struct command *cmd, 
 		perror("set-feature");
 	} else if (!err) {
 		printf("NVME_FEAT_OCP_LATENCY_MONITOR: 0x%02x\n", NVME_FEAT_OCP_LATENCY_MONITOR);
-		printf("active bucket timer threshold: 0x%x\n", buf.active_bucket_timer_threshold);
+		printf("active bucket timer threshold: 0x%x\n",
+		       le16_to_cpu(buf.active_bucket_timer_threshold));
 		printf("active threshold a: 0x%x\n", buf.active_threshold_a);
 		printf("active threshold b: 0x%x\n", buf.active_threshold_b);
 		printf("active threshold c: 0x%x\n", buf.active_threshold_c);
 		printf("active threshold d: 0x%x\n", buf.active_threshold_d);
-		printf("active latency config: 0x%x\n", buf.active_latency_config);
+		printf("active latency config: 0x%x\n", le16_to_cpu(buf.active_latency_config));
 		printf("active latency minimum window: 0x%x\n", buf.active_latency_minimum_window);
-		printf("debug log trigger enable: 0x%x\n", buf.debug_log_trigger_enable);
+		printf("debug log trigger enable: 0x%x\n",
+		       le16_to_cpu(buf.debug_log_trigger_enable));
 		printf("discard debug log: 0x%x\n", buf.discard_debug_log);
 		printf("latency monitor feature enable: 0x%x\n", buf.latency_monitor_feature_enable);
 	} else if (err > 0) {
@@ -511,8 +547,6 @@ static int eol_plp_failure_mode(int argc, char **argv, struct command *cmd,
 	const char *desc = "Define EOL or PLP circuitry failure mode.\n"
 			   "No argument prints current mode.";
 	const char *mode = "[0-3]: default/rom/wtm/normal";
-	const char *save = "Specifies that the controller shall save the attribute";
-	const char *sel = "[0-3]: current/default/saved/supported";
 	const __u32 nsid = 0;
 	const __u8 fid = 0xc2;
 	struct nvme_dev *dev;
@@ -1385,7 +1419,7 @@ static int ocp_telemetry_log(int argc, char **argv, struct command *cmd, struct 
 	const char *output_format = "output format normal|json";
 	const char *data_area = "Telemetry Data Area; 1 or 2;\n"
 			"e.g. '-a 1 for Data Area 1.'\n'-a 2 for Data Areas 1 and 2.';\n";
-	const char *telemetry_type = "Telemetry Type; 'host' or 'controller'";
+	const char *telemetry_type = "Telemetry Type; 'host', 'host0', 'host1' or 'controller'";
 
 	struct nvme_dev *dev;
 	int err = 0;
@@ -1453,7 +1487,8 @@ static int ocp_telemetry_log(int argc, char **argv, struct command *cmd, struct 
 		else if (!strcmp(opt.telemetry_type, "controller"))
 			tele_type = TELEMETRY_TYPE_CONTROLLER;
 		else {
-			nvme_show_error("telemetry-type should be host or controller.\n");
+			nvme_show_error(
+			    "telemetry-type should be host, host0, host1 or controller.\n");
 			goto out;
 		}
 	} else {
@@ -1504,60 +1539,6 @@ static int ocp_telemetry_log(int argc, char **argv, struct command *cmd, struct 
 				nvme_show_result("Status:(%x)\n", err);
 		}
 		break;
-	case TELEMETRY_TYPE_NONE:
-		printf("\n-------------------------------------------------------------\n");
-		/* Host 0 (lsp == 0) must be executed before Host 1 (lsp == 1). */
-		printf("\nExtracting Telemetry Host 0 Dump (Data Area 1)...\n");
-
-		err = get_telemetry_dump(dev, opt.output_file, sn,
-				TELEMETRY_TYPE_HOST_0, 1, true);
-		if (err)
-			fprintf(stderr, "NVMe Status: %s(%x)\n", nvme_status_to_string(err, false),
-				err);
-
-		printf("\n-------------------------------------------------------------\n");
-
-		printf("\nExtracting Telemetry Host 0 Dump (Data Area 3)...\n");
-
-		err = get_telemetry_dump(dev, opt.output_file, sn,
-				TELEMETRY_TYPE_HOST_0, 3, false);
-		if (err)
-			fprintf(stderr, "NVMe Status: %s(%x)\n", nvme_status_to_string(err, false),
-				err);
-
-		printf("\n-------------------------------------------------------------\n");
-
-		printf("\nExtracting Telemetry Host 1 Dump (Data Area 1)...\n");
-
-		err = get_telemetry_dump(dev, opt.output_file, sn,
-				TELEMETRY_TYPE_HOST_1, 1, true);
-		if (err)
-			fprintf(stderr, "NVMe Status: %s(%x)\n", nvme_status_to_string(err, false),
-				err);
-
-		printf("\n-------------------------------------------------------------\n");
-
-		printf("\nExtracting Telemetry Host 1 Dump (Data Area 3)...\n");
-
-		err = get_telemetry_dump(dev, opt.output_file, sn,
-				TELEMETRY_TYPE_HOST_1, 3, false);
-		if (err)
-			fprintf(stderr, "NVMe Status: %s(%x)\n", nvme_status_to_string(err, false),
-				err);
-
-		printf("\n-------------------------------------------------------------\n");
-
-		printf("\nExtracting Telemetry Controller Dump (Data Area 3)...\n");
-
-		if (is_support_telemetry_controller == true) {
-			err = get_telemetry_dump(dev, opt.output_file, sn,
-					TELEMETRY_TYPE_CONTROLLER, 3, true);
-			if (err)
-				fprintf(stderr, "NVMe Status: %s(%x)\n", nvme_status_to_string(err, false), err);
-		}
-
-		printf("\n-------------------------------------------------------------\n");
-		break;
 	case TELEMETRY_TYPE_HOST_0:
 	case TELEMETRY_TYPE_HOST_1:
 	default:
@@ -1587,7 +1568,7 @@ out:
 #define C5_UNSUPPORTED_REQS_LEN            4096
 #define C5_UNSUPPORTED_REQS_OPCODE         0xC5
 
-static __u8 unsupported_req_guid[C5_GUID_LENGTH] = {
+static __u8 unsupported_req_guid[GUID_LEN] = {
 	0x2F, 0x72, 0x9C, 0x0E,
 	0x99, 0x23, 0x2C, 0xBB,
 	0x63, 0x48, 0x32, 0xD0,
@@ -1695,7 +1676,7 @@ static int ocp_unsupported_requirements_log(int argc, char **argv, struct comman
 #define C1_ERROR_RECOVERY_LOG_BUF_LEN       0x200
 #define C1_ERROR_RECOVERY_OPCODE            0xC1
 
-static __u8 error_recovery_guid[C1_GUID_LENGTH] = {
+static __u8 error_recovery_guid[GUID_LEN] = {
 	0x44, 0xd9, 0x31, 0x21,
 	0xfe, 0x30, 0x34, 0xae,
 	0xab, 0x4d, 0xfd, 0x3d,
@@ -1798,7 +1779,7 @@ static int ocp_error_recovery_log(int argc, char **argv, struct command *cmd, st
 
 #define C4_DEV_CAP_REQ_LEN			0x1000
 #define C4_DEV_CAP_REQ_OPCODE		0xC4
-static __u8 dev_cap_req_guid[C4_GUID_LENGTH] = {
+static __u8 dev_cap_req_guid[GUID_LEN] = {
 	0x97, 0x42, 0x05, 0x0d,
 	0xd1, 0xe1, 0xc9, 0x98,
 	0x5d, 0x49, 0x58, 0x4b,
@@ -2262,7 +2243,6 @@ static int get_plp_health_check_interval(int argc, char **argv, struct command *
 {
 
 	const char *desc = "Define Issue Get Feature command (FID : 0xC6) PLP Health Check Interval";
-	const char *sel = "[0-3,8]: current/default/saved/supported/changed";
 	const __u32 nsid = 0;
 	const __u8 fid = 0xc6;
 	struct nvme_dev *dev;
@@ -2469,7 +2449,11 @@ static int get_c9_log_page(struct nvme_dev *dev, char *format)
 		return ret;
 	}
 
-	ret = get_c9_log_page_data(dev, 1, 0);
+	if (fmt == BINARY)
+		ret = get_c9_log_page_data(dev, 0, 1);
+	else
+		ret = get_c9_log_page_data(dev, 0, 0);
+
 	if (!ret) {
 		ocp_c9_log(log_data, pC9_string_buffer, total_log_page_sz, fmt);
 	} else {
@@ -2496,7 +2480,8 @@ static int ocp_telemetry_str_log_format(int argc, char **argv, struct command *c
 	};
 
 	OPT_ARGS(opts) = {
-		OPT_FMT("output-format", 'o', &cfg.output_format, "output Format: normal|json"),
+		OPT_FMT("output-format", 'o', &cfg.output_format,
+				"output Format:normal|json|binary"),
 		OPT_END()
 	};
 
@@ -2523,7 +2508,7 @@ static int ocp_telemetry_str_log_format(int argc, char **argv, struct command *c
 #define C7_TCG_CONFIGURATION_LEN           512
 #define C7_TCG_CONFIGURATION_OPCODE        0xC7
 
-static __u8 tcg_configuration_guid[C7_GUID_LENGTH] = {
+static __u8 tcg_configuration_guid[GUID_LEN] = {
 	0x06, 0x40, 0x24, 0xBD,
 	0x7E, 0xE0, 0xE6, 0x83,
 	0xC0, 0x47, 0x54, 0xFA,
@@ -2888,6 +2873,70 @@ static int get_enable_ieee1667_silo(int argc, char **argv, struct command *cmd,
 		return err;
 
 	return enable_ieee1667_silo_get(dev, cfg.sel, !argconfig_parse_seen(opts, "no-uuid"));
+}
+
+static int enable_ieee1667_silo_set(struct nvme_dev *dev,
+				    struct argconfig_commandline_options *opts)
+{
+	struct ieee1667_get_cq_entry cq_entry;
+	int err;
+	const __u8 fid = 0xc4;
+	bool enable = argconfig_parse_seen(opts, "enable");
+
+	struct nvme_set_features_args args = {
+		.result = (__u32 *)&cq_entry,
+		.args_size = sizeof(args),
+		.fd = dev_fd(dev),
+		.timeout = NVME_DEFAULT_IOCTL_TIMEOUT,
+		.cdw11 = OCP_SET(enable, ENABLE_IEEE1667_SILO),
+		.save = argconfig_parse_seen(opts, "save"),
+		.fid = fid,
+	};
+
+	if (!argconfig_parse_seen(opts, "no-uuid")) {
+		/* OCP 2.0 requires UUID index support */
+		err = ocp_get_uuid_index(dev, &args.uuidx);
+		if (err || !args.uuidx) {
+			nvme_show_error("ERROR: No OCP UUID index found");
+			return err;
+		}
+	}
+
+	err = nvme_cli_set_features(dev, &args);
+	if (err > 0) {
+		nvme_show_status(err);
+	} else if (err < 0) {
+		nvme_show_perror(enable_ieee1667_silo);
+		fprintf(stderr, "Command failed while parsing.\n");
+	} else {
+		enable = OCP_GET(args.cdw11, ENABLE_IEEE1667_SILO);
+		nvme_show_result("Successfully set enable (feature: 0x%02x): %d (%s: %s).", fid,
+				 enable, args.save ? "Save" : "Not save",
+				 enable ? "Enabled" : "Disabled");
+	}
+
+	return err;
+}
+
+static int set_enable_ieee1667_silo(int argc, char **argv, struct command *cmd,
+				    struct plugin *plugin)
+{
+	int err;
+
+	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
+
+	OPT_ARGS(opts) = {
+		OPT_FLAG("enable", 'e', NULL, no_uuid),
+		OPT_FLAG("save", 's', NULL, save),
+		OPT_FLAG("no-uuid", 'n', NULL, no_uuid),
+		OPT_END()
+	};
+
+	err = parse_and_open(&dev, argc, argv, enable_ieee1667_silo, opts);
+	if (err)
+		return err;
+
+	return enable_ieee1667_silo_set(dev, opts);
 }
 
 static int hwcomp_log(int argc, char **argv, struct command *cmd, struct plugin *plugin)

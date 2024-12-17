@@ -30,7 +30,6 @@ import shutil
 import stat
 import subprocess
 import sys
-import time
 import unittest
 
 from nvme_test_logger import TestNVMeLogger
@@ -58,18 +57,50 @@ class TestNVMe(unittest.TestCase):
         self.ctrl = "XXX"
         self.ns1 = "XXX"
         self.test_log_dir = "XXX"
+        self.nvme_bin = "nvme"
         self.do_validate_pci_device = True
         self.default_nsid = 0x1
+        self.flbas = 0
         self.config_file = 'tests/config.json'
 
         self.load_config()
         if self.do_validate_pci_device:
             self.validate_pci_device()
+        print(f"\nsetup: ctrl: {self.ctrl}, ns1: {self.ns1}, default_nsid: {self.default_nsid}, flbas: {self.flbas}\n")
 
     def tearDown(self):
         """ Post Section for TestNVMe. """
         if self.clear_log_dir is True:
             shutil.rmtree(self.log_dir, ignore_errors=True)
+        self.create_and_attach_default_ns()
+        print(f"\nteardown: ctrl: {self.ctrl}, ns1: {self.ns1}, default_nsid: {self.default_nsid}, flbas: {self.flbas}\n")
+
+    @classmethod
+    def tearDownClass(cls):
+        print("\n")
+
+    def create_and_attach_default_ns(self):
+        """ Creates a default namespace with the full capacity of the ctrls NVM
+            - Args:
+                - None
+            - Returns:
+                - None
+        """
+        self.dps = 0
+        self.flbas = 0
+        (ds, ms) = self.get_lba_format_size()
+        ncap = int(self.get_ncap() / (ds+ms))
+        self.nsze = ncap
+        self.ncap = ncap
+        self.ctrl_id = self.get_ctrl_id()
+        self.delete_all_ns()
+        err = self.create_and_validate_ns(self.default_nsid,
+                                          self.nsze,
+                                          self.ncap,
+                                          self.flbas,
+                                          self.dps)
+        self.assertEqual(err, 0)
+        self.assertEqual(self.attach_ns(self.ctrl_id, self.default_nsid), 0)
 
     def validate_pci_device(self):
         """ Validate underlying device belongs to pci subsystem.
@@ -79,8 +110,8 @@ class TestNVMe(unittest.TestCase):
                 - None
         """
         x1, x2, dev = self.ctrl.split('/')
-        cmd = cmd = "find /sys/devices -name \\*" + dev + " | grep -i pci"
-        err = subprocess.call(cmd, shell=True)
+        cmd = "find /sys/devices -name \\*" + dev + " | grep -i pci"
+        err = subprocess.call(cmd, shell=True, stdout=subprocess.DEVNULL)
         self.assertEqual(err, 0, "ERROR : Only NVMe PCI subsystem is supported")
 
     def load_config(self):
@@ -95,7 +126,10 @@ class TestNVMe(unittest.TestCase):
             self.ctrl = config['controller']
             self.ns1 = config['ns1']
             self.log_dir = config['log_dir']
-            self.do_validate_pci_device = config.get('do_validate_pci_device', self.do_validate_pci_device)
+            self.nvme_bin = config.get('nvme_bin', self.nvme_bin)
+            print(f"\nUsing nvme binary '{self.nvme_bin}'")
+            self.do_validate_pci_device = config.get(
+                'do_validate_pci_device', self.do_validate_pci_device)
             self.clear_log_dir = False
 
             if self.clear_log_dir is True:
@@ -130,41 +164,40 @@ class TestNVMe(unittest.TestCase):
             - Returns:
                 - None
         """
-        nvme_reset_cmd = "nvme reset " + self.ctrl
+        nvme_reset_cmd = f"{self.nvme_bin} reset {self.ctrl}"
         err = subprocess.call(nvme_reset_cmd,
                               shell=True,
-                              stdout=subprocess.PIPE,
-                              encoding='utf-8')
+                              stdout=subprocess.DEVNULL)
         self.assertEqual(err, 0, "ERROR : nvme reset failed")
-        time.sleep(5)
         rescan_cmd = "echo 1 > /sys/bus/pci/rescan"
         proc = subprocess.Popen(rescan_cmd,
                                 shell=True,
                                 stdout=subprocess.PIPE,
                                 stderr=subprocess.PIPE,
                                 encoding='utf-8')
-        time.sleep(5)
         self.assertEqual(proc.wait(), 0, "ERROR : pci rescan failed")
 
     def get_ctrl_id(self):
-        """ Wrapper for extracting the controller id.
+        """ Wrapper for extracting the first controller id.
             - Args:
                 - None
             - Returns:
                 - controller id.
         """
-        get_ctrl_id = "nvme list-ctrl " + self.ctrl
+        get_ctrl_id = f"{self.nvme_bin} list-ctrl {self.ctrl} " + \
+            "--output-format=json"
         proc = subprocess.Popen(get_ctrl_id,
                                 shell=True,
                                 stdout=subprocess.PIPE,
                                 encoding='utf-8')
         err = proc.wait()
         self.assertEqual(err, 0, "ERROR : nvme list-ctrl failed")
-        line = proc.stdout.readline()
-        ctrl_id = line.split(":")[1].strip()
-        return ctrl_id
+        json_output = json.loads(proc.stdout.read())
+        self.assertTrue(len(json_output['ctrl_list']) > 0,
+                        "ERROR : nvme list-ctrl could not find ctrl")
+        return str(json_output['ctrl_list'][0]['ctrl_id'])
 
-    def get_ns_list(self):
+    def get_nsid_list(self):
         """ Wrapper for extracting the namespace list.
             - Args:
                 - None
@@ -172,14 +205,17 @@ class TestNVMe(unittest.TestCase):
                 - List of the namespaces.
         """
         ns_list = []
-        ns_list_cmd = "nvme list-ns " + self.ctrl
+        ns_list_cmd = f"{self.nvme_bin} list-ns {self.ctrl} " + \
+            "--output-format=json"
         proc = subprocess.Popen(ns_list_cmd,
                                 shell=True,
                                 stdout=subprocess.PIPE,
                                 encoding='utf-8')
         self.assertEqual(proc.wait(), 0, "ERROR : nvme list namespace failed")
-        for line in proc.stdout:
-            ns_list.append(line.split('x')[-1])
+        json_output = json.loads(proc.stdout.read())
+
+        for ns in json_output['nsid_list']:
+            ns_list.append(ns['nsid'])
 
         return ns_list
 
@@ -190,46 +226,83 @@ class TestNVMe(unittest.TestCase):
             - Returns:
                 - maximum number of namespaces supported.
         """
-        pattern = re.compile("^nn[ ]+: [0-9]", re.IGNORECASE)
-        max_ns = -1
-        max_ns_cmd = "nvme id-ctrl " + self.ctrl
+        max_ns_cmd = f"{self.nvme_bin} id-ctrl {self.ctrl} " + \
+            "--output-format=json"
         proc = subprocess.Popen(max_ns_cmd,
                                 shell=True,
                                 stdout=subprocess.PIPE,
                                 encoding='utf-8')
         err = proc.wait()
         self.assertEqual(err, 0, "ERROR : reading maximum namespace count failed")
+        json_output = json.loads(proc.stdout.read())
+        return int(json_output['nn'])
 
-        for line in proc.stdout:
-            if pattern.match(line):
-                max_ns = line.split(":")[1].strip()
-                break
-        print(max_ns)
-        return int(max_ns)
+    def get_lba_status_supported(self):
+        """ Check if 'Get LBA Status' command is supported by the device
+            - Args:
+                - None
+            - Returns:
+                - True if 'Get LBA Status' command is supported, otherwise False
+        """
+        return int(self.get_id_ctrl_field_value("oacs"), 16) & (1 << 9)
+
+    def get_lba_format_size(self):
+        """ Wrapper for extracting lba format size of the given flbas
+            - Args:
+                - None
+            - Returns:
+                - lba format size as a tuple of (data_size, metadata_size) in bytes.
+        """
+        nvme_id_ns_cmd = f"{self.nvme_bin} id-ns {self.ns1} " + \
+            "--output-format=json"
+        proc = subprocess.Popen(nvme_id_ns_cmd,
+                                shell=True,
+                                stdout=subprocess.PIPE,
+                                encoding='utf-8')
+        err = proc.wait()
+        self.assertEqual(err, 0, "ERROR : reading id-ns")
+        json_output = json.loads(proc.stdout.read())
+        self.assertTrue(len(json_output['lbafs']) > self.flbas,
+                        "Error : could not match the given flbas to an existing lbaf")
+        lbaf_json = json_output['lbafs'][int(self.flbas)]
+        ms_expo = int(lbaf_json['ms'])
+        ds_expo = int(lbaf_json['ds'])
+        ds = 0
+        ms = 0
+        if ds_expo > 0:
+            ds = (1 << ds_expo)
+        if ms_expo > 0:
+            ms = (1 << ms_expo)
+        return (ds, ms)
 
     def get_ncap(self):
         """ Wrapper for extracting capacity.
             - Args:
                 - None
             - Returns:
-                - maximum number of namespaces supported.
+                - Total NVM capacity.
         """
-        pattern = re.compile("^tnvmcap[ ]+: [0-9]", re.IGNORECASE)
-        ncap = -1
-        ncap_cmd = "nvme id-ctrl " + self.ctrl
-        proc = subprocess.Popen(ncap_cmd,
+        return int(self.get_id_ctrl_field_value("tnvmcap"))
+
+    def get_id_ctrl_field_value(self, field):
+        """ Wrapper for extracting id-ctrl field values
+            - Args:
+                - None
+            - Returns:
+                - Filed value of the given field
+        """
+        id_ctrl_cmd = f"{self.nvme_bin} id-ctrl {self.ctrl} " + \
+            "--output-format=json"
+        proc = subprocess.Popen(id_ctrl_cmd,
                                 shell=True,
                                 stdout=subprocess.PIPE,
                                 encoding='utf-8')
         err = proc.wait()
-        self.assertEqual(err, 0, "ERROR : reading nvm capacity failed")
-
-        for line in proc.stdout:
-            if pattern.match(line):
-                ncap = line.split(":")[1].strip()
-                break
-        print(ncap)
-        return int(ncap)
+        self.assertEqual(err, 0, "ERROR : reading id-ctrl failed")
+        json_output = json.loads(proc.stdout.read())
+        self.assertTrue(field in json_output,
+                        f"ERROR : reading field '{field}' failed")
+        return str(json_output[field])
 
     def get_ocfs(self):
         """ Wrapper for extracting optional copy formats supported
@@ -238,11 +311,7 @@ class TestNVMe(unittest.TestCase):
             - Returns:
                 - Optional Copy Formats Supported
         """
-        pattern = re.compile(r'^ocfs\s*: 0x[0-9a-fA-F]+$')
-        output = subprocess.check_output(["nvme", "id-ctrl", self.ctrl], encoding='utf-8')
-        ocfs_line = next(line for line in output.splitlines() if pattern.match(line))
-        ocfs = ocfs_line.split(":")[1].strip()
-        return int(ocfs, 16)
+        return int(self.get_id_ctrl_field_value("ocfs"), 16)
 
     def get_format(self):
         """ Wrapper for extracting format.
@@ -253,7 +322,8 @@ class TestNVMe(unittest.TestCase):
         """
         # defaulting to 4K
         nvm_format = 4096
-        nvm_format_cmd = "nvme id-ns " + self.ctrl + " -n1"
+        nvm_format_cmd = f"{self.nvme_bin} id-ns {self.ctrl} " + \
+            f"--namespace-id={self.default_nsid}"
         proc = subprocess.Popen(nvm_format_cmd,
                                 shell=True,
                                 stdout=subprocess.PIPE,
@@ -261,10 +331,11 @@ class TestNVMe(unittest.TestCase):
         err = proc.wait()
         self.assertEqual(err, 0, "ERROR : reading nvm capacity failed")
 
+        # Not using json output here because parsing flbas makes this less
+        # readable as the format index is split into lower and upper bits
         for line in proc.stdout:
             if "in use" in line:
                 nvm_format = 2 ** int(line.split(":")[3].split()[0])
-        print(nvm_format)
         return int(nvm_format)
 
     def delete_all_ns(self):
@@ -274,15 +345,19 @@ class TestNVMe(unittest.TestCase):
             - Returns:
                 - None
         """
-        delete_ns_cmd = "nvme delete-ns " + self.ctrl + " -n 0xFFFFFFFF"
+        delete_ns_cmd = f"{self.nvme_bin} delete-ns {self.ctrl} " + \
+            "--namespace-id=0xFFFFFFFF"
         self.assertEqual(self.exec_cmd(delete_ns_cmd), 0)
-        list_ns_cmd = "nvme list-ns " + self.ctrl + " --all | wc -l"
+        list_ns_cmd = f"{self.nvme_bin} list-ns {self.ctrl} --all " + \
+            "--output-format=json"
         proc = subprocess.Popen(list_ns_cmd,
                                 shell=True,
                                 stdout=subprocess.PIPE,
                                 encoding='utf-8')
-        output = proc.stdout.read().strip()
-        self.assertEqual(output, '0', "ERROR : deleting all namespace failed")
+        self.assertEqual(proc.wait(), 0, "ERROR : nvme list-ns failed")
+        json_output = json.loads(proc.stdout.read())
+        self.assertEqual(len(json_output['nsid_list']), 0,
+                         "ERROR : deleting all namespace failed")
 
     def create_ns(self, nsze, ncap, flbas, dps):
         """ Wrapper for creating a namespace.
@@ -294,9 +369,9 @@ class TestNVMe(unittest.TestCase):
             - Returns:
                 - return code of the nvme create namespace command.
         """
-        create_ns_cmd = "nvme create-ns " + self.ctrl + " --nsze=" + \
-                        str(nsze) + " --ncap=" + str(ncap) + \
-                        " --flbas=" + str(flbas) + " --dps=" + str(dps)
+        create_ns_cmd = f"{self.nvme_bin} create-ns {self.ctrl} " + \
+            f"--nsze={str(nsze)} --ncap={str(ncap)} --flbas={str(flbas)} " + \
+            f"--dps={str(dps)}"
         return self.exec_cmd(create_ns_cmd)
 
     def create_and_validate_ns(self, nsid, nsze, ncap, flbas, dps):
@@ -312,12 +387,11 @@ class TestNVMe(unittest.TestCase):
         """
         err = self.create_ns(nsze, ncap, flbas, dps)
         if err == 0:
-            time.sleep(2)
-            id_ns_cmd = "nvme id-ns " + self.ctrl + " -n " + str(nsid)
+            id_ns_cmd = f"{self.nvme_bin} id-ns {self.ctrl} " + \
+                f"--namespace-id={str(nsid)}"
             err = subprocess.call(id_ns_cmd,
                                   shell=True,
-                                  stdout=subprocess.PIPE,
-                                  encoding='utf-8')
+                                  stdout=subprocess.DEVNULL)
         return err
 
     def attach_ns(self, ctrl_id, ns_id):
@@ -328,18 +402,14 @@ class TestNVMe(unittest.TestCase):
             - Returns:
                 - 0 on success, error code on failure.
         """
-        attach_ns_cmd = "nvme attach-ns " + self.ctrl + \
-                        " --namespace-id=" + str(ns_id) + \
-                        " --controllers=" + ctrl_id
+        attach_ns_cmd = f"{self.nvme_bin} attach-ns {self.ctrl} " + \
+            f"--namespace-id={str(ns_id)} --controllers={ctrl_id}"
         err = subprocess.call(attach_ns_cmd,
                               shell=True,
-                              stdout=subprocess.PIPE,
-                              encoding='utf-8')
-        time.sleep(5)
+                              stdout=subprocess.DEVNULL)
         if err == 0:
             # enumerate new namespace block device
             self.nvme_reset_ctrl()
-            time.sleep(5)
             # check if new namespace block device exists
             err = 0 if stat.S_ISBLK(os.stat(self.ns1).st_mode) else 1
         return err
@@ -352,13 +422,11 @@ class TestNVMe(unittest.TestCase):
             - Returns:
                 - 0 on success, error code on failure.
         """
-        detach_ns_cmd = "nvme detach-ns " + self.ctrl + \
-                        " --namespace-id=" + str(nsid) + \
-                        " --controllers=" + ctrl_id
+        detach_ns_cmd = f"{self.nvme_bin} detach-ns {self.ctrl} " + \
+            f"--namespace-id={str(nsid)} --controllers={ctrl_id}"
         return subprocess.call(detach_ns_cmd,
                                shell=True,
-                               stdout=subprocess.PIPE,
-                               encoding='utf-8')
+                               stdout=subprocess.DEVNULL)
 
     def delete_and_validate_ns(self, nsid):
         """ Wrapper for deleting and validating that namespace is deleted.
@@ -368,11 +436,11 @@ class TestNVMe(unittest.TestCase):
                 - 0 on success, 1 on failure.
         """
         # delete the namespace
-        delete_ns_cmd = "nvme delete-ns " + self.ctrl + " -n " + str(nsid)
+        delete_ns_cmd = f"{self.nvme_bin} delete-ns {self.ctrl} " + \
+            f"--namespace-id={str(nsid)}"
         err = subprocess.call(delete_ns_cmd,
                               shell=True,
-                              stdout=subprocess.PIPE,
-                              encoding='utf-8')
+                              stdout=subprocess.DEVNULL)
         self.assertEqual(err, 0, "ERROR : delete namespace failed")
         return err
 
@@ -383,33 +451,14 @@ class TestNVMe(unittest.TestCase):
             - Returns:
                 - 0 on success, error code on failure.
         """
-        smart_log_cmd = "nvme smart-log " + self.ctrl + " -n " + str(nsid)
-        print(smart_log_cmd)
+        smart_log_cmd = f"{self.nvme_bin} smart-log {self.ctrl} " + \
+            f"--namespace-id={str(nsid)}"
         proc = subprocess.Popen(smart_log_cmd,
                                 shell=True,
                                 stdout=subprocess.PIPE,
                                 encoding='utf-8')
         err = proc.wait()
         self.assertEqual(err, 0, "ERROR : nvme smart log failed")
-
-        for line in proc.stdout:
-            if "data_units_read" in line:
-                data_units_read = \
-                    line.replace(",", "", 1)
-            if "data_units_written" in line:
-                data_units_written = \
-                    line.replace(",", "", 1)
-            if "host_read_commands" in line:
-                host_read_commands = \
-                    line.replace(",", "", 1)
-            if "host_write_commands" in line:
-                host_write_commands = \
-                    line.replace(",", "", 1)
-
-        print("data_units_read " + data_units_read)
-        print("data_units_written " + data_units_written)
-        print("host_read_commands " + host_read_commands)
-        print("host_write_commands " + host_write_commands)
         return err
 
     def get_id_ctrl(self, vendor=False):
@@ -420,10 +469,10 @@ class TestNVMe(unittest.TestCase):
               - 0 on success, error code on failure.
         """
         if not vendor:
-            id_ctrl_cmd = "nvme id-ctrl " + self.ctrl
+            id_ctrl_cmd = f"{self.nvme_bin} id-ctrl {self.ctrl}"
         else:
-            id_ctrl_cmd = "nvme id-ctrl -v " + self.ctrl
-        print(id_ctrl_cmd)
+            id_ctrl_cmd = f"{self.nvme_bin} id-ctrl " +\
+                f"--vendor-specific {self.ctrl}"
         proc = subprocess.Popen(id_ctrl_cmd,
                                 shell=True,
                                 stdout=subprocess.PIPE,
@@ -439,14 +488,15 @@ class TestNVMe(unittest.TestCase):
             - Returns:
                 - 0 on success, error code on failure.
         """
-        pattern = re.compile("^ Entry\[[ ]*[0-9]+\]")
-        error_log_cmd = "nvme error-log " + self.ctrl
+        pattern = re.compile(r"^ Entry\[[ ]*[0-9]+\]")
+        error_log_cmd = f"{self.nvme_bin} error-log {self.ctrl}"
         proc = subprocess.Popen(error_log_cmd,
                                 shell=True,
                                 stdout=subprocess.PIPE,
                                 encoding='utf-8')
         err = proc.wait()
         self.assertEqual(err, 0, "ERROR : nvme error log failed")
+        # This sanity checkes the 'normal' output
         line = proc.stdout.readline()
         err_log_entry_count = int(line.split(" ")[5].strip().split(":")[1])
         entry_count = 0
@@ -456,49 +506,27 @@ class TestNVMe(unittest.TestCase):
 
         return 0 if err_log_entry_count == entry_count else 1
 
-    def run_ns_io(self, nsid, lbads):
+    def run_ns_io(self, nsid, lbads, count=10):
         """ Wrapper to run ios on namespace under test.
             - Args:
                 - lbads : LBA Data size supported in power of 2 format.
             - Returns:
                 - None
         """
-        block_size = mmap.PAGESIZE if int(lbads) < 9 else 2 ** int(lbads)
+        (ds, _) = self.get_lba_format_size()
+        block_size = ds if int(lbads) < 9 else 2 ** int(lbads)
         ns_path = self.ctrl + "n" + str(nsid)
         io_cmd = "dd if=" + ns_path + " of=/dev/null" + " bs=" + \
-                 str(block_size) + " count=10 > /dev/null 2>&1"
-        print(io_cmd)
+                 str(block_size) + " count=" + str(count) + " > /dev/null 2>&1"
+        print(f"Running io: {io_cmd}")
         run_io = subprocess.Popen(io_cmd, shell=True, stdout=subprocess.PIPE,
                                   encoding='utf-8')
         run_io_result = run_io.communicate()[1]
         self.assertEqual(run_io_result, None)
         io_cmd = "dd if=/dev/zero of=" + ns_path + " bs=" + \
-                 str(block_size) + " count=10 > /dev/null 2>&1"
-        print(io_cmd)
+                 str(block_size) + " count=" + str(count) + " > /dev/null 2>&1"
+        print(f"Running io: {io_cmd}")
         run_io = subprocess.Popen(io_cmd, shell=True, stdout=subprocess.PIPE,
                                   encoding='utf-8')
         run_io_result = run_io.communicate()[1]
         self.assertEqual(run_io_result, None)
-
-    def supp_check_id_ctrl(self, key):
-        """ Wrapper for support check.
-            - Args:
-                - key : search key.
-            - Returns:
-                - value for key requested.
-        """
-        id_ctrl = "nvme id-ctrl " + self.ctrl
-        print("\n" + id_ctrl)
-        proc = subprocess.Popen(id_ctrl,
-                                shell=True,
-                                stdout=subprocess.PIPE,
-                                encoding='utf-8')
-        err = proc.wait()
-        self.assertEqual(err, 0, "ERROR : nvme Identify controller Data \
-                         structure failed")
-        for line in proc.stdout:
-            if key in line:
-                key = line.replace(",", "", 1)
-        print(key)
-        val = (key.split(':'))[1].strip()
-        return int(val, 16)

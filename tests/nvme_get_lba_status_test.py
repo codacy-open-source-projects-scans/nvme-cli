@@ -26,11 +26,12 @@ class TestNVMeGetLbaStatusCmd(TestNVMe):
     def setUp(self):
         """ Pre Section for TestNVMeGetLbaStatusCmd. """
         super().setUp()
+        if not self.get_lba_status_supported():
+            self.skipTest("because: Optional Admin Command 'Get LBA Status' (OACS->GLSS) not supported")
         self.start_lba = 0
         self.block_count = 0
-        self.namespace = 1
         self.max_dw = 1
-        self.action = 11
+        self.action = 0x11
         self.range_len = 1
         self.setup_log_dir(self.__class__.__name__)
 
@@ -49,21 +50,17 @@ class TestNVMeGetLbaStatusCmd(TestNVMe):
             - Returns:
                 - 0 on success, error code on failure.
         """
-        err = 0
-        get_lba_status_cmd = "nvme get-lba-status " + self.ctrl + \
-                             " --namespace-id=" + str(self.namespace) + \
-                             " --start-lba=" + str(self.start_lba) + \
-                             " --max-dw=" + str(self.max_dw) + \
-                             " --action=" + str(self.action) + \
-                             " --range-len=" + str(self.range_len)
+        get_lba_status_cmd = f"{self.nvme_bin} get-lba-status {self.ctrl} " + \
+            f"--namespace-id={str(self.ns1)} " + \
+            f"--start-lba={str(self.start_lba)} " + \
+            f"--max-dw={str(self.max_dw)} " + \
+            f"--action={str(self.action)} " + \
+            f"--range-len={str(self.range_len)}"
         proc = subprocess.Popen(get_lba_status_cmd,
                                 shell=True,
                                 stdout=subprocess.PIPE,
                                 encoding='utf-8')
-        get_lba_status_output = proc.communicate()[0]
-        print("\n" + get_lba_status_output + "\n")
-        err = proc.wait()
-        return err
+        return proc.wait()
 
     def test_get_lba_status(self):
         """ Testcase main """

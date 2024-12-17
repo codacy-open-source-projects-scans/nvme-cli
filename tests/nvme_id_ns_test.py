@@ -42,7 +42,7 @@ class TestNVMeIdentifyNamespace(TestNVMe):
         """ Pre Section for TestNVMeIdentifyNamespace. """
         super().setUp()
         self.setup_log_dir(self.__class__.__name__)
-        self.ns_list = self.get_ns_list()
+        self.nsid_list = self.get_nsid_list()
 
     def tearDown(self):
         """
@@ -60,16 +60,13 @@ class TestNVMeIdentifyNamespace(TestNVMe):
             - Returns:
                 - 0 on success, error code on failure.
         """
-        err = 0
-        id_ns_cmd = "nvme id-ns " + self.ctrl + "n" + str(nsid)
+        id_ns_cmd = f"{self.nvme_bin} id-ns {self.ctrl} " + \
+            f"--namespace-id={str(nsid)}"
         proc = subprocess.Popen(id_ns_cmd,
                                 shell=True,
                                 stdout=subprocess.PIPE,
                                 encoding='utf-8')
-        id_ns_output = proc.communicate()[0]
-        print(id_ns_output + "\n")
-        err = proc.wait()
-        return err
+        return proc.wait()
 
     def get_id_ns_all(self):
         """
@@ -80,7 +77,7 @@ class TestNVMeIdentifyNamespace(TestNVMe):
                 - 0 on success, error code on failure.
         """
         err = 0
-        for namespace in self.ns_list:
+        for namespace in self.nsid_list:
             err = self.get_id_ns(str(namespace))
         return err
 

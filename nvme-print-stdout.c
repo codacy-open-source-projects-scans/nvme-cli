@@ -518,6 +518,9 @@ static void stdout_persistent_event_log(void *pevent_log_info,
 			printf("Over Temperature: %u\n", thermal_exc_event->over_temp);
 			printf("Threshold: %u\n", thermal_exc_event->threshold);
 			break;
+		case NVME_PEL_SANITIZE_MEDIA_VERIF_EVENT:
+			printf("Sanitize Media Verification Event\n");
+			break;
 		default:
 			printf("Reserved Event\n\n");
 			break;
@@ -1136,7 +1139,7 @@ static void stdout_registers_cap(struct nvme_bar_cap *cap)
 	printf("\tDoorbell Stride                   (DSTRD): %u bytes\n", 1 << (2 + cap->dstrd));
 	printf("\tTimeout                              (TO): %u ms\n", cap->to * 500);
 	printf("\tArbitration Mechanism Supported     (AMS): Weighted Round Robin with Urgent Priority Class is %s\n",
-	       cap->ams & 0x02 ? "Supported" : "Not supported");
+	       cap->ams & 0x01 ? "Supported" : "Not supported");
 	printf("\tContiguous Queues Required          (CQR): %s\n", cap->cqr ? "Yes" : "No");
 	printf("\tMaximum Queue Entries Supported    (MQES): %u\n\n", cap->mqes + 1);
 }
@@ -1688,29 +1691,38 @@ static void stdout_id_ctrl_cmic(__u8 cmic)
 static void stdout_id_ctrl_oaes(__le32 ctrl_oaes)
 {
 	__u32 oaes = le32_to_cpu(ctrl_oaes);
-	__u32 disc = (oaes & NVME_CTRL_OAES_DL) >> 31;
-	__u32 rsvd0 = (oaes & 0x70000000) >> 28;
-	__u32 zicn = (oaes & NVME_CTRL_OAES_ZD) >> 27;
-	__u32 rsvd1 = (oaes & 0x7fe0000) >> 17;
-	__u32 tthr = (oaes & 0x10000) >> 16;
+	__u32 dlpcn = (oaes & NVME_CTRL_OAES_DL) >> 31;
+	__u32 rsvd28 = (oaes & 0x70000000) >> 28;
+	__u32 zdcn = (oaes & NVME_CTRL_OAES_ZD) >> 27;
+	__u32 rsvd20 = (oaes & 0x7fe0000) >> 20;
+	__u32 ansan = (oaes & NVME_CTRL_OAES_ANSAN) >> 19;
+	__u32 rsvd18 = (oaes >> 18) & 0x1;
+	__u32 rgcns = (oaes & NVME_CTRL_OAES_RGCNS) >> 17;
+	__u32 tthr = (oaes & NVME_CTRL_OAES_TTH) >> 16;
 	__u32 normal_shn = (oaes & NVME_CTRL_OAES_NS) >> 15;
 	__u32 egealpcn = (oaes & NVME_CTRL_OAES_EGE) >> 14;
 	__u32 lbasin = (oaes & NVME_CTRL_OAES_LBAS) >> 13;
 	__u32 plealcn = (oaes & NVME_CTRL_OAES_PLEA) >> 12;
 	__u32 anacn = (oaes & NVME_CTRL_OAES_ANA) >> 11;
-	__u32 rsvd2 = (oaes >> 10) & 0x1;
+	__u32 rsvd10 = (oaes >> 10) & 0x1;
 	__u32 fan = (oaes & NVME_CTRL_OAES_FA) >> 9;
 	__u32 nace = (oaes & NVME_CTRL_OAES_NA) >> 8;
-	__u32 rsvd3 = oaes & 0xFF;
+	__u32 rsvd0 = oaes & 0xFF;
 
 	printf("  [31:31] : %#x\tDiscovery Log Change Notice %sSupported\n",
-			disc, disc ? "" : "Not ");
-	if (rsvd0)
-		printf("  [30:28] : %#x\tReserved\n", rsvd0);
+			dlpcn, dlpcn ? "" : "Not ");
+	if (rsvd28)
+		printf("  [30:28] : %#x\tReserved\n", rsvd28);
 	printf("  [27:27] : %#x\tZone Descriptor Changed Notices %sSupported\n",
-			zicn, zicn ? "" : "Not ");
-	if (rsvd1)
-		printf("  [26:17] : %#x\tReserved\n", rsvd1);
+			zdcn, zdcn ? "" : "Not ");
+	if (rsvd20)
+		printf("  [26:20] : %#x\tReserved\n", rsvd20);
+	printf("  [19:19] : %#x\tAllocated Namespace Attribute Notices %sSupported\n",
+			ansan, ansan ? "" : "Not ");
+	if (rsvd18)
+		printf("  [18:18] : %#x\tReserved\n", rsvd18);
+	printf("  [17:17] : %#x\tReachability Groups Change Notices %sSupported\n",
+			rgcns, rgcns ? "" : "Not ");
 	printf("  [16:16] : %#x\tTemperature Threshold Hysteresis Recovery %sSupported\n",
 		tthr, tthr ? "" : "Not ");
 	printf("  [15:15] : %#x\tNormal NSS Shutdown Event %sSupported\n",
@@ -1725,14 +1737,14 @@ static void stdout_id_ctrl_oaes(__le32 ctrl_oaes)
 			plealcn, plealcn ? "" : "Not ");
 	printf("  [11:11] : %#x\tAsymmetric Namespace Access Change Notices"\
 			" %sSupported\n", anacn, anacn ? "" : "Not ");
-	if (rsvd2)
-		printf("  [10:10] : %#x\tReserved\n", rsvd2);
+	if (rsvd10)
+		printf("  [10:10] : %#x\tReserved\n", rsvd10);
 	printf("  [9:9] : %#x\tFirmware Activation Notices %sSupported\n",
 		fan, fan ? "" : "Not ");
 	printf("  [8:8] : %#x\tNamespace Attribute Changed Event %sSupported\n",
 		nace, nace ? "" : "Not ");
-	if (rsvd3)
-		printf("  [7:0] : %#x\tReserved\n", rsvd3);
+	if (rsvd0)
+		printf("  [7:0] : %#x\tReserved\n", rsvd0);
 	printf("\n");
 }
 
@@ -1740,33 +1752,33 @@ static void stdout_id_ctrl_ctratt(__le32 ctrl_ctratt)
 {
 	__u32 ctratt = le32_to_cpu(ctrl_ctratt);
 	__u32 rsvd20 = (ctratt >> 20);
-	__u32 fdps = (ctratt >> 19) & 0x1;
-	__u32 rsvd18 = (ctratt >> 18) & 0x1;
-	__u32 hmbr = (ctratt >> 17) & 0x1;
-	__u32 mem = (ctratt >> 16) & 0x1;
-	__u32 elbas = (ctratt >> 15) & 0x1;
-	__u32 delnvmset = (ctratt >> 14) & 0x1;
-	__u32 delegrp = (ctratt >> 13) & 0x1;
-	__u32 vcap = (ctratt >> 12) & 0x1;
-	__u32 fcap = (ctratt >> 11) & 0x1;
-	__u32 mds = (ctratt >> 10) & 0x1;
-	__u32 hostid128 = (ctratt & NVME_CTRL_CTRATT_128_ID) >> 0;
-	__u32 psp = (ctratt & NVME_CTRL_CTRATT_NON_OP_PSP) >> 1;
-	__u32 sets = (ctratt & NVME_CTRL_CTRATT_NVM_SETS) >> 2;
-	__u32 rrl = (ctratt & NVME_CTRL_CTRATT_READ_RECV_LVLS) >> 3;
-	__u32 eg = (ctratt & NVME_CTRL_CTRATT_ENDURANCE_GROUPS) >> 4;
-	__u32 iod = (ctratt & NVME_CTRL_CTRATT_PREDICTABLE_LAT) >> 5;
-	__u32 tbkas = (ctratt & NVME_CTRL_CTRATT_TBKAS) >> 6;
-	__u32 ng = (ctratt & NVME_CTRL_CTRATT_NAMESPACE_GRANULARITY) >> 7;
+	__u32 fdps = (ctratt & NVME_CTRL_CTRATT_FDPS) >> 19;
+	__u32 rhii = (ctratt & NVME_CTRL_CTRATT_RHII) >> 18;
+	__u32 hmbr = (ctratt & NVME_CTRL_CTRATT_HMBR) >> 17;
+	__u32 mem = (ctratt & NVME_CTRL_CTRATT_MEM) >> 16;
+	__u32 elbas = (ctratt & NVME_CTRL_CTRATT_ELBAS) >> 15;
+	__u32 dnvms = (ctratt & NVME_CTRL_CTRATT_DEL_NVM_SETS) >> 14;
+	__u32 deg = (ctratt & NVME_CTRL_CTRATT_DEL_ENDURANCE_GROUPS) >> 13;
+	__u32 vcm = (ctratt & NVME_CTRL_CTRATT_VARIABLE_CAP) >> 12;
+	__u32 fcm = (ctratt & NVME_CTRL_CTRATT_FIXED_CAP) >> 11;
+	__u32 mds = (ctratt & NVME_CTRL_CTRATT_MDS) >> 10;
+	__u32 ulist = (ctratt & NVME_CTRL_CTRATT_UUID_LIST) >> 9;
 	__u32 sqa = (ctratt & NVME_CTRL_CTRATT_SQ_ASSOCIATIONS) >> 8;
-	__u32 uuidlist = (ctratt & NVME_CTRL_CTRATT_UUID_LIST) >> 9;
+	__u32 ng = (ctratt & NVME_CTRL_CTRATT_NAMESPACE_GRANULARITY) >> 7;
+	__u32 tbkas = (ctratt & NVME_CTRL_CTRATT_TBKAS) >> 6;
+	__u32 plm = (ctratt & NVME_CTRL_CTRATT_PREDICTABLE_LAT) >> 5;
+	__u32 egs = (ctratt & NVME_CTRL_CTRATT_ENDURANCE_GROUPS) >> 4;
+	__u32 rrlvls = (ctratt & NVME_CTRL_CTRATT_READ_RECV_LVLS) >> 3;
+	__u32 nsets = (ctratt & NVME_CTRL_CTRATT_NVM_SETS) >> 2;
+	__u32 nopspm = (ctratt & NVME_CTRL_CTRATT_NON_OP_PSP) >> 1;
+	__u32 hids = (ctratt & NVME_CTRL_CTRATT_128_ID) >> 0;
 
 	if (rsvd20)
 		printf(" [31:20] : %#x\tReserved\n", rsvd20);
 	printf("  [19:19] : %#x\tFlexible Data Placement %sSupported\n",
 		fdps, fdps ? "" : "Not ");
-	if (rsvd18)
-		printf("  [18:18] : %#x\tReserved\n", rsvd18);
+	printf("  [18:18] : %#x\tReservations and Host Identifier Interaction %sSupported\n",
+		rhii, rhii ? "" : "Not ");
 	printf("  [17:17] : %#x\tHMB Restrict Non-Operational Power State Access %sSupported\n",
 		hmbr, hmbr ? "" : "Not ");
 	printf("  [16:16] : %#x\tMDTS and Size Limits Exclude Metadata %sSupported\n",
@@ -1774,17 +1786,17 @@ static void stdout_id_ctrl_ctratt(__le32 ctrl_ctratt)
 	printf("  [15:15] : %#x\tExtended LBA Formats %sSupported\n",
 		elbas, elbas ? "" : "Not ");
 	printf("  [14:14] : %#x\tDelete NVM Set %sSupported\n",
-		delnvmset, delnvmset ? "" : "Not ");
+		dnvms, dnvms ? "" : "Not ");
 	printf("  [13:13] : %#x\tDelete Endurance Group %sSupported\n",
-		delegrp, delegrp ? "" : "Not ");
+		deg, deg ? "" : "Not ");
 	printf("  [12:12] : %#x\tVariable Capacity Management %sSupported\n",
-		vcap, vcap ? "" : "Not ");
+		vcm, vcm ? "" : "Not ");
 	printf("  [11:11] : %#x\tFixed Capacity Management %sSupported\n",
-		fcap, fcap ? "" : "Not ");
+		fcm, fcm ? "" : "Not ");
 	printf("  [10:10] : %#x\tMulti Domain Subsystem %sSupported\n",
 		mds, mds ? "" : "Not ");
 	printf("  [9:9] : %#x\tUUID List %sSupported\n",
-		uuidlist, uuidlist ? "" : "Not ");
+		ulist, ulist ? "" : "Not ");
 	printf("  [8:8] : %#x\tSQ Associations %sSupported\n",
 		sqa, sqa ? "" : "Not ");
 	printf("  [7:7] : %#x\tNamespace Granularity %sSupported\n",
@@ -1792,17 +1804,70 @@ static void stdout_id_ctrl_ctratt(__le32 ctrl_ctratt)
 	printf("  [6:6] : %#x\tTraffic Based Keep Alive %sSupported\n",
 		tbkas, tbkas ? "" : "Not ");
 	printf("  [5:5] : %#x\tPredictable Latency Mode %sSupported\n",
-		iod, iod ? "" : "Not ");
+		plm, plm ? "" : "Not ");
 	printf("  [4:4] : %#x\tEndurance Groups %sSupported\n",
-		eg, eg ? "" : "Not ");
+		egs, egs ? "" : "Not ");
 	printf("  [3:3] : %#x\tRead Recovery Levels %sSupported\n",
-		rrl, rrl ? "" : "Not ");
+		rrlvls, rrlvls ? "" : "Not ");
 	printf("  [2:2] : %#x\tNVM Sets %sSupported\n",
-		sets, sets ? "" : "Not ");
+		nsets, nsets ? "" : "Not ");
 	printf("  [1:1] : %#x\tNon-Operational Power State Permissive %sSupported\n",
-		psp, psp ? "" : "Not ");
+		nopspm, nopspm ? "" : "Not ");
 	printf("  [0:0] : %#x\t128-bit Host Identifier %sSupported\n",
-		hostid128, hostid128 ? "" : "Not ");
+		hids, hids ? "" : "Not ");
+	printf("\n");
+}
+
+static void stdout_id_ctrl_bpcap(__u8 ctrl_bpcap)
+{
+	__u8 rsvd3 = (ctrl_bpcap >> 3);
+	__u8 sfbpwps = NVME_GET(ctrl_bpcap, CTRL_BACAP_SFBPWPS);
+	__u8 rpmbbpwps = NVME_GET(ctrl_bpcap, CTRL_BACAP_RPMBBPWPS);
+	static const char * const rpmbbpwps_def[] = {
+		"Support Not Specified",
+		"Not Supported",
+		"Supported"
+	};
+
+	if (rsvd3)
+		printf(" [7:3] : %#x\tReserved\n", rsvd3);
+
+	printf("  [2:2] : %#x\tSet Features Boot Partition Write Protection %sSupported\n",
+		sfbpwps, sfbpwps ? "" : "Not ");
+	printf("  [1:0] : %#x\tRPMB Boot Partition Write Protection %s\n",
+		rpmbbpwps, rpmbbpwps_def[rpmbbpwps]);
+	printf("\n");
+}
+
+static void stdout_id_ctrl_plsi(__u8 ctrl_plsi)
+{
+	__u8 rsvd2 = (ctrl_plsi >> 2);
+	__u8 plsfq = NVME_GET(ctrl_plsi, CTRL_PLSI_PLSFQ);
+	__u8 plsepf = NVME_GET(ctrl_plsi, CTRL_PLSI_PLSEPF);
+
+	if (rsvd2)
+		printf(" [7:2] : %#x\tReserved\n", rsvd2);
+
+	printf("  [1:1] : %#x\tPower Loss Signaling with Forced Quiescence %sSupported\n",
+		plsfq, plsfq ? "" : "Not ");
+	printf("  [0:0] : %#x\tPower Loss Signaling with Emergency Power Fail %sSupported\n",
+		plsepf, plsepf ? "" : "Not ");
+	printf("\n");
+}
+
+static void stdout_id_ctrl_crcap(__u8 ctrl_crcap)
+{
+	__u8 rsvd2 = (ctrl_crcap >> 2);
+	__u8 rgidc = NVME_GET(ctrl_crcap, CTRL_CRCAP_RGIDC);
+	__u8 rrsup = NVME_GET(ctrl_crcap, CTRL_CRCAP_RRSUP);
+
+	if (rsvd2)
+		printf(" [7:2] : %#x\tReserved\n", rsvd2);
+
+	printf("  [1:1] : %#x\tRGRPID %s while the namespace is attached to any controller.\n",
+		rgidc, rgidc ? "does not change" : "may change");
+	printf("  [0:0] : %#x\tReachability Reporting %sSupported\n",
+		rrsup, rrsup ? "" : "Not ");
 	printf("\n");
 }
 
@@ -1868,8 +1933,9 @@ static void stdout_id_ctrl_mec(__u8 mec)
 static void stdout_id_ctrl_oacs(__le16 ctrl_oacs)
 {
 	__u16 oacs = le16_to_cpu(ctrl_oacs);
-	__u16 rsvd = (oacs & 0xF800) >> 11;
-	__u16 lock = (oacs >> 10) & 0x1;
+	__u16 rsvd = (oacs & 0xF000) >> 12;
+	__u16 hmlms = (oacs & 0x800) >> 11;
+	__u16 lock = (oacs & 0x400) >> 10;
 	__u16 glbas = (oacs & 0x200) >> 9;
 	__u16 dbc = (oacs & 0x100) >> 8;
 	__u16 vir = (oacs & 0x80) >> 7;
@@ -1882,7 +1948,9 @@ static void stdout_id_ctrl_oacs(__le16 ctrl_oacs)
 	__u16 sec = oacs & 0x1;
 
 	if (rsvd)
-		printf(" [15:11] : %#x\tReserved\n", rsvd);
+		printf(" [15:12] : %#x\tReserved\n", rsvd);
+	printf("  [11:11] : %#x\tHost Managed Live Migration %sSupported\n",
+		hmlms, hmlms ? "" : "Not ");
 	printf("  [10:10] : %#x\tLockdown Command and Feature %sSupported\n",
 		lock, lock ? "" : "Not ");
 	printf("  [9:9] : %#x\tGet LBA Status Capability %sSupported\n",
@@ -2131,6 +2199,22 @@ static void stdout_id_ctrl_anacap(__u8 anacap)
 	printf("\n");
 }
 
+static void stdout_id_ctrl_kpioc(__u8 ctrl_kpioc)
+{
+	__u8 rsvd2 = (ctrl_kpioc >> 2);
+	__u8 kpiosc = NVME_GET(ctrl_kpioc, CTRL_KPIOC_KPIOSC);
+	__u8 kpios = NVME_GET(ctrl_kpioc, CTRL_KPIOC_KPIOS);
+
+	if (rsvd2)
+		printf(" [7:2] : %#x\tReserved\n", rsvd2);
+
+	printf("  [1:1] : %#x\tKey Per I/O capability %s to all namespaces\n",
+		kpiosc, kpiosc ? "applies" : "Not apply");
+	printf("  [0:0] : %#x\tKey Per I/O capability %sSupported\n",
+		kpios, kpios ? "" : "Not ");
+	printf("\n");
+}
+
 static void stdout_id_ctrl_tmpthha(__u8 tmpthha)
 {
 	__u8 rsvd3 = (tmpthha & 0xf8) >> 3;
@@ -2166,7 +2250,9 @@ static void stdout_id_ctrl_cqes(__u8 cqes)
 static void stdout_id_ctrl_oncs(__le16 ctrl_oncs)
 {
 	__u16 oncs = le16_to_cpu(ctrl_oncs);
-	__u16 rsvd = oncs >> 11;
+	__u16 rsvd13 = oncs >> 13;
+	bool nszs = !!(oncs & NVME_CTRL_ONCS_NAMESPACE_ZEROES);
+	bool maxwzd = !!(oncs & NVME_CTRL_ONCS_WRITE_ZEROES_DEALLOCATE);
 	bool afc  = !!(oncs & NVME_CTRL_ONCS_ALL_FAST_COPY);
 	bool csa  = !!(oncs & NVME_CTRL_ONCS_COPY_SINGLE_ATOMICITY);
 	bool copy = !!(oncs & NVME_CTRL_ONCS_COPY);
@@ -2179,8 +2265,12 @@ static void stdout_id_ctrl_oncs(__le16 ctrl_oncs)
 	bool wunc = !!(oncs & NVME_CTRL_ONCS_WRITE_UNCORRECTABLE);
 	bool cmp  = !!(oncs & NVME_CTRL_ONCS_COMPARE);
 
-	if (rsvd)
-		printf(" [15:11] : %#x\tReserved\n", rsvd);
+	if (rsvd13)
+		printf("  [15:13] : %#x\tReserved\n", rsvd13);
+	printf("  [12:12] : %#x\tNamespace Zeroes %sSupported\n",
+		nszs, nszs ? "" : "Not ");
+	printf("  [11:11] : %#x\tMaximum Write Zeroes with Deallocate %sSupported\n",
+		maxwzd, maxwzd ? "" : "Not ");
 	printf("  [10:10] : %#x\tAll Fast Copy %sSupported\n",
 		afc, afc ? "" : "Not ");
 	printf("  [9:9] : %#x\tCopy Single Atomicity %sSupported\n",
@@ -2360,6 +2450,24 @@ static void stdout_id_ctrl_sgls(__le32 ctrl_sgls)
 			" No Dword alignment required.\n", sglsp);
 	else
 		printf(" [1:0]  : %#x\tScatter-Gather Lists Not Supported\n", sglsp);
+	printf("\n");
+}
+
+static void stdout_id_ctrl_trattr(__u8 ctrl_trattr)
+{
+	__u8 rsvd3 = (ctrl_trattr >> 3);
+	__u8 mrtll = NVME_GET(ctrl_trattr, CTRL_TRATTR_MRTLL);
+	__u8 tudcs = NVME_GET(ctrl_trattr, CTRL_TRATTR_TUDCS);
+	__u8 thmcs = NVME_GET(ctrl_trattr, CTRL_TRATTR_THMCS);
+
+	if (rsvd3)
+		printf(" [7:3] : %#x\tReserved\n", rsvd3);
+
+	printf("  [2:2] : %#x\tMemory Range Tracking Length Limit\n", mrtll);
+	printf("  [1:1] : %#x\tTracking User Data Changes %sSupported\n",
+		tudcs, tudcs ? "" : "Not ");
+	printf("  [0:0] : %#x\tTrack Host Memory Changes %sSupported\n",
+		thmcs, thmcs ? "" : "Not ");
 	printf("\n");
 }
 
@@ -2927,6 +3035,13 @@ static void stdout_id_ctrl(struct nvme_id_ctrl *ctrl,
 	if (human)
 		stdout_id_ctrl_ctratt(ctrl->ctratt);
 	printf("rrls      : %#x\n", le16_to_cpu(ctrl->rrls));
+	printf("bpcap     : %#x\n", le16_to_cpu(ctrl->bpcap));
+	if (human)
+		stdout_id_ctrl_bpcap(ctrl->bpcap);
+	printf("nssl      : %#x\n", le32_to_cpu(ctrl->nssl));
+	printf("plsi      : %u\n", ctrl->plsi);
+	if (human)
+		stdout_id_ctrl_plsi(ctrl->plsi);
 	printf("cntrltype : %d\n", ctrl->cntrltype);
 	if (human)
 		stdout_id_ctrl_cntrltype(ctrl->cntrltype);
@@ -2934,6 +3049,9 @@ static void stdout_id_ctrl(struct nvme_id_ctrl *ctrl,
 	printf("crdt1     : %u\n", le16_to_cpu(ctrl->crdt1));
 	printf("crdt2     : %u\n", le16_to_cpu(ctrl->crdt2));
 	printf("crdt3     : %u\n", le16_to_cpu(ctrl->crdt3));
+	printf("crcap     : %u\n", ctrl->crcap);
+	if (human)
+		stdout_id_ctrl_crcap(ctrl->crcap);
 	printf("nvmsr     : %u\n", ctrl->nvmsr);
 	if (human)
 		stdout_id_ctrl_nvmsr(ctrl->nvmsr);
@@ -3015,11 +3133,16 @@ static void stdout_id_ctrl(struct nvme_id_ctrl *ctrl,
 	printf("nanagrpid : %u\n", le32_to_cpu(ctrl->nanagrpid));
 	printf("pels      : %u\n", le32_to_cpu(ctrl->pels));
 	printf("domainid  : %d\n", le16_to_cpu(ctrl->domainid));
+	printf("kpioc     : %u\n", ctrl->kpioc);
+	if (human)
+		stdout_id_ctrl_kpioc(ctrl->kpioc);
+	printf("mptfawr   : %d\n", le16_to_cpu(ctrl->mptfawr));
 	printf("megcap    : %s\n",
 		uint128_t_to_l10n_string(le128_to_cpu(ctrl->megcap)));
 	printf("tmpthha   : %#x\n", ctrl->tmpthha);
 	if (human)
 		stdout_id_ctrl_tmpthha(ctrl->tmpthha);
+	printf("cqt       : %d\n", le16_to_cpu(ctrl->cqt));
 	printf("sqes      : %#x\n", ctrl->sqes);
 	if (human)
 		stdout_id_ctrl_sqes(ctrl->sqes);
@@ -3060,6 +3183,20 @@ static void stdout_id_ctrl(struct nvme_id_ctrl *ctrl,
 		uint128_t_to_l10n_string(le128_to_cpu(ctrl->maxdna)));
 	printf("maxcna    : %u\n", le32_to_cpu(ctrl->maxcna));
 	printf("oaqd      : %u\n", le32_to_cpu(ctrl->oaqd));
+	printf("rhiri     : %d\n", ctrl->rhiri);
+	printf("hirt      : %d\n", ctrl->hirt);
+	printf("cmmrtd    : %d\n", le16_to_cpu(ctrl->cmmrtd));
+	printf("nmmrtd    : %d\n", le16_to_cpu(ctrl->nmmrtd));
+	printf("minmrtg   : %d\n", ctrl->minmrtg);
+	printf("maxmrtg   : %d\n", ctrl->maxmrtg);
+	printf("trattr    : %d\n", ctrl->trattr);
+	if (human)
+		stdout_id_ctrl_trattr(ctrl->trattr);
+	printf("mcudmq    : %d\n", le16_to_cpu(ctrl->mcudmq));
+	printf("mnsudmq   : %d\n", le16_to_cpu(ctrl->mnsudmq));
+	printf("mcmr      : %d\n", le16_to_cpu(ctrl->mcmr));
+	printf("nmcmr     : %d\n", le16_to_cpu(ctrl->nmcmr));
+	printf("mcdqpc    : %d\n", le16_to_cpu(ctrl->mcdqpc));
 	printf("subnqn    : %-.*s\n", (int)sizeof(ctrl->subnqn), ctrl->subnqn);
 	printf("ioccsz    : %u\n", le32_to_cpu(ctrl->ioccsz));
 	printf("iorcsz    : %u\n", le32_to_cpu(ctrl->iorcsz));
@@ -3093,6 +3230,29 @@ static void stdout_id_ctrl_nvm_aocs(__u16 aocs)
 	printf("\n");
 }
 
+static void stdout_id_ctrl_nvm_ver(__u32 ver)
+{
+	printf("  NVM command set specification: %d.%d.%d\n\n", NVME_MAJOR(ver), NVME_MINOR(ver),
+	       NVME_TERTIARY(ver));
+}
+
+static void stdout_id_ctrl_nvm_lbamqf(__u8 lbamqf)
+{
+	printf("  0x%x: ", lbamqf);
+
+	switch (lbamqf) {
+	case NVME_ID_CTRL_NVM_LBAMQF_TYPE_0:
+		printf("LBA Migration Queue Entry Type 0\n\n");
+		break;
+	case NVME_ID_CTRL_NVM_LBAMQF_VENDOR_MIN ... NVME_ID_CTRL_NVM_LBAMQF_VENDOR_MAX:
+		printf("Vendor Specific\n\n");
+		break;
+	default:
+		printf("Reserved\n\n");
+		break;
+	}
+}
+
 static void stdout_id_ctrl_nvm(struct nvme_id_ctrl_nvm *ctrl_nvm)
 {
 	int verbose = stdout_print_ops.flags & VERBOSE;
@@ -3107,6 +3267,12 @@ static void stdout_id_ctrl_nvm(struct nvme_id_ctrl_nvm *ctrl_nvm)
 	printf("aocs   : %u\n", le16_to_cpu(ctrl_nvm->aocs));
 	if (verbose)
 		stdout_id_ctrl_nvm_aocs(le16_to_cpu(ctrl_nvm->aocs));
+	printf("ver    : 0x%x\n", le32_to_cpu(ctrl_nvm->ver));
+	if (verbose)
+		stdout_id_ctrl_nvm_ver(le32_to_cpu(ctrl_nvm->ver));
+	printf("lbamqf : %u\n", ctrl_nvm->lbamqf);
+	if (verbose)
+		stdout_id_ctrl_nvm_lbamqf(ctrl_nvm->lbamqf);
 }
 
 static void stdout_nvm_id_ns_pic(__u8 pic)
@@ -3908,12 +4074,34 @@ static void stdout_support_log_human(__u32 support, __u8 lid)
 {
 	const char *set = "supported";
 	const char *clr = "not supported";
+	__u16 lidsp = support >> 16;
 
 	printf("  LSUPP is %s\n", (support & 0x1) ? set : clr);
 	printf("  IOS is %s\n", ((support >> 0x1) & 0x1) ? set : clr);
-	if (lid == NVME_LOG_LID_PERSISTENT_EVENT) {
+
+	switch (lid) {
+	case NVME_LOG_LID_TELEMETRY_HOST:
+		printf("  Maximum Created Data Area is %s\n",
+			(lidsp & 0x1) ? set : clr);
+		break;
+	case NVME_LOG_LID_PERSISTENT_EVENT:
 		printf("  Establish Context and Read 512 Bytes of Header is %s\n",
-			((support >> 0x16) & 0x1) ? set : clr);
+			(lidsp & 0x1) ? set : clr);
+		break;
+	case NVME_LOG_LID_DISCOVER:
+		printf("  Extended Discovery Log Page Entry is %s\n",
+			(lidsp & 0x1) ? set : clr);
+		printf("  Port Local Entries Only is %s\n",
+			(lidsp & 0x2) ? set : clr);
+		printf("  All NVM Subsystem Entries is %s\n",
+			(lidsp & 0x4) ? set : clr);
+		break;
+	case NVME_LOG_LID_HOST_DISCOVER:
+		printf("  All Host Entries is %s\n",
+			(lidsp & 0x1) ? set : clr);
+		break;
+	default:
+		break;
 	}
 }
 
@@ -4184,29 +4372,49 @@ static void stdout_sanitize_log_sprog(__u32 sprog)
 static void stdout_sanitize_log_sstat(__u16 status)
 {
 	const char *str = nvme_sstat_status_to_string(status);
+	__u16 gde, mvcncld;
 
-	printf("\t[2:0]\t%s\n", str);
-	str = "Number of completed passes if most recent operation was overwrite";
-	printf("\t[7:3]\t%s:\t%u\n", str,
-		(status >> NVME_SANITIZE_SSTAT_COMPLETED_PASSES_SHIFT) &
-			NVME_SANITIZE_SSTAT_COMPLETED_PASSES_MASK);
+	printf("  [2:0] : Sanitize Operation Status  : %#x\t%s\n",
+		NVME_GET(status, SANITIZE_SSTAT_STATUS), str);
+	printf("  [7:3] : Overwrite Passes Completed : %u\n",
+		NVME_GET(status, SANITIZE_SSTAT_COMPLETED_PASSES));
 
-	printf("\t  [8]\t");
-	if (status & NVME_SANITIZE_SSTAT_GLOBAL_DATA_ERASED)
-		str = "Global Data Erased set: no NS LB in the NVM subsystem "\
-			"has been written to and no PMR in the NVM subsystem "\
-			"has been enabled";
+	gde = NVME_GET(status, SANITIZE_SSTAT_GLOBAL_DATA_ERASED);
+	if (gde)
+		str = "No user data has been written in the NVM subsystem and"\
+		       " no PMR has been enabled in the NVM subsystem";
 	else
-		str = "Global Data Erased cleared: a NS LB in the NVM "\
-			"subsystem has been written to or a PMR in the NVM "\
-			"subsystem has been enabled";
-	printf("%s\n", str);
+		str = "User data has been written in the NVM subsystem or"\
+		       " PMR has been enabled in the NVM subsystem";
+	printf("  [8:8] : Global Data Erased         : %#x\t%s\n", gde, str);
+
+	mvcncld = NVME_GET(status, SANITIZE_SSTAT_MVCNCLD);
+	printf("  [9:9] : Media Verification Canceled: %#x\t%scanceled\n",
+		mvcncld, mvcncld ? "" : "Not ");
+	printf("\n");
 }
 
 static void stdout_estimate_sanitize_time(const char *text, uint32_t value)
 {
 	printf("%s:  %u%s\n", text, value,
 		value == 0xffffffff ? " (No time period reported)" : "");
+}
+
+static void stdout_sanitize_log_ssi(__u8 ssi, __u16 status)
+{
+	__u8 sans, fails;
+	const char *str;
+
+	sans = NVME_GET(ssi, SANITIZE_SSI_SANS);
+	str = nvme_ssi_state_to_string(sans);
+	printf("  [3:0] : Sanitize State : %#x\t%s\n", sans, str);
+
+	if (status == NVME_SANITIZE_SSTAT_STATUS_COMPLETED_FAILED) {
+		fails = NVME_GET(ssi, SANITIZE_SSI_FAILS);
+		str = nvme_ssi_state_to_string(fails);
+		printf("  [7:4] : Failure State  : %#x\t%s\n", fails, str);
+	}
+	printf("\n");
 }
 
 static void stdout_sanitize_log(struct nvme_sanitize_log_page *sanitize,
@@ -4242,6 +4450,12 @@ static void stdout_sanitize_log(struct nvme_sanitize_log_page *sanitize,
 		le32_to_cpu(sanitize->etbend));
 	stdout_estimate_sanitize_time("Estimated Time For Crypto Erase (No-Deallocate)",
 		le32_to_cpu(sanitize->etcend));
+	stdout_estimate_sanitize_time("Estimated Time For Post-Verification Deallocation",
+		le32_to_cpu(sanitize->etpvds));
+
+	printf("Sanitize State Information               (SSI) : %#x\n", sanitize->ssi);
+	if (human)
+		stdout_sanitize_log_ssi(sanitize->ssi, status);
 }
 
 static void stdout_select_result(enum nvme_features_id fid, __u32 result)

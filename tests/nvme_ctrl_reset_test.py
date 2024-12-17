@@ -40,9 +40,11 @@ class TestNVMeCtrlReset(TestNVMe):
             - Returns:
                 - return code for nvme controller reset.
         """
-        ctrl_reset_cmd = "nvme reset " + self.ctrl
+        ctrl_reset_cmd = f"{self.nvme_bin} reset {self.ctrl}"
         return self.exec_cmd(ctrl_reset_cmd)
 
     def test_ctrl_reset(self):
         """ Testcase main """
         self.assertEqual(self.ctrl_reset(), 0)
+        # Check if sqs and cqs are setup again and I/O operations are possible
+        self.run_ns_io(self.default_nsid, 0, 10)

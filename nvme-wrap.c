@@ -119,6 +119,11 @@ int nvme_cli_get_features(struct nvme_dev *dev,
 	return do_admin_args_op(get_features, dev, args);
 }
 
+int nvme_cli_set_features(struct nvme_dev *dev, struct nvme_set_features_args *args)
+{
+	return do_admin_args_op(set_features, dev, args);
+}
+
 int nvme_cli_ns_mgmt_delete(struct nvme_dev *dev, __u32 nsid, __u32 timeout)
 {
 	if (dev->type == NVME_DEV_DIRECT)
@@ -221,10 +226,11 @@ int nvme_cli_get_log_device_self_test(struct nvme_dev *dev,
 	return do_admin_op(get_log_device_self_test, dev, log);
 }
 
-int nvme_cli_get_log_create_telemetry_host(struct nvme_dev *dev,
+int nvme_cli_get_log_create_telemetry_host_mcda(struct nvme_dev *dev,
+					   enum nvme_telemetry_da mcda,
 					   struct nvme_telemetry_log *log)
 {
-	return do_admin_op(get_log_create_telemetry_host, dev, log);
+	return do_admin_op(get_log_create_telemetry_host_mcda, dev, mcda, log);
 }
 
 int nvme_cli_get_log_telemetry_host(struct nvme_dev *dev, __u64 offset,

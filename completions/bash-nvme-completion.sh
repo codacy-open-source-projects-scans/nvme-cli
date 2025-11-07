@@ -308,7 +308,7 @@ nvme_list_opts () {
 		opts+=" --namespace-id= -n"
 			;;
 		"compare")
-		opts+=" --start-block= -s --block-count= -c --data-size= -z \
+		opts+=" --start-block= -s --block-count= -c --block-size= -b --data-size= -z \
 			--metadata-size= -y --ref-tag= -r --data= -d \
 			--metadata= -M --prinfo= -p --app-tag-mask= -m \
 			--app-tag= -a --limited-retry -l \
@@ -317,7 +317,7 @@ nvme_list_opts () {
 			--dry-run -w --latency -t --timeout="
 			;;
 		"read")
-		opts+=" --start-block= -s --block-count= -c --data-size= -z \
+		opts+=" --start-block= -s --block-count= -c --block-size= -b --data-size= -z \
 			--metadata-size= -y --ref-tag= -r --data= -d \
 			--metadata= -M --prinfo= -p --app-tag-mask= -m \
 			--app-tag= -a --limited-retry -l \
@@ -326,7 +326,7 @@ nvme_list_opts () {
 			--dry-run -w --latency -t --timeout="
 			;;
 		"write")
-		opts+=" --start-block= -s --block-count= -c --data-size= -z \
+		opts+=" --start-block= -s --block-count= -c --block-size= -b --data-size= -z \
 			--metadata-size= -y --ref-tag= -r --data= -d \
 			--metadata= -M --prinfo= -p --app-tag-mask= -m \
 			--app-tag= -a --limited-retry -l \
@@ -465,7 +465,7 @@ nvme_list_opts () {
 			--nmimt= -m --nmd0= -0 --nmd1= -1 --input-file= -i"
 			;;
 		"get-reg")
-		opts+=" --offset, -O --human-readable -H --cap --vs --cmbloc \
+		opts+=" --offset= -O --human-readable -H --cap --vs --cmbloc \
 			--cmbsz --bpinfo --cmbsts --cmbebs --cmbswtp --crto \
 			--pmrcap --pmrsts --pmrebs --pmrswtp --intms --intmc \
 			--cc --csts --nssr --aqa --asq --acq --bprsel --bpmbl \
@@ -473,10 +473,55 @@ nvme_list_opts () {
 			--output-format -o --verbose -v --timeout= -t"
 			;;
 		"set-reg")
-		opts+=" --offset, -O --value= -V --mmio32 -m --intms= --intmc= \
+		opts+=" --offset= -O --value= -V --mmio32 -m --intms= --intmc= \
 			--cc= --csts= --nssr= --aqa= --asq= --acq= --bprsel= \
 			--bpmbl= --cmbmsc= --nssd= --pmrctl= --pmrmscl= \
-			--pmrmscu= --output-format= -o --verbose= -v \
+			--pmrmscu= --output-format= -o --verbose -v \
+			--timeout= -t"
+			;;
+		"io-mgmt-recv")
+		opts+=" --namespace-id= -n --mos= -s --mo= -m --data= -d \
+			--data-len= -l --output-format= -o --verbose -v \
+			--timeout= -t"
+			;;
+		"io-mgmt-send")
+		opts+=" --namespace-id= -n --mos= -s --mo= -m --data= -d \
+			--data-len= -l --output-format= -o --verbose -v \
+			--timeout= -t"
+			;;
+		"mgmt-addr-list-log")
+		opts+=" --verbose -v --output-format= -o --timeout= -t"
+			;;
+		"rotational-media-info-log")
+		opts+=" --endg-id= -e --verbose -v --output-format= -o \
+			--timeout= -t"
+			;;
+		"changed-alloc-cns-list-log")
+		opts+=" --output-format= -o --raw-binary -b  --verbose -v \
+			--timeout= -t"
+			;;
+		"dispersed-ns-participating-nss-log")
+		opts+=" --namespace-id= -n --verbose -v --output-format= -o \
+			--timeout= -t"
+			;;
+		"reachability-groups-log")
+		opts+=" --groups-only -g --rae -r --verbose -v \
+			--output-format= -o --timeout= -t"
+			;;
+		"reachability-associations-log")
+		opts+=" --associations-only -a --rae -r --verbose -v \
+			--output-format= -o --timeout= -t"
+			;;
+		"host-discovery-log")
+		opts+=" --all-host-entries -a --rae -r --verbose -v \
+			--output-format= -o --timeout= -t"
+			;;
+		"ave-discovery-log")
+		opts+=" --rae -r --verbose -v --output-format= -o \
+			--timeout= -t"
+			;;
+		"pull--ddc-req-log")
+		opts+=" --rae -r --verbose -v --output-format= -o \
 			--timeout= -t"
 			;;
 		"version")
@@ -1184,11 +1229,46 @@ plugin_solidigm_opts () {
 		opts+=" --raw-binary -b"
 			;;
 		"workload-tracker")
-		opts+=" --enable -e --disable -d --sample-time= -s \
+		opts+=" --uuid-index= -U --enable -e --disable -d --sample-time= -s \
 		--type= -t --run-time= -r --flush-freq= -f \
 		--wall-clock -w --trigger-field= -T \
 		--trigger-threshold= -V --trigger-on-delta -D \
 		--trigger-on-latency -L --verbose -v"
+			;;
+		"version")
+		opts+=$NO_OPTS
+			;;
+		"help")
+		opts+=$NO_OPTS
+			;;
+	esac
+
+	COMPREPLY+=( $( compgen $compargs -W "$opts" -- $cur ) )
+
+	return 0
+}
+
+plugin_fdp_opts () {
+	local opts=""
+	local compargs=""
+
+	local nonopt_args=0
+	for (( i=0; i < ${#words[@]}-1; i++ )); do
+		if [[ ${words[i]} != -* ]]; then
+			let nonopt_args+=1
+		fi
+	done
+
+	if [ $nonopt_args -eq 3 ]; then
+		opts="/dev/nvme* "
+	fi
+
+	opts+=" "
+
+	case "$1" in
+		"feature")
+		opts+=" --endgrp-id= -e --enable-conf-idx= -c \
+		--disable -d --verbose -v"
 			;;
 		"version")
 		opts+=$NO_OPTS
@@ -1451,6 +1531,38 @@ plugin_inspur_opts () {
 	return 0
 }
 
+plugin_mangoboost_opts () {
+	local opts=""
+	local compargs=""
+
+	local nonopt_args=0
+	for (( i=0; i < ${#words[@]}-1; i++ )); do
+		if [[ ${words[i]} != -* ]]; then
+			let nonopt_args+=1
+		fi
+	done
+
+	if [ $nonopt_args -eq 3 ]; then
+		opts="/dev/nvme* "
+	fi
+
+	opts+=" "
+
+	case "$1" in
+		"id-ctrl")
+		opts+=" --raw-binary -b --human-readable -H \
+			--vendor-specific -v --output-format= -o"
+			;;
+		"help")
+		opts+=$NO_OPTS
+			;;
+	esac
+
+	COMPREPLY+=( $( compgen $compargs -W "$opts" -- $cur ) )
+
+	return 0
+}
+
 plugin_ocp_opts () {
 	local opts=""
 	local compargs=""
@@ -1486,7 +1598,7 @@ plugin_ocp_opts () {
 			;;
 		"internal-log")
 		opts+=" --telemetry-log= -l --string-log= -s \
-			--output-file= -o --output-format= -f \
+			--output-file= -f --output-format= -o \
 			--data-area= -a --telemetry-type= -t"
 			;;
 		"clear-fw-activate-history")
@@ -1511,7 +1623,7 @@ plugin_ocp_opts () {
 		opts+=" --sel= -S --all -a --no-uuid -n"
 			;;
 		"telemetry-string-log")
-		opts+=" --output-file= -o"
+		opts+=" --output-file= -f --output-format= -o"
 			;;
 		"set-telemetry-profile")
 		opts+=" --telemetry-profile-select= -t"
@@ -1526,15 +1638,27 @@ plugin_ocp_opts () {
 		opts+=" --output-file= -o"
 			;;
 		"get-error-injection")
-		opts+=" --sel= -s --no-uuid -n"
+		opts+=" --sel= -s --no-uuid -n --all-ns -a"
 			;;
 		"set-error-injection")
 		opts+=" --data= -d --number= -n --no-uuid -N --type= -t \
-			--nrtdp= -r --verbose -v --output-format -o --timeout="
+			--nrtdp= -r --verbose -v --output-format -o --timeout= --all-ns -a"
 			;;
 		"hardware-component-log")
 		opts+=" --comp-id= -i --list -l --verbose -v \
 			--output-format -o --timeout= -t"
+			;;
+		"get-latency-monitor")
+		opts+=" --sel= -s \
+			--namespace-id= -n --no-uuid -u"
+			;;
+		"get-clear-pcie-correctable-errors")
+		opts+=" --sel= -s \
+			--namespace-id= -n --no-uuid -u"
+			;;
+		"get-telemetry-profile")
+		opts+=" --sel= -s \
+			--namespace-id= -n --no-uuid -u"
 			;;
 		"help")
 		opts+=$NO_OPTS
@@ -1598,6 +1722,7 @@ _nvme_subcmds () {
 			clear-fw-activate-history vs-fw-activate-history log-page-directory \
 			vs-drive-info cloud-SSDplugin-version market-log \
 			smart-log-add temp-stats workload-tracker version help"
+		[fdp]="feature version help"
 		[transcend]="healthvalue badblock"
 		[dapustor]="smart-log-add"
 		[zns]="id-ctrl id-ns zone-mgmt-recv \
@@ -1616,7 +1741,9 @@ _nvme_subcmds () {
 			telemetry-string-log set-telemetry-profile \
 			set-dssd-async-event-config get-dssd-async-event-config \
 			get-error-injection set-error-injection \
-			hardware-component-log"
+			hardware-component-log get-latency-monitor \
+			get-clear-pcie-correctable-errors get-telemetry-profile"
+		[mangoboost]="id-ctrl"
 	)
 
 	# Associative array mapping plugins to corresponding option completions
@@ -1634,6 +1761,7 @@ _nvme_subcmds () {
 		[dera]="plugin_dera_opts"
 		[sfx]="plugin_sfx_opts"
 		[solidigm]="plugin_solidigm_opts"
+		[fdp]="plugin_fdp_opts"
 		[transcend]="plugin_transcend_opts"
 		[dapustor]="plugin_dapustor_opts"
 		[zns]="plugin_zns_opts"
@@ -1641,6 +1769,7 @@ _nvme_subcmds () {
 		[ymtc]="plugin_ymtc_opts"
 		[inspur]="plugin_inspur_opts"
 		[ocp]="plugin_ocp_opts"
+		[mangoboost]="plugin_mangoboost_opts"
 	)
 
 	# Top level commands
@@ -1669,7 +1798,11 @@ _nvme_subcmds () {
 		rpmb boot-part-log fid-support-effects-log \
 		supported-log-pages lockdown media-unit-stat-log \
 		supported-cap-config-log dim show-topology list-endgrp \
-		nvme-mi-recv nvme-mi-send get-reg set-reg"
+		nvme-mi-recv nvme-mi-send get-reg set-reg mgmt-addr-list-log \
+		rotational-media-info-log changed-alloc-ns-list-log \
+		io-mgmt-recv io-mgmt-send dispersed-ns-participating-nss-log \
+		reachability-groups-log reachability-associations-log \
+		host-discovery-log ave-discovery-log pull--ddc-req-log"
 
 	# Add plugins:
 	for plugin in "${!_plugin_subcmds[@]}"; do

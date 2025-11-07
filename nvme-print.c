@@ -15,16 +15,19 @@
 #include "util/suffix.h"
 #include "util/types.h"
 #include "common.h"
+#include "logging.h"
 
 #define nvme_print(name, flags, ...)				\
 	do {							\
 		struct print_ops *ops = nvme_print_ops(flags);	\
-		if (ops && ops->name)				\
+		if (ops && ops->name && !nvme_cfg.dry_run)	\
 			ops->name(__VA_ARGS__);			\
 	} while (false)
 
 #define nvme_print_output_format(name, ...)			\
 	nvme_print(name, nvme_is_output_format_json() ? JSON : NORMAL, ##__VA_ARGS__);
+
+char *alloc_error = "Could not allocate string";
 
 static struct print_ops *nvme_print_ops(nvme_print_flags_t flags)
 {
@@ -82,12 +85,34 @@ const char *nvme_cmd_to_string(int admin, __u8 opcode)
 		case nvme_admin_virtual_mgmt:	return "Virtualization Management";
 		case nvme_admin_nvme_mi_send:	return "NVMe-MI Send";
 		case nvme_admin_nvme_mi_recv:	return "NVMe-MI Receive";
+		case nvme_admin_capacity_mgmt:	return "Capacity Management";
+		case nvme_admin_discovery_info_mgmt:return "Discovery Information Management (DIM)";
+		case nvme_admin_fabric_zoning_recv:return "Fabric Zoning Receive";
+		case nvme_admin_lockdown:	return "Lockdown";
+		case nvme_admin_fabric_zoning_lookup:return "Fabric Zoning Lookup";
+		case nvme_admin_clear_export_nvm_res:
+						return "Clear Exported NVM Resource Configuration";
+		case nvme_admin_fabric_zoning_send:return "Fabric Zoning Send";
+		case nvme_admin_create_export_nvms:return "Create Exported NVM Subsystem";
+		case nvme_admin_manage_export_nvms:return "Manage Exported NVM Subsystem";
+		case nvme_admin_manage_export_ns:return "Manage Exported Namespace";
+		case nvme_admin_manage_export_port:return "Manage Exported Port";
+		case nvme_admin_send_disc_log_page:return "Send Discovery Log Page";
+		case nvme_admin_track_send:	return "Track Send";
+		case nvme_admin_track_receive:	return "Track Receive";
+		case nvme_admin_migration_send:	return "Migration Send";
+		case nvme_admin_migration_receive:return "Migration Receive";
+		case nvme_admin_ctrl_data_queue:return "Controller Data Queue";
 		case nvme_admin_dbbuf:		return "Doorbell Buffer Config";
+		case nvme_admin_fabrics:	return "Fabrics Commands";
 		case nvme_admin_format_nvm:	return "Format NVM";
 		case nvme_admin_security_send:	return "Security Send";
 		case nvme_admin_security_recv:	return "Security Receive";
 		case nvme_admin_sanitize_nvm:	return "Sanitize";
+		case nvme_admin_load_program:	return "Load Program";
 		case nvme_admin_get_lba_status:	return "Get LBA Status";
+		case nvme_admin_program_act_mgmt:return "Program Activation Management";
+		case nvme_admin_mem_range_set_mgmt:return "Memory Range Set Management";
 		}
 	} else {
 		switch (opcode) {
@@ -238,7 +263,7 @@ void nvme_show_persistent_event_log(void *pevent_log_info,
 }
 
 void nvme_show_endurance_group_event_agg_log(
-	struct nvme_aggregate_predictable_lat_event *endurance_log,
+	struct nvme_aggregate_endurance_group_event *endurance_log,
 	__u64 log_entries, __u32 size, const char *devname,
 	nvme_print_flags_t flags)
 {
@@ -351,10 +376,10 @@ void nvme_show_supported_cap_config_log(
 	nvme_print(supported_cap_config_list_log, flags, cap);
 }
 
-void nvme_show_subsystem_list(nvme_root_t r, bool show_ana,
+void nvme_show_subsystem_list(struct nvme_global_ctx *ctx, bool show_ana,
 			      nvme_print_flags_t flags)
 {
-	nvme_print(print_nvme_subsystem_list, flags, r, show_ana);
+	nvme_print(print_nvme_subsystem_list, flags, ctx, show_ana);
 }
 
 const char *nvme_register_szu_to_string(__u8 szu)
@@ -466,9 +491,10 @@ void nvme_show_single_property(int offset, uint64_t value64, nvme_print_flags_t 
 	nvme_print(single_property, flags, offset, value64);
 }
 
-void nvme_show_relatives(const char *name)
+void nvme_show_relatives(struct nvme_global_ctx *ctx, const char *name,
+			 nvme_print_flags_t flags)
 {
-	/* XXX: TBD */
+	nvme_print(relatives, flags, ctx, name);
 }
 
 void d(unsigned char *buf, int len, int width, int group)
@@ -718,11 +744,10 @@ void nvme_show_fw_log(struct nvme_firmware_slot *fw_log,
 	nvme_print(fw_log, flags, fw_log, devname);
 }
 
-void nvme_show_changed_ns_list_log(struct nvme_ns_list *log,
-				   const char *devname,
-				   nvme_print_flags_t flags)
+void nvme_show_changed_ns_list_log(struct nvme_ns_list *log, const char *devname,
+				   nvme_print_flags_t flags, bool alloc)
 {
-	nvme_print(ns_list_log, flags, log, devname);
+	nvme_print(ns_list_log, flags, log, devname, alloc);
 }
 
 void nvme_print_effects_log_pages(struct list_head *list,
@@ -756,11 +781,21 @@ const char *nvme_log_to_string(__u8 lid)
 	case NVME_LOG_LID_MI_CMD_SUPPORTED_EFFECTS:	return "NVMe-MI Commands Supported and Effects";
 	case NVME_LOG_LID_CMD_AND_FEAT_LOCKDOWN:	return "Command and Feature Lockdown";
 	case NVME_LOG_LID_BOOT_PARTITION:		return "Boot Partition";
+	case NVME_LOG_LID_ROTATIONAL_MEDIA_INFO:	return "Rotational Media Information";
+	case NVME_LOG_LID_DISPERSED_NS_PARTICIPATING_NSS:return "Dispersed Namespace Participating NVM Subsystems";
+	case NVME_LOG_LID_MGMT_ADDR_LIST:		return "Management Address List";
+	case NVME_LOG_LID_PHY_RX_EOM:			return "Physical Interface Receiver Eye Opening Measurement";
+	case NVME_LOG_LID_REACHABILITY_GROUPS:		return "Reachability Groups";
+	case NVME_LOG_LID_REACHABILITY_ASSOCIATIONS:	return "Reachability Associations";
+	case NVME_LOG_LID_CHANGED_ALLOC_NS:		return "Changed Allocated Namespace List";
 	case NVME_LOG_LID_FDP_CONFIGS:			return "FDP Configurations";
 	case NVME_LOG_LID_FDP_RUH_USAGE:		return "Reclaim Unit Handle Usage";
 	case NVME_LOG_LID_FDP_STATS:			return "FDP Statistics";
 	case NVME_LOG_LID_FDP_EVENTS:			return "FDP Events";
-	case NVME_LOG_LID_DISCOVER:			return "Discovery";
+	case NVME_LOG_LID_DISCOVERY:			return "Discovery";
+	case NVME_LOG_LID_HOST_DISCOVERY:		return "Host Discovery";
+	case NVME_LOG_LID_AVE_DISCOVERY:		return "AVE Discovery";
+	case NVME_LOG_LID_PULL_MODEL_DDC_REQ:		return "Pull Model DDC Request";
 	case NVME_LOG_LID_RESERVATION:			return "Reservation Notification";
 	case NVME_LOG_LID_SANITIZE:			return "Sanitize Status";
 	case NVME_LOG_LID_ZNS_CHANGED_ZONES:		return "Changed Zone List";
@@ -781,59 +816,28 @@ void nvme_show_endurance_log(struct nvme_endurance_group_log *endurance_log,
 	nvme_print(endurance_log, flags, endurance_log, group_id, devname);
 }
 
-static bool is_fahrenheit_country(const char *country)
-{
-	static const char * const countries[] = {
-		"AQ", "AS", "BS", "BZ", "CY", "FM", "GU", "KN", "KY", "LR",
-		"MH", "MP", "MS", "PR", "PW", "TC", "US", "VG", "VI"
-	};
-	int i;
-
-	for (i = 0; i < ARRAY_SIZE(countries); i++) {
-		if (!strcmp(country, countries[i]))
-			return true;
-	}
-
-	return false;
-}
-
-#ifndef LC_MEASUREMENT
-#define LC_MEASUREMENT LC_ALL
-#endif
-
-static bool is_temperature_fahrenheit(void)
-{
-	const char *locale, *underscore;
-	char country[3] = { 0 };
-
-	setlocale(LC_MEASUREMENT, "");
-	locale = setlocale(LC_MEASUREMENT, NULL);
-
-	if (!locale || strlen(locale) < 2)
-		return false;
-
-	underscore = strchr(locale, '_');
-	if (underscore && strlen(underscore) >= 3)
-		locale = underscore + 1;
-
-	memcpy(country, locale, 2);
-
-	return is_fahrenheit_country(country);
-}
-
 const char *nvme_degrees_string(long t)
 {
 	static char str[STR_LEN];
 	long val = kelvin_to_celsius(t);
-	bool fahrenheit = is_temperature_fahrenheit();
-
-	if (fahrenheit)
-		val = kelvin_to_fahrenheit(t);
 
 	if (nvme_is_output_format_json())
-		sprintf(str, "%ld %s", val, fahrenheit ? "Fahrenheit" : "Celsius");
+		sprintf(str, "%ld %s", val, "Celsius");
 	else
-		sprintf(str, "%ld °%s", val, fahrenheit ? "F" : "C");
+		sprintf(str, "%ld °%s", val, "C");
+
+	return str;
+}
+
+const char *nvme_degrees_fahrenheit_string(long t)
+{
+	static char str[STR_LEN];
+	long val = kelvin_to_fahrenheit(t);
+
+	if (nvme_is_output_format_json())
+		sprintf(str, "%ld %s", val, "Fahrenheit");
+	else
+		sprintf(str, "%ld °%s", val, "F");
 
 	return str;
 }
@@ -865,43 +869,50 @@ void nvme_show_sanitize_log(struct nvme_sanitize_log_page *sanitize,
 const char *nvme_feature_to_string(enum nvme_features_id feature)
 {
 	switch (feature) {
-	case NVME_FEAT_FID_ARBITRATION:	return "Arbitration";
-	case NVME_FEAT_FID_POWER_MGMT:	return "Power Management";
-	case NVME_FEAT_FID_LBA_RANGE:	return "LBA Range Type";
-	case NVME_FEAT_FID_TEMP_THRESH:	return "Temperature Threshold";
-	case NVME_FEAT_FID_ERR_RECOVERY:return "Error Recovery";
-	case NVME_FEAT_FID_VOLATILE_WC:	return "Volatile Write Cache";
-	case NVME_FEAT_FID_NUM_QUEUES:	return "Number of Queues";
-	case NVME_FEAT_FID_IRQ_COALESCE:return "Interrupt Coalescing";
-	case NVME_FEAT_FID_IRQ_CONFIG:	return "Interrupt Vector Configuration";
-	case NVME_FEAT_FID_WRITE_ATOMIC:return "Write Atomicity Normal";
-	case NVME_FEAT_FID_ASYNC_EVENT:	return "Async Event Configuration";
-	case NVME_FEAT_FID_AUTO_PST:	return "Autonomous Power State Transition";
-	case NVME_FEAT_FID_HOST_MEM_BUF:return "Host Memory Buffer";
-	case NVME_FEAT_FID_TIMESTAMP:	return "Timestamp";
-	case NVME_FEAT_FID_KATO:	return "Keep Alive Timer";
-	case NVME_FEAT_FID_HCTM:	return "Host Controlled Thermal Management";
-	case NVME_FEAT_FID_NOPSC:	return "Non-Operational Power State Config";
-	case NVME_FEAT_FID_RRL:		return "Read Recovery Level";
-	case NVME_FEAT_FID_PLM_CONFIG:	return "Predictable Latency Mode Config";
-	case NVME_FEAT_FID_PLM_WINDOW:	return "Predictable Latency Mode Window";
+	case NVME_FEAT_FID_ARBITRATION:		return "Arbitration";
+	case NVME_FEAT_FID_POWER_MGMT:		return "Power Management";
+	case NVME_FEAT_FID_LBA_RANGE:		return "LBA Range Type";
+	case NVME_FEAT_FID_TEMP_THRESH:		return "Temperature Threshold";
+	case NVME_FEAT_FID_ERR_RECOVERY:	return "Error Recovery";
+	case NVME_FEAT_FID_VOLATILE_WC:		return "Volatile Write Cache";
+	case NVME_FEAT_FID_NUM_QUEUES:		return "Number of Queues";
+	case NVME_FEAT_FID_IRQ_COALESCE:	return "Interrupt Coalescing";
+	case NVME_FEAT_FID_IRQ_CONFIG:		return "Interrupt Vector Configuration";
+	case NVME_FEAT_FID_WRITE_ATOMIC:	return "Write Atomicity Normal";
+	case NVME_FEAT_FID_ASYNC_EVENT:		return "Async Event Configuration";
+	case NVME_FEAT_FID_AUTO_PST:		return "Autonomous Power State Transition";
+	case NVME_FEAT_FID_HOST_MEM_BUF:	return "Host Memory Buffer";
+	case NVME_FEAT_FID_TIMESTAMP:		return "Timestamp";
+	case NVME_FEAT_FID_KATO:		return "Keep Alive Timer";
+	case NVME_FEAT_FID_HCTM:		return "Host Controlled Thermal Management";
+	case NVME_FEAT_FID_NOPSC:		return "Non-Operational Power State Config";
+	case NVME_FEAT_FID_RRL:			return "Read Recovery Level";
+	case NVME_FEAT_FID_PLM_CONFIG:		return "Predictable Latency Mode Config";
+	case NVME_FEAT_FID_PLM_WINDOW:		return "Predictable Latency Mode Window";
 	case NVME_FEAT_FID_LBA_STS_INTERVAL:	return "LBA Status Interval";
 	case NVME_FEAT_FID_HOST_BEHAVIOR:	return "Host Behavior";
-	case NVME_FEAT_FID_SANITIZE:	return "Sanitize";
+	case NVME_FEAT_FID_SANITIZE:		return "Sanitize";
 	case NVME_FEAT_FID_ENDURANCE_EVT_CFG:	return "Endurance Event Group Configuration";
 	case NVME_FEAT_FID_IOCS_PROFILE:	return "I/O Command Set Profile";
 	case NVME_FEAT_FID_SPINUP_CONTROL:	return "Spinup Control";
+	case NVME_FEAT_FID_POWER_LOSS_SIGNAL:	return "Power Loss Signaling Config";
+	case NVME_FEAT_FID_PERF_CHARACTERISTICS:return "Performance Characteristics";
+	case NVME_FEAT_FID_FDP:			return "Flexible Direct Placement";
+	case NVME_FEAT_FID_FDP_EVENTS:		return "Flexible Direct Placement Events";
+	case NVME_FEAT_FID_NS_ADMIN_LABEL:	return "Namespace Admin Label";
+	case NVME_FEAT_FID_KEY_VALUE:		return "Key Value Configuration";
+	case NVME_FEAT_FID_CTRL_DATA_QUEUE:	return "Controller Data Queue";
+	case NVME_FEAT_FID_EMB_MGMT_CTRL_ADDR:	return "Embedded Management Controller Address";
+	case NVME_FEAT_FID_HOST_MGMT_AGENT_ADDR:return "Host Management Agent Address";
 	case NVME_FEAT_FID_ENH_CTRL_METADATA:	return "Enhanced Controller Metadata";
 	case NVME_FEAT_FID_CTRL_METADATA:	return "Controller Metadata";
-	case NVME_FEAT_FID_NS_METADATA: return "Namespace Metadata";
-	case NVME_FEAT_FID_SW_PROGRESS:	return "Software Progress";
-	case NVME_FEAT_FID_HOST_ID:	return "Host Identifier";
-	case NVME_FEAT_FID_RESV_MASK:	return "Reservation Notification Mask";
-	case NVME_FEAT_FID_RESV_PERSIST:return "Reservation Persistence";
+	case NVME_FEAT_FID_NS_METADATA:		return "Namespace Metadata";
+	case NVME_FEAT_FID_SW_PROGRESS:		return "Software Progress";
+	case NVME_FEAT_FID_HOST_ID:		return "Host Identifier";
+	case NVME_FEAT_FID_RESV_MASK:		return "Reservation Notification Mask";
+	case NVME_FEAT_FID_RESV_PERSIST:	return "Reservation Persistence";
 	case NVME_FEAT_FID_WRITE_PROTECT:	return "Namespace Write Protect";
-	case NVME_FEAT_FID_FDP:		return "Flexible Direct Placement";
-	case NVME_FEAT_FID_FDP_EVENTS:	return "Flexible Direct Placement Events";
-	case NVME_FEAT_FID_CTRL_DATA_QUEUE:	return "Controller Data Queue";
+	case NVME_FEAT_FID_BP_WRITE_PROTECT:	return "Boot Partition Write Protection Config";
 	}
 	/*
 	 * We don't use the "default:" statement to let the compiler warning if
@@ -1056,6 +1067,96 @@ const char *nvme_feature_temp_sel_to_string(__u8 sel)
 	}
 }
 
+const char *nvme_feature_perfc_attri_to_string(__u8 attri)
+{
+	switch (attri) {
+	case NVME_FEAT_PERFC_ATTRI_STD:
+		return "standard performance attribute";
+	case NVME_FEAT_PERFC_ATTRI_ID_LIST:
+		return "performance attribute identifier list";
+	case NVME_FEAT_PERFC_ATTRI_VS_MIN ... NVME_FEAT_PERFC_ATTRI_VS_MAX:
+		return "vendor specific performance attribute";
+	default:
+		break;
+	}
+
+	return "reserved";
+}
+
+const char *nvme_feature_perfc_r4karl_to_string(__u8 r4karl)
+{
+	switch (r4karl) {
+	case NVME_FEAT_PERFC_R4KARL_NO_REPORT:
+		return "not reported";
+	case NVME_FEAT_PERFC_R4KARL_GE_100_SEC:
+		return "greater than or equal to 100 seconds";
+	case NVME_FEAT_PERFC_R4KARL_GE_50_SEC:
+		return "greater than or equal to 50 seconds and less than 100 seconds";
+	case NVME_FEAT_PERFC_R4KARL_GE_10_SEC:
+		return "greater than or equal to 10 seconds and less than 50 seconds";
+	case NVME_FEAT_PERFC_R4KARL_GE_5_SEC:
+		return "greater than or equal to 5 seconds and less than 10 seconds";
+	case NVME_FEAT_PERFC_R4KARL_GE_1_SEC:
+		return "greater than or equal to 1 second and less than 5 seconds";
+	case NVME_FEAT_PERFC_R4KARL_GE_500_MS:
+		return "greater than or equal to 500 milliseconds and less than 1 second";
+	case NVME_FEAT_PERFC_R4KARL_GE_100_MS:
+		return "greater than or equal to 100 milliseconds and less than 500 milliseconds";
+	case NVME_FEAT_PERFC_R4KARL_GE_50_MS:
+		return "greater than or equal to 50 milliseconds and less than 100 milliseconds";
+	case NVME_FEAT_PERFC_R4KARL_GE_10_MS:
+		return "greater than or equal to 10 milliseconds and less than 50 milliseconds";
+	case NVME_FEAT_PERFC_R4KARL_GE_5_MS:
+		return "greater than or equal to 5 milliseconds and less than 10 milliseconds";
+	case NVME_FEAT_PERFC_R4KARL_GE_1_MS:
+		return "greater than or equal to 1 millisecond and less than 5 milliseconds";
+	case NVME_FEAT_PERFC_R4KARL_GE_500_US:
+		return "greater than or equal to 500 microseconds and less than 1 millisecond";
+	case NVME_FEAT_PERFC_R4KARL_GE_100_US:
+		return "greater than or equal to 100 microseconds and less than 500 microseconds";
+	case NVME_FEAT_PERFC_R4KARL_GE_50_US:
+		return "greater than or equal to 50 microseconds and less than 100 microseconds";
+	case NVME_FEAT_PERFC_R4KARL_GE_10_US:
+		return "greater than or equal to 10 microseconds and less than 50 microseconds";
+	case NVME_FEAT_PERFC_R4KARL_GE_5_US:
+		return "greater than or equal to 5 microseconds and less than 10 microseconds";
+	case NVME_FEAT_PERFC_R4KARL_GE_1_US:
+		return "greater than or equal to 1 microsecond and less than 5 microseconds";
+	case NVME_FEAT_PERFC_R4KARL_GE_500_NS:
+		return "greater than or equal to 500 nanoseconds and less than 1 microsecond";
+	case NVME_FEAT_PERFC_R4KARL_GE_100_NS:
+		return "greater than or equal to 100 nanoseconds and less than 500 nanoseconds";
+	case NVME_FEAT_PERFC_R4KARL_GE_50_NS:
+		return "greater than or equal to 50 nanoseconds and less than 100 nanoseconds";
+	case NVME_FEAT_PERFC_R4KARL_GE_10_NS:
+		return "greater than or equal to 10 nanoseconds and less than 50 nanoseconds";
+	case NVME_FEAT_PERFC_R4KARL_GE_5_NS:
+		return "greater than or equal to 5 nanoseconds and less than 10 nanoseconds";
+	case NVME_FEAT_PERFC_R4KARL_GE_1_NS:
+		return "greater than or equal to 1 nanosecond and less than 5 nanoseconds";
+	default:
+		break;
+	}
+
+	return "reserved";
+}
+
+const char *nvme_feature_perfc_attrtyp_to_string(__u8 attrtyp)
+{
+	switch (attrtyp) {
+	case NVME_GET_FEATURES_SEL_CURRENT:
+		return "current attribute";
+	case NVME_GET_FEATURES_SEL_DEFAULT:
+		return "default attribute";
+	case NVME_GET_FEATURES_SEL_SAVED:
+		return "saved attribute";
+	default:
+		break;
+	}
+
+	return "reserved";
+}
+
 const char *nvme_ns_wp_cfg_to_string(enum nvme_ns_write_protect_cfg state)
 {
 	switch (state) {
@@ -1067,6 +1168,24 @@ const char *nvme_ns_wp_cfg_to_string(enum nvme_ns_write_protect_cfg state)
 		return "Write Protect Until Power Cycle";
 	case NVME_NS_WP_CFG_PROTECT_PERMANENT:
 		return "Permanent Write Protect";
+	default:
+		return "Reserved";
+	}
+}
+
+const char *nvme_bpwps_to_string(__u8 bpwps)
+{
+	switch (bpwps) {
+	case NVME_FEAT_BPWPS_CHANGE_NOT_REQUESTED:
+		return "Change in state not requested";
+	case NVME_FEAT_BPWPS_WRITE_UNLOCKED:
+		return "Write Unlocked";
+	case NVME_FEAT_BPWPS_WRITE_LOCKED:
+		return "Write Locked";
+	case NVME_FEAT_BPWPS_WRITE_LOCKED_PWR_CYCLE:
+		return "Write Locked Until Power Cycle";
+	case NVME_FEAT_BPWPS_WRITE_PROTECTION_RPMB:
+		return "Write Protection controlled by RPMB";
 	default:
 		return "Reserved";
 	}
@@ -1274,6 +1393,58 @@ const char *nvme_register_symbol_to_string(int offset)
 	return "unknown";
 }
 
+const char *nvme_time_scale_to_string(__u8 ts)
+{
+	switch (ts) {
+	case 0:
+		return "1 microsecond";
+	case 1:
+		return "10 microseconds";
+	case 2:
+		return "100 microseconds";
+	case 3:
+		return "1 millisecond";
+	case 4:
+		return "10 milliseconds";
+	case 5:
+		return "100 milliseconds";
+	case 6:
+		return "1 second";
+	case 7:
+		return "10 seconds";
+	case 8:
+		return "100 seconds";
+	case 9:
+		return "1,000 seconds";
+	case 0xa:
+		return "10,000 seconds";
+	case 0xb:
+		return "100,000 seconds";
+	case 0xc:
+		return "1,000,000 seconds";
+	default:
+		break;
+	}
+
+	return "Reserved";
+}
+
+const char *nvme_pls_mode_to_string(__u8 mode)
+{
+	switch (mode) {
+	case 0:
+		return "not enabled";
+	case 1:
+		return "enabled with Emergency Power Fail";
+	case 2:
+		return "enabled with Forced Quiescence";
+	default:
+		break;
+	}
+
+	return "Reserved";
+}
+
 void nvme_feature_show(enum nvme_features_id fid, int sel, unsigned int result)
 {
 	nvme_print(show_feature, NORMAL, fid, sel, result);
@@ -1334,24 +1505,31 @@ void nvme_generic_full_path(nvme_ns_t n, char *path, size_t len)
 	snprintf(path, len, "ng%dn%d", instance, head_instance);
 }
 
-void nvme_show_list_item(nvme_ns_t n)
+void nvme_show_list_item(nvme_ns_t n, struct table *t)
 {
-	nvme_print(list_item, NORMAL, n);
+	nvme_print(list_item, NORMAL, n, t);
 }
 
-void nvme_show_list_items(nvme_root_t r, nvme_print_flags_t flags)
+void nvme_show_list_items(struct nvme_global_ctx *ctx, nvme_print_flags_t flags)
 {
-	nvme_print(list_items, flags, r);
+	nvme_print(list_items, flags, ctx);
 }
 
-void nvme_show_topology(nvme_root_t r,
+void nvme_show_topology(struct nvme_global_ctx *ctx,
 			enum nvme_cli_topo_ranking ranking,
 			nvme_print_flags_t flags)
 {
 	if (ranking == NVME_CLI_TOPO_NAMESPACE)
-		nvme_print(topology_namespace, flags, r);
+		nvme_print(topology_namespace, flags, ctx);
+	else if (ranking == NVME_CLI_TOPO_CTRL)
+		nvme_print(topology_ctrl, flags, ctx);
 	else
-		nvme_print(topology_ctrl, flags, r);
+		nvme_print(topology_multipath, flags, ctx);
+}
+
+void nvme_show_topology_tabular(struct nvme_global_ctx *ctx, nvme_print_flags_t flags)
+{
+	nvme_print(topology_tabular, flags, ctx);
 }
 
 void nvme_show_message(bool error, const char *msg, ...)
@@ -1370,15 +1548,36 @@ void nvme_show_message(bool error, const char *msg, ...)
 	va_end(ap);
 }
 
-void nvme_show_perror(const char *msg)
+void nvme_show_perror(const char *msg, ...)
 {
 	struct print_ops *ops = nvme_print_ops(NORMAL);
+	va_list ap;
+
+	va_start(ap, msg);
 
 	if (nvme_is_output_format_json())
 		ops = nvme_print_ops(JSON);
 
 	if (ops && ops->show_perror)
-		ops->show_perror(msg);
+		ops->show_perror(msg, ap);
+
+	va_end(ap);
+}
+
+void nvme_show_key_value(const char *key, const char *val, ...)
+{
+	struct print_ops *ops = nvme_print_ops(NORMAL);
+	va_list ap;
+
+	va_start(ap, val);
+
+	if (nvme_is_output_format_json())
+		ops = nvme_print_ops(JSON);
+
+	if (ops && ops->show_key_value)
+		ops->show_key_value(key, val, ap);
+
+	va_end(ap);
 }
 
 void nvme_show_discovery_log(struct nvmf_discovery_log *log, uint64_t numrec,
@@ -1400,4 +1599,54 @@ void nvme_show_init(void)
 void nvme_show_finish(void)
 {
 	nvme_print_output_format(show_finish);
+}
+
+void nvme_show_mgmt_addr_list_log(struct nvme_mgmt_addr_list_log *ma_list, nvme_print_flags_t flags)
+{
+	nvme_print(mgmt_addr_list_log, flags, ma_list);
+}
+
+void nvme_show_rotational_media_info_log(struct nvme_rotational_media_info_log *info,
+					 nvme_print_flags_t flags)
+{
+	nvme_print(rotational_media_info_log, flags, info);
+}
+
+void nvme_show_dispersed_ns_psub_log(struct nvme_dispersed_ns_participating_nss_log *log,
+				     nvme_print_flags_t flags)
+{
+	nvme_print(dispersed_ns_psub_log, flags, log);
+}
+
+void nvme_show_reachability_groups_log(struct nvme_reachability_groups_log *log,
+				       __u64 len, nvme_print_flags_t flags)
+{
+	nvme_print(reachability_groups_log, flags, log, len);
+}
+
+void nvme_show_reachability_associations_log(struct nvme_reachability_associations_log *log,
+					     __u64 len, nvme_print_flags_t flags)
+{
+	nvme_print(reachability_associations_log, flags, log, len);
+}
+
+void nvme_show_host_discovery_log(struct nvme_host_discover_log *log, nvme_print_flags_t flags)
+{
+	nvme_print(host_discovery_log, flags, log);
+}
+
+void nvme_show_ave_discovery_log(struct nvme_ave_discover_log *log, nvme_print_flags_t flags)
+{
+	nvme_print(ave_discovery_log, flags, log);
+}
+
+void nvme_show_pull_model_ddc_req_log(struct nvme_pull_model_ddc_req_log *log,
+				      nvme_print_flags_t flags)
+{
+	nvme_print(pull_model_ddc_req_log, flags, log);
+}
+
+void nvme_show_log(const char *devname, struct nvme_get_log_args *args, nvme_print_flags_t flags)
+{
+	nvme_print(log, flags, devname, args);
 }

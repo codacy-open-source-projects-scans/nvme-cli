@@ -39,6 +39,7 @@ void print_stats_desc(struct telemetry_stats_desc *stat_desc)
 	printf("Statistics info               : 0x%x\n", stat_desc->info);
 	printf("NS info                       : 0x%x\n", stat_desc->ns_info);
 	printf("Statistic Data Size           : 0x%x\n", le16_to_cpu(stat_data_sz));
+	printf("Namespace ID[15:0]            : 0x%x\n", stat_desc->nsid);
 
 	if (stat_data_sz > 0) {
 		printf("%s  : 0x",
@@ -109,13 +110,18 @@ void print_telemetry_fifo_event(__u8 class_type,
 		if ((id == ADMIN_QUEUE_NONZERO_STATUS) ||
 			(id == IO_QUEUE_NONZERO_STATUS)) {
 			printf("  Cmd Op Code   : 0x%02x\n", data[0]);
-			__u16 status = *(__u16 *)&data[1];
-			__u16 cmd_id = *(__u16 *)&data[3];
-			__u16 sq_id = *(__u16 *)&data[5];
+			__u16 status;
+			__u16 cmd_id;
+			__u16 sq_id;
+
+			memcpy(&status, &data[1], sizeof(status));
+			memcpy(&cmd_id, &data[3], sizeof(cmd_id));
+			memcpy(&sq_id, &data[5], sizeof(sq_id));
 
 			printf("  Status Code   : 0x%04x\n", le16_to_cpu(status));
 			printf("  Cmd ID        : 0x%04x\n", le16_to_cpu(cmd_id));
 			printf("  SQ ID         : 0x%04x\n", le16_to_cpu(sq_id));
+			printf("  LID,FID,Other Cmd Reserved         : 0x%02x\n", data[7]);
 		} else if (id == CC_REGISTER_CHANGED) {
 			__u32 cc_reg_data = *(__u32 *)data;
 
@@ -126,6 +132,20 @@ void print_telemetry_fifo_event(__u8 class_type,
 
 			printf("  CSTS Reg Data : 0x%08x\n",
 					le32_to_cpu(csts_reg_data));
+		} else if (id == OOB_COMMAND) {
+			printf("  Cmd Op Code   : 0x%02x\n", data[0]);
+			__u16 status;
+			memcpy(&status, &data[1], sizeof(status));
+
+			printf("  Admin Cmd Status   : 0x%04x\n", le16_to_cpu(status));
+			printf("  NVMe MI SC         : 0x%02x\n", data[3]);
+			printf("  Byte1 Req Msg      : 0x%02x\n", data[4]);
+			printf("  Byte2 Req Msg      : 0x%02x\n", data[5]);
+		} else if (id == OOB_AER_EVENT_MSG_TRANS) {
+			__u64 aem = *(__u64 *)data;
+
+			printf("  AEM   : 0x%016"PRIx64"\n",
+					le64_to_cpu(aem));
 		}
 		if (size > 8)
 			print_vu_event_data((size-8), (__u8 *)&data[8]);
@@ -168,7 +188,7 @@ void print_telemetry_fifo_event(__u8 class_type,
 
 	case TELEMETRY_MEDIA_WEAR_CLASS:
 		printf("  Event ID          : 0x%04x %s\n",
-			id, telemetry_media_debug_event_id_to_string(id));
+			id, telemetry_media_wear_event_id_to_string(id));
 		__u32 host_tb_written = *(__u32 *)&data[0];
 		__u32 media_tb_written = *(__u32 *)&data[4];
 		__u32 media_tb_erased = *(__u32 *)&data[8];
@@ -188,6 +208,16 @@ void print_telemetry_fifo_event(__u8 class_type,
 		printf("  Statistic ID      : 0x%02x %s\n",
 			id, telemetry_stat_id_to_string(id));
 		print_stats_desc((struct telemetry_stats_desc *)data);
+		break;
+
+	case TELEMETRY_VIRTUAL_FIFO_EVENT_CLASS:
+		printf("  Event ID : 0x%04x %s\n",
+			id, telemetry_virtual_fifo_event_id_to_string(id));
+
+		__u16 vu_event_id = *(__u16 *)data;
+
+		printf("  VU Virtual FIFO Event ID   : 0x%02x\n", le16_to_cpu(vu_event_id));
+		printf("\n");
 		break;
 
 	default:
@@ -434,8 +464,11 @@ void json_add_formatted_u32_str(struct json_object *pobject, const char *msg, un
 void json_add_formatted_var_size_str(struct json_object *pobject, const char *msg, __u8 *pdata,
 	unsigned int data_size)
 {
-	char description_str[256] = "";
+	char *description_str = NULL;
 	char temp_buffer[3] = { 0 };
+
+	/* Allocate 2 chars for each value in the data + 2 bytes for the null terminator */
+	description_str = (char *) calloc(1, data_size*2 + 2);
 
 	for (size_t i = 0; i < data_size; ++i) {
 		sprintf(temp_buffer, "%02X", pdata[i]);
@@ -443,6 +476,7 @@ void json_add_formatted_var_size_str(struct json_object *pobject, const char *ms
 	}
 
 	json_object_add_value_string(pobject, msg, description_str);
+	free(description_str);
 }
 #endif /* CONFIG_JSONC */
 
@@ -489,9 +523,9 @@ int get_telemetry_das_offset_and_size(
 	return 0;
 }
 
-int get_static_id_ascii_string(int identifier, char *description)
+int get_statistic_id_ascii_string(int identifier, char *description)
 {
-	if (pstring_buffer == NULL)
+	if (!pstring_buffer || !description)
 		return -1;
 
 	struct nvme_ocp_telemetry_string_header *pocp_ts_header =
@@ -522,14 +556,15 @@ int get_static_id_ascii_string(int identifier, char *description)
 			memcpy(description, pdescription,
 			       peach_statistic_entry->ascii_id_length + 1);
 
-			// If ASCII string isn't found, see in our internal Map
-			// for 2.5 Spec defined strings (id < 0x1D).
-			if ((description == NULL) && (identifier < 0x1D))
-				memcpy(description,
-				       statistic_identifiers_map[identifier].description,
-				       peach_statistic_entry->ascii_id_length + 1);
 			return 0;
 		}
+	}
+
+	// If ASCII string isn't found, see in our internal Map
+	// for 2.5 Spec defined strings
+	if (identifier <= 0x1D) {
+		strcpy(description, statistic_identifiers_map[identifier].description);
+		return 0;
 	}
 
 	return -1;
@@ -629,10 +664,10 @@ int parse_ocp_telemetry_string_log(int event_fifo_num, int identifier, int debug
 	}
 
 	if (string_table == STATISTICS_IDENTIFIER_STRING)
-		get_static_id_ascii_string(identifier, description);
-	else if (string_table == EVENT_STRING)
+		get_statistic_id_ascii_string(identifier, description);
+	else if (string_table == EVENT_STRING && debug_event_class < 0x80)
 		get_event_id_ascii_string(identifier, debug_event_class, description);
-	else if (string_table == VU_EVENT_STRING)
+	else if (string_table == VU_EVENT_STRING || debug_event_class >= 0x80)
 		get_vu_event_id_ascii_string(identifier, debug_event_class, description);
 
 	return 0;
@@ -992,16 +1027,21 @@ int parse_event_fifo(unsigned int fifo_num, unsigned char *pfifo_start,
 		if (pevent_descriptor->debug_event_class_type == RESERVED_CLASS_TYPE)
 			break;
 
-		if (pevent_descriptor != NULL && pevent_descriptor->event_data_size >= 0) {
+		__u8 *pevent_specific_data = NULL;
+		__u16 event_id = 0;
+		char description_str[256] = "";
+		unsigned int data_size = 0;
+
+		if (pevent_descriptor != NULL &&
+			pevent_descriptor->event_data_size >= 0 &&
+			pevent_descriptor->debug_event_class_type !=
+				STATISTIC_SNAPSHOT_CLASS_TYPE) {
+			event_des_size = sizeof(struct nvme_ocp_telemetry_event_descriptor);
 			/* Data is present in the form of DWORDS,
 			 * So multiplying with sizeof(DWORD)
 			 */
-			unsigned int data_size = pevent_descriptor->event_data_size *
+			data_size = pevent_descriptor->event_data_size *
 							SIZE_OF_DWORD;
-
-			__u8 *pevent_specific_data = NULL;
-			__u16 event_id = 0;
-			char description_str[256] = "";
 
 			if (pevent_descriptor != NULL && pevent_descriptor->event_data_size > 0)
 				pevent_specific_data = (__u8 *)pevent_descriptor + event_des_size;
@@ -1093,18 +1133,6 @@ int parse_event_fifo(unsigned int fifo_num, unsigned char *pfifo_start,
 					pevent_fifos_object,
 					fp);
 				break;
-			case STATISTIC_SNAPSHOT_CLASS_TYPE: {
-				struct nvme_ocp_statistic_snapshot_evt_class_format
-				*pStaticSnapshotEvent =
-					(struct nvme_ocp_statistic_snapshot_evt_class_format *)
-					pevent_specific_data;
-				struct nvme_ocp_telemetry_statistic_descriptor *pstatistic_entry =
-					(struct nvme_ocp_telemetry_statistic_descriptor *)
-					(&pStaticSnapshotEvent->statisticDescriptorData);
-
-				parse_statistic(pstatistic_entry, pevent_descriptor_obj, fp);
-				break;
-			}
 			case RESERVED_CLASS_TYPE:
 			default:
 				break;
@@ -1119,11 +1147,67 @@ int parse_event_fifo(unsigned int fifo_num, unsigned char *pfifo_start,
 				else
 					printf(STR_LINE2);
 			}
-		} else
-			break;
+		} else if ((pevent_descriptor != NULL) &&
+			(pevent_descriptor->debug_event_class_type ==
+				STATISTIC_SNAPSHOT_CLASS_TYPE)) {
+			parse_ocp_telemetry_string_log(0, event_id,
+				pevent_descriptor->debug_event_class_type, EVENT_STRING,
+				description_str);
 
-		offset_to_move += (pevent_descriptor->event_data_size * SIZE_OF_DWORD +
-			event_des_size);
+			struct json_object *pevent_descriptor_obj =
+				((pevent_fifos_object != NULL) ? json_create_object() : NULL);
+
+			if (pevent_descriptor_obj != NULL) {
+				json_add_formatted_u32_str(pevent_descriptor_obj,
+					STR_DBG_EVENT_CLASS_TYPE,
+					pevent_descriptor->debug_event_class_type);
+				json_object_add_value_string(pevent_descriptor_obj,
+					STR_EVENT_STRING, description_str);
+			} else {
+				if (fp) {
+					fprintf(fp, "%s: 0x%x\n", STR_DBG_EVENT_CLASS_TYPE,
+						pevent_descriptor->debug_event_class_type);
+					fprintf(fp, "%s: %s\n", STR_EVENT_STRING, description_str);
+				} else {
+					printf("%s: 0x%x\n", STR_DBG_EVENT_CLASS_TYPE,
+					   pevent_descriptor->debug_event_class_type);
+					printf("%s: %s\n", STR_EVENT_STRING, description_str);
+				}
+			}
+
+			struct nvme_ocp_statistic_snapshot_evt_class_format
+				*pStaticSnapshotEvent =
+					(struct nvme_ocp_statistic_snapshot_evt_class_format *)
+					pevent_descriptor;
+
+			event_des_size =
+				sizeof(struct nvme_ocp_statistic_snapshot_evt_class_format);
+			data_size =
+				(le16_to_cpu((unsigned int)pStaticSnapshotEvent->stat_data_size) *
+					SIZE_OF_DWORD);
+
+			if (pStaticSnapshotEvent != NULL &&
+				pStaticSnapshotEvent->stat_data_size > 0) {
+				__u8 *pstatistic_entry =
+					(__u8 *)pStaticSnapshotEvent +
+					sizeof(struct nvme_ocp_telemetry_event_descriptor);
+
+				parse_statistic(
+					(struct nvme_ocp_telemetry_statistic_descriptor *)
+						pstatistic_entry,
+					pevent_descriptor_obj,
+					fp);
+			}
+		} else {
+			if (fp)
+				fprintf(fp, "Unknown or null event class %p\n", pevent_descriptor);
+			else
+				printf("Unknown or null event class %p\n", pevent_descriptor);
+
+			break;
+		}
+
+		offset_to_move += (data_size + event_des_size);
 	}
 
 	if (pevent_fifos_object != NULL && pevent_fifo_array != NULL)
@@ -1204,9 +1288,13 @@ int parse_statistic(struct nvme_ocp_telemetry_statistic_descriptor *pstatistic_e
 		    struct json_object *pstats_array, FILE *fp)
 {
 	if (pstatistic_entry == NULL) {
-		nvme_show_error("Input buffer was NULL");
+		nvme_show_error("Statistics Input buffer was NULL");
 		return -1;
 	}
+
+	if (le16_to_cpu(pstatistic_entry->statistic_id) == STATISTICS_RESERVED_ID)
+		/* End of statistics entries, return -1 to stop processing the buffer */
+		return -1;
 
 	unsigned int data_size = pstatistic_entry->statistic_data_size * SIZE_OF_DWORD;
 	__u8 *pdata = (__u8 *)pstatistic_entry +
@@ -1236,8 +1324,33 @@ int parse_statistic(struct nvme_ocp_telemetry_statistic_descriptor *pstatistic_e
 			pstatistic_entry->statistic_data_size);
 		json_add_formatted_u32_str(pstatistics_object, STR_RESERVED,
 			pstatistic_entry->reserved);
-		json_add_formatted_var_size_str(pstatistics_object, STR_STATISTICS_SPECIFIC_DATA,
-			pdata, data_size);
+		if (pstatistic_entry->statistic_id == MAX_DIE_BAD_BLOCK_ID) {
+			json_add_formatted_u32_str(pstatistics_object,
+					STR_STATISTICS_WORST_DIE_PERCENT,
+					pdata[0]);
+			json_add_formatted_u32_str(pstatistics_object,
+					STR_STATISTICS_WORST_DIE_RAW,
+					*(__u16 *)&pdata[2]);
+		} else if (pstatistic_entry->statistic_id == MAX_NAND_CHANNEL_BAD_BLOCK_ID) {
+			json_add_formatted_u32_str(pstatistics_object,
+					STR_STATISTICS_WORST_NAND_CHANNEL_PERCENT,
+					pdata[0]);
+			json_add_formatted_u32_str(pstatistics_object,
+					STR_STATISTICS_WORST_NAND_CHANNEL_RAW,
+					*(__u16 *)&pdata[2]);
+		} else if (pstatistic_entry->statistic_id == MIN_NAND_CHANNEL_BAD_BLOCK_ID) {
+			json_add_formatted_u32_str(pstatistics_object,
+					STR_STATISTICS_BEST_NAND_CHANNEL_PERCENT,
+					pdata[0]);
+			json_add_formatted_u32_str(pstatistics_object,
+					STR_STATISTICS_BEST_NAND_CHANNEL_RAW,
+					*(__u16 *)&pdata[2]);
+		} else {
+			json_add_formatted_var_size_str(pstatistics_object,
+					STR_STATISTICS_SPECIFIC_DATA,
+					pdata,
+					data_size);
+		}
 
 		if (pstatistics_object != NULL)
 			json_array_add_value_object(pstats_array, pstatistics_object);
@@ -1257,8 +1370,33 @@ int parse_statistic(struct nvme_ocp_telemetry_statistic_descriptor *pstatistic_e
 			fprintf(fp, "%s: 0x%x\n", STR_STATISTICS_DATA_SIZE,
 				pstatistic_entry->statistic_data_size);
 			fprintf(fp, "%s: 0x%x\n", STR_RESERVED, pstatistic_entry->reserved);
-			print_formatted_var_size_str(STR_STATISTICS_SPECIFIC_DATA, pdata,
-				data_size, fp);
+			if (pstatistic_entry->statistic_id == MAX_DIE_BAD_BLOCK_ID) {
+				fprintf(fp, "%s: 0x%02x\n", STR_STATISTICS_WORST_DIE_PERCENT,
+						pdata[0]);
+				fprintf(fp, "%s: 0x%04x\n", STR_STATISTICS_WORST_DIE_RAW,
+						*(__u16 *)&pdata[2]);
+			} else if (pstatistic_entry->statistic_id ==
+					MAX_NAND_CHANNEL_BAD_BLOCK_ID) {
+				fprintf(fp, "%s: 0x%02x\n",
+						STR_STATISTICS_WORST_NAND_CHANNEL_PERCENT,
+						pdata[0]);
+				fprintf(fp, "%s: 0x%04x\n",
+						STR_STATISTICS_WORST_NAND_CHANNEL_RAW,
+						*(__u16 *)&pdata[2]);
+			} else if (pstatistic_entry->statistic_id ==
+					MIN_NAND_CHANNEL_BAD_BLOCK_ID) {
+				fprintf(fp, "%s: 0x%02x\n",
+						STR_STATISTICS_BEST_NAND_CHANNEL_PERCENT,
+						pdata[0]);
+				fprintf(fp, "%s: 0x%04x\n",
+						STR_STATISTICS_BEST_NAND_CHANNEL_RAW,
+						*(__u16 *)&pdata[2]);
+			} else {
+				print_formatted_var_size_str(STR_STATISTICS_SPECIFIC_DATA,
+						pdata,
+						data_size,
+						fp);
+			}
 			fprintf(fp, STR_LINE2);
 		} else {
 			printf("%s: 0x%x\n", STR_STATISTICS_IDENTIFIER,
@@ -1275,8 +1413,33 @@ int parse_statistic(struct nvme_ocp_telemetry_statistic_descriptor *pstatistic_e
 			printf("%s: 0x%x\n", STR_STATISTICS_DATA_SIZE,
 			       pstatistic_entry->statistic_data_size);
 			printf("%s: 0x%x\n", STR_RESERVED, pstatistic_entry->reserved);
-			print_formatted_var_size_str(STR_STATISTICS_SPECIFIC_DATA, pdata,
-						data_size, fp);
+			if (pstatistic_entry->statistic_id == MAX_DIE_BAD_BLOCK_ID) {
+				printf("%s: 0x%02x\n", STR_STATISTICS_WORST_DIE_PERCENT,
+						pdata[0]);
+				printf("%s: 0x%04x\n", STR_STATISTICS_WORST_DIE_RAW,
+						*(__u16 *)&pdata[2]);
+			} else if (pstatistic_entry->statistic_id ==
+					MAX_NAND_CHANNEL_BAD_BLOCK_ID) {
+				printf("%s: 0x%02x\n",
+						STR_STATISTICS_WORST_NAND_CHANNEL_PERCENT,
+						pdata[0]);
+				printf("%s: 0x%04x\n",
+						STR_STATISTICS_WORST_NAND_CHANNEL_RAW,
+						*(__u16 *)&pdata[2]);
+			} else if (pstatistic_entry->statistic_id ==
+					MIN_NAND_CHANNEL_BAD_BLOCK_ID) {
+				printf("%s: 0x%02x\n",
+						STR_STATISTICS_BEST_NAND_CHANNEL_PERCENT,
+						pdata[0]);
+				printf("%s: 0x%04x\n",
+						STR_STATISTICS_BEST_NAND_CHANNEL_RAW,
+						*(__u16 *)&pdata[2]);
+			} else {
+				print_formatted_var_size_str(STR_STATISTICS_SPECIFIC_DATA,
+						pdata,
+						data_size,
+						fp);
+			}
 			printf(STR_LINE2);
 		}
 	}
@@ -1297,6 +1460,7 @@ int parse_statistics(struct json_object *root, struct nvme_ocp_telemetry_offsets
 	__u32 stats_da_1_start_dw = 0, stats_da_1_size_dw = 0;
 	__u32 stats_da_2_start_dw = 0, stats_da_2_size_dw = 0;
 	__u8 *pstats_offset = NULL;
+	int parse_rc = 0;
 
 	if (poffsets->data_area == 1) {
 		__u32 stats_da_1_start = *(__u32 *)(pda1_ocp_header_offset +
@@ -1336,7 +1500,11 @@ int parse_statistics(struct json_object *root, struct nvme_ocp_telemetry_offsets
 			(struct nvme_ocp_telemetry_statistic_descriptor *)
 			(pstats_offset + offset_to_move);
 
-		parse_statistic(pstatistic_entry, pstats_array, fp);
+		parse_rc = parse_statistic(pstatistic_entry, pstats_array, fp);
+		if (parse_rc < 0)
+			/* end of stats entries or null pointer, so break */
+			break;
+
 		offset_to_move += (pstatistic_entry->statistic_data_size * SIZE_OF_DWORD +
 			stat_des_size);
 	}
@@ -1354,9 +1522,11 @@ int parse_statistics(struct json_object *root, struct nvme_ocp_telemetry_offsets
 int print_ocp_telemetry_normal(struct ocp_telemetry_parse_options *options)
 {
 	int status = 0;
+	char file_path[PATH_MAX];
 
 	if (options->output_file != NULL) {
-		FILE *fp = fopen(options->output_file, "w");
+		sprintf(file_path, "%s.%s", options->output_file, "txt");
+		FILE *fp = fopen(file_path, "w");
 
 		if (fp) {
 			fprintf(fp, STR_LINE);
@@ -1471,7 +1641,7 @@ int print_ocp_telemetry_normal(struct ocp_telemetry_parse_options *options)
 			fprintf(fp, STR_LINE);
 			fclose(fp);
 		} else {
-			nvme_show_error("Failed to open %s file.\n", options->output_file);
+			nvme_show_error("Failed to open %s file.\n", file_path);
 			return -1;
 		}
 	} else {
@@ -1585,6 +1755,7 @@ int print_ocp_telemetry_normal(struct ocp_telemetry_parse_options *options)
 int print_ocp_telemetry_json(struct ocp_telemetry_parse_options *options)
 {
 	int status = 0;
+	char file_path[PATH_MAX];
 
 	//create json objects
 	struct json_object *root, *pheader, *preason_identifier, *da1_header, *smart_obj,
@@ -1680,13 +1851,14 @@ int print_ocp_telemetry_json(struct ocp_telemetry_parse_options *options)
 
 	if (options->output_file != NULL) {
 		const char *json_string = json_object_to_json_string(root);
-		FILE *fp = fopen(options->output_file, "w");
+		sprintf(file_path, "%s.%s", options->output_file, "json");
+		FILE *fp = fopen(file_path, "w");
 
 		if (fp) {
 			fputs(json_string, fp);
 			fclose(fp);
 		} else {
-			nvme_show_error("Failed to open %s file.\n", options->output_file);
+			nvme_show_error("Failed to open %s file.\n", file_path);
 			return -1;
 		}
 	} else {

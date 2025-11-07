@@ -9,7 +9,7 @@
 #include "nvme.h"
 #include "nbft.h"
 #include "fabrics.h"
-#include "util/logging.h"
+#include "logging.h"
 
 #define CREATE_CMD
 #include "nbft-plugin.h"
@@ -47,6 +47,7 @@ static char *mac_addr_to_string(unsigned char mac_addr[6])
 	return mac_string;
 }
 
+#ifdef CONFIG_JSONC
 static json_object *hfi_to_json(struct nbft_info_hfi *hfi)
 {
 	struct json_object *hfi_json;
@@ -348,6 +349,9 @@ fail:
 	json_free_object(nbft_json_array);
 	return -ENOMEM;
 }
+#else /* CONFIG_JSONC */
+#define json_show_nbfts(nbft_list, show_subsys, show_hfi, show_discovery) -EINVAL
+#endif /* CONFIG_JSONC */
 
 static void print_nbft_hfi_info(struct nbft_info *nbft)
 {
@@ -525,7 +529,7 @@ static void normal_show_nbfts(struct list_head *nbft_list, bool show_subsys,
 	}
 }
 
-int show_nbft(int argc, char **argv, struct command *cmd, struct plugin *plugin)
+int show_nbft(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
 	const char *desc = "Display contents of the ACPI NBFT files.";
 	struct list_head nbft_list;

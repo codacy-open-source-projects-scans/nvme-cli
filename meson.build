@@ -4,7 +4,7 @@ project(
     'nvme-cli', ['c'],
     meson_version: '>= 0.50.0',
     license: 'GPL-2.0-only',
-    version: '2.11',
+    version: '2.16',
     default_options: [
       'c_std=gnu99',
       'buildtype=debugoptimized',
@@ -12,6 +12,7 @@ project(
       'warning_level=1',
       'sysconfdir=etc',
       'wrap_mode=nofallback',
+      'force_fallback_for=libnvme',
     ]
 )
 
@@ -48,10 +49,8 @@ conf.set('SYSCONFDIR', '"@0@"'.format(sysconfdir))
 conf.set('RUNDIR', '"@0@"'.format(rundir))
 
 # Check for libnvme availability
-libnvme_dep = dependency('libnvme', version: '>=1.11', required: true,
+libnvme_dep = dependency('libnvme', version: '>=1.16', required: true,
                          fallback : ['libnvme', 'libnvme_dep'])
-libnvme_mi_dep = dependency('libnvme-mi', required: true,
-                         fallback : ['libnvme', 'libnvme_mi_dep'])
 
 # Check for libjson-c availability
 if get_option('json-c').disabled()
@@ -176,6 +175,20 @@ conf.set10(
     ),
     description: 'Does struct opal_key have a key_type field?'
 )
+conf.set(
+    'HAVE_TM_GMTOFF',
+    cc.compiles(
+        '''
+           #include <time.h>
+           int main(void) {
+                struct tm tm;
+                tm.tm_gmtoff = 1;
+           }
+        ''',
+        name: 'tm_gmtoff'
+    ),
+    description: 'Does struct tm have a tm_gmtoff field?'
+)
 
 if cc.has_function_attribute('fallthrough')
   conf.set('fallthrough', '__attribute__((__fallthrough__))')
@@ -253,7 +266,9 @@ udev_files = [
   '65-persistent-net-nbft.rules',
   '70-nvmf-autoconnect.rules',
   '70-nvmf-keys.rules',
+  '71-nvmf-hpe.rules',
   '71-nvmf-netapp.rules',
+  '71-nvmf-vastdata.rules',
 ]
 
 foreach file : udev_files
@@ -279,9 +294,9 @@ sources = [
   'nvme-print-stdout.c',
   'nvme-print-binary.c',
   'nvme-rpmb.c',
-  'nvme-wrap.c',
   'plugin.c',
   'libnvme-wrap.c',
+  'logging.c',
 ]
 if json_c_dep.found()
     sources += [
@@ -301,7 +316,7 @@ subdir('Documentation')
 executable(
   'nvme',
   sources,
-  dependencies: [ libnvme_dep, libnvme_mi_dep, json_c_dep ],
+  dependencies: [ libnvme_dep, json_c_dep ],
   link_args: '-ldl',
   include_directories: incdir,
   install: true,

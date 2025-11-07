@@ -18,7 +18,6 @@
 
 /* C0 SCAO Log Page */
 #define C0_SMART_CLOUD_ATTR_LEN			0x200
-#define C0_SMART_CLOUD_ATTR_OPCODE		0xC0
 
 static __u8 scao_guid[GUID_LEN] = {
 	0xC5, 0xAF, 0x10, 0x28,
@@ -27,20 +26,15 @@ static __u8 scao_guid[GUID_LEN] = {
 	0xC9, 0x14, 0xD5, 0xAF
 };
 
-static int get_c0_log_page(struct nvme_dev *dev, char *format)
+static int get_c0_log_page(struct nvme_transport_handle *hdl, char *format,
+			   unsigned int format_version)
 {
+	struct ocp_smart_extended_log *data;
+	struct nvme_passthru_cmd cmd;
 	nvme_print_flags_t fmt;
-	__u8 *data;
-	int i;
+	__u8 uidx;
 	int ret;
-	int fd = dev_fd(dev);
-	struct nvme_get_log_args args = {
-		.args_size = sizeof(args),
-		.timeout = NVME_DEFAULT_IOCTL_TIMEOUT,
-		.lid = C0_SMART_CLOUD_ATTR_OPCODE,
-		.nsid = NVME_NSID_ALL,
-		.len = C0_SMART_CLOUD_ATTR_LEN,
-	};
+	int i;
 
 	ret = validate_output_format(format, &fmt);
 	if (ret < 0) {
@@ -55,9 +49,15 @@ static int get_c0_log_page(struct nvme_dev *dev, char *format)
 	}
 	memset(data, 0, sizeof(__u8) * C0_SMART_CLOUD_ATTR_LEN);
 
-	args.log = data;
-	ocp_get_uuid_index(dev, &args.uuidx);
-	ret = nvme_get_log_page(fd, NVME_LOG_PAGE_PDU_SIZE, &args);
+	ocp_get_uuid_index(hdl, &uidx);
+	nvme_init_get_log(&cmd, NVME_NSID_ALL,
+			  (enum nvme_cmd_get_log_lid)OCP_LID_SMART,
+			  NVME_CSI_NVM, data, C0_SMART_CLOUD_ATTR_LEN);
+	cmd.cdw14 |= NVME_FIELD_ENCODE(uidx,
+				       NVME_LOG_CDW14_UUID_SHIFT,
+				       NVME_LOG_CDW14_UUID_MASK);
+	ret = nvme_get_log(hdl, &cmd, false,
+				   NVME_LOG_PAGE_PDU_SIZE, NULL);
 
 	if (strcmp(format, "json"))
 		fprintf(stderr, "NVMe Status:%s(%x)\n",
@@ -67,7 +67,7 @@ static int get_c0_log_page(struct nvme_dev *dev, char *format)
 		/* check log page guid */
 		/* Verify GUID matches */
 		for (i = 0; i < 16; i++) {
-			if (scao_guid[i] != data[SCAO_LPG + i])	{
+			if (scao_guid[i] != data->log_page_guid[i]) {
 				int j;
 
 				fprintf(stderr, "ERROR : OCP : Unknown GUID in C0 Log Page data\n");
@@ -77,7 +77,7 @@ static int get_c0_log_page(struct nvme_dev *dev, char *format)
 
 				fprintf(stderr, "\nERROR : OCP : Actual GUID:    0x");
 				for (j = 0; j < 16; j++)
-					fprintf(stderr, "%x", data[SCAO_LPG + j]);
+					fprintf(stderr, "%x", data->log_page_guid[j]);
 				fprintf(stderr, "\n");
 
 				ret = -1;
@@ -86,7 +86,7 @@ static int get_c0_log_page(struct nvme_dev *dev, char *format)
 		}
 
 		/* print the data */
-		ocp_smart_extended_log(data, fmt);
+		ocp_smart_extended_log(data, format_version, fmt);
 	} else {
 		fprintf(stderr, "ERROR : OCP : Unable to read C0 data from buffer\n");
 	}
@@ -96,34 +96,38 @@ out:
 	return ret;
 }
 
-int ocp_smart_add_log(int argc, char **argv, struct command *cmd,
-			     struct plugin *plugin)
+int ocp_smart_add_log(int argc, char **argv, struct command *acmd,
+		      struct plugin *plugin)
 {
 	const char *desc = "Retrieve the extended SMART health data.";
-	struct nvme_dev *dev;
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
 	int ret = 0;
 
 	struct config {
 		char *output_format;
+		unsigned int output_format_version;
 	};
 
 	struct config cfg = {
 		.output_format = "normal",
+		.output_format_version = 1,
 	};
 
 	OPT_ARGS(opts) = {
 		OPT_FMT("output-format", 'o', &cfg.output_format, "output Format: normal|json"),
+		OPT_UINT("output-format-version", 0, &cfg.output_format_version, "output Format version: 1|2"),
 		OPT_END()
 	};
 
-	ret = parse_and_open(&dev, argc, argv, desc, opts);
+	ret = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (ret)
 		return ret;
 
-	ret = get_c0_log_page(dev, cfg.output_format);
+	ret = get_c0_log_page(hdl, cfg.output_format,
+			      cfg.output_format_version);
 	if (ret)
 		fprintf(stderr, "ERROR : OCP : Failure reading the C0 Log Page, ret = %d\n",
 			ret);
-	dev_close(dev);
 	return ret;
 }

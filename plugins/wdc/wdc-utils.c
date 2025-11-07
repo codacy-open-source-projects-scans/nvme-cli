@@ -81,16 +81,16 @@ int wdc_UtilsGetTime(PUtilsTimeInfo timeInfo)
 	timeInfo->second		=  currTimeInfo.tm_sec;
 	timeInfo->msecs			=  0;
 	timeInfo->isDST			=  currTimeInfo.tm_isdst;
-#if defined(__GLIBC__) && !defined(__UCLIBC__) && !defined(__MUSL__)
+#ifdef HAVE_TM_GMTOFF
 	timeInfo->zone			= -currTimeInfo.tm_gmtoff / 60;
-#else
+#else /* HAVE_TM_GMTOFF */
 	timeInfo->zone			= -1 * (timezone / SECONDS_IN_MIN);
-#endif
+#endif /* HAVE_TM_GMTOFF */
 
 	return WDC_STATUS_SUCCESS;
 }
 
-int wdc_UtilsCreateDir(char *path)
+int wdc_UtilsCreateDir(const char *path)
 {
 	int retStatus;
 	int status = WDC_STATUS_SUCCESS;
@@ -111,7 +111,7 @@ int wdc_UtilsCreateDir(char *path)
 	return status;
 }
 
-int wdc_WriteToFile(char *fileName, char *buffer, unsigned int bufferLen)
+int wdc_WriteToFile(const char *fileName, const char *buffer, unsigned int bufferLen)
 {
 	int          status = WDC_STATUS_SUCCESS;
 	FILE         *file;
@@ -143,7 +143,7 @@ end:
  *          1 if the pcSrc string is lexically higher than pcDst or
  *         -1 if the pcSrc string is lexically lower than pcDst.
  */
-int wdc_UtilsStrCompare(char *pcSrc, char *pcDst)
+int wdc_UtilsStrCompare(const char *pcSrc, const char *pcDst)
 {
 	while ((toupper(*pcSrc) == toupper(*pcDst)) && (*pcSrc != '\0')) {
 		pcSrc++;
@@ -165,20 +165,21 @@ void wdc_StrFormat(char *formatter, size_t fmt_sz, char *tofmt, size_t tofmtsz)
 	}
 }
 
-bool wdc_CheckUuidListSupport(struct nvme_dev *dev, struct nvme_id_uuid_list *uuid_list)
+bool wdc_CheckUuidListSupport(struct nvme_transport_handle *hdl,
+			      struct nvme_id_uuid_list *uuid_list)
 {
-	int err;
 	struct nvme_id_ctrl ctrl;
+	int err;
 
 	memset(&ctrl, 0, sizeof(struct nvme_id_ctrl));
-	err = nvme_identify_ctrl(dev_fd(dev), &ctrl);
+	err = nvme_identify_ctrl(hdl, &ctrl);
 	if (err) {
 		fprintf(stderr, "ERROR: WDC: nvme_identify_ctrl() failed 0x%x\n", err);
 		return false;
 	}
 
 	if ((ctrl.ctratt & NVME_CTRL_CTRATT_UUID_LIST) == NVME_CTRL_CTRATT_UUID_LIST) {
-		err = nvme_identify_uuid(dev_fd(dev), uuid_list);
+		err = nvme_identify_uuid_list(hdl, uuid_list);
 		if (!err)
 			return true;
 		else if (err > 0)
@@ -188,9 +189,4 @@ bool wdc_CheckUuidListSupport(struct nvme_dev *dev, struct nvme_id_uuid_list *uu
 	}
 
 	return false;
-}
-
-bool wdc_UuidEqual(struct nvme_id_uuid_list_entry *entry1, struct nvme_id_uuid_list_entry *entry2)
-{
-	return !memcmp(entry1->uuid, entry2->uuid, NVME_UUID_LEN);
 }

@@ -196,12 +196,12 @@ struct workloadLog { // Full WL Log Structure
 #pragma pack(pop)
 
 struct wltracker {
-	int fd;
+	struct nvme_transport_handle *hdl;
+	__u8 uuid_index;
 	struct workloadLog workload_log;
 	size_t poll_count;
 	bool show_wall_timestamp;
 	__u64 us_epoch_ssd_delta;
-	unsigned int verbose;
 	__u64 start_time_us;
 	__u64 run_time_us;
 	bool disable;
@@ -229,7 +229,7 @@ static void wltracker_print_field_names(struct wltracker *wlt)
 	if (wlt->show_wall_timestamp)
 		printf("%-*s", (int)sizeof("YYYY-MM-DD-hh:mm:ss.uuuuuu"), "wall-time");
 
-	if (wlt->verbose > 1)
+	if (nvme_cfg.verbose > 1)
 		printf("%s", "entry# ");
 
 	printf("\n");
@@ -250,7 +250,7 @@ static void wltracker_print_header(struct wltracker *wlt)
 	printf("%-24s %s\n", "Tracker Type:", trk_types[log->config.contentGroup]);
 	printf("%-24s %u\n", "Total log page entries:", le32_to_cpu(log->workloadLogCount));
 	printf("%-24s %u\n", "Trigger count:", log->triggeredEvents);
-	if (wlt->verbose > 1)
+	if (nvme_cfg.verbose > 1)
 		printf("%-24s %ld\n", "Poll count:", wlt->poll_count);
 	if (wlt->poll_count != 0)
 		wltracker_print_field_names(wlt);
@@ -273,29 +273,28 @@ __u64 micros(void)
 
 int wltracker_config(struct wltracker *wlt, union WorkloadLogEnable *we)
 {
-	struct nvme_set_features_args args = {
-		.args_size	= sizeof(args),
-		.fd			= wlt->fd,
-		.fid		= FID,
-		.cdw11		= we->dword,
-		.timeout	= NVME_DEFAULT_IOCTL_TIMEOUT,
-	};
-
-	return nvme_set_features(&args);
+	return nvme_set_features(wlt->hdl, 0, FID, 0, we->dword, 0, 0, 0,
+			wlt->uuid_index, NULL, 0, NULL);
 }
 
 static int wltracker_show_newer_entries(struct wltracker *wlt)
 {
 	struct workloadLog *log = &wlt->workload_log;
-	__u8 cnt;
-	__u8 content_group;
+	union WorkloadLogEnable workloadEnable;
 	static __u64 last_timestamp_us;
+	struct nvme_passthru_cmd cmd;
 	__u64 timestamp_us = 0;
 	__u64 timestamp = 0;
-	union WorkloadLogEnable workloadEnable;
+	__u8 content_group;
+	__u8 cnt;
+	int err;
 
-	int err = nvme_get_log_simple(wlt->fd, LID, sizeof(struct workloadLog), log);
-
+	nvme_init_get_log(&cmd, NVME_NSID_NONE, LID, NVME_CSI_NVM,
+			  log, sizeof(*log));
+	cmd.cdw14 |= NVME_FIELD_ENCODE(wlt->uuid_index,
+				       NVME_LOG_CDW14_UUID_SHIFT,
+				       NVME_LOG_CDW14_UUID_MASK);
+	err = nvme_get_log(wlt->hdl, &cmd, false, NVME_LOG_PAGE_PDU_SIZE, NULL);
 	if (err > 0) {
 		nvme_show_status(err);
 		return err;
@@ -303,7 +302,7 @@ static int wltracker_show_newer_entries(struct wltracker *wlt)
 	if (err < 0)
 		return err;
 
-	if (wlt->verbose)
+	if (nvme_cfg.verbose)
 		wltracker_print_header(wlt);
 
 	cnt = log->workloadLogCount;
@@ -331,7 +330,7 @@ static int wltracker_show_newer_entries(struct wltracker *wlt)
 			// retrieve fresh timestamp to reconstruct wall time
 			union WorkloadLogEnable we = log->config;
 
-			if (wlt->verbose > 1) {
+			if (nvme_cfg.verbose > 1) {
 				printf("Temporarily enabling tracker to find current timestamp\n");
 				printf("Original config value: 0x%08x\n", we.dword);
 			}
@@ -339,7 +338,7 @@ static int wltracker_show_newer_entries(struct wltracker *wlt)
 			we.triggerEnable = false;
 			we.sampleTime = 1;
 
-			if (wlt->verbose > 1)
+			if (nvme_cfg.verbose > 1)
 				printf("Modified config value: 0x%08x\n", we.dword);
 
 			err = wltracker_config(wlt, &we);
@@ -347,7 +346,7 @@ static int wltracker_show_newer_entries(struct wltracker *wlt)
 			if (!err) {
 				struct workloadLog tl;
 
-				err = nvme_get_log_simple(wlt->fd, LID, sizeof(tl), &tl);
+				err = nvme_get_log_simple(wlt->hdl, LID, &tl, sizeof(tl));
 				tle = tl.timestamp_lastEntry;
 			}
 			if (err) {
@@ -357,7 +356,7 @@ static int wltracker_show_newer_entries(struct wltracker *wlt)
 				we = log->config;
 				we.triggerEnable = false;
 				err = wltracker_config(wlt, &we);
-				if (wlt->verbose > 1)
+				if (nvme_cfg.verbose > 1)
 					printf("Restored config value: 0x%08x\n",
 					       we.dword);
 			}
@@ -395,7 +394,7 @@ static int wltracker_show_newer_entries(struct wltracker *wlt)
 					       (uint64_t)(epoch_ts_us % 1000000ULL));
 				}
 
-				if (wlt->verbose > 1)
+				if (nvme_cfg.verbose > 1)
 					printf("%-*i", (int)sizeof("entry#"), i);
 
 				printf("\n");
@@ -431,7 +430,7 @@ static int wltracker_show_newer_entries(struct wltracker *wlt)
 void wltracker_run_time_update(struct wltracker *wlt)
 {
 	wlt->run_time_us = micros() - wlt->start_time_us;
-	if (wlt->verbose > 0)
+	if (nvme_cfg.verbose > 0)
 		printf("run_time: %lluus\n", wlt->run_time_us);
 }
 
@@ -485,17 +484,17 @@ static void join_fields(char *dest, struct field *fields)
 	}
 }
 
-int sldgm_get_workload_tracker(int argc, char **argv, struct command *cmd, struct plugin *plugin)
+int sldgm_get_workload_tracker(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
-	struct wltracker wlt = {0};
-	union WorkloadLogEnable we = {0};
-
-	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
 	const char *desc = "Real Time capture Workload Tracker samples";
 	const char *sample_interval = "Sample interval";
 	const char *run_time = "Limit runtime capture time in seconds";
 	const char *flush_frequency =
 		"Samples (1 to 126) to wait for extracting data. Default 100 samples";
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
+	struct wltracker wlt = {0};
+	union WorkloadLogEnable we = {0};
 	char type_options[80] = {0};
 	char sample_options[80] = {0};
 	__u64 stop_time_us;
@@ -527,6 +526,7 @@ int sldgm_get_workload_tracker(int argc, char **argv, struct command *cmd, struc
 	join_options(sample_options, samplet, ARRAY_SIZE(samplet));
 
 	OPT_ARGS(opts) = {
+		OPT_BYTE("uuid-index",   'U', &wlt.uuid_index, "specify uuid index"),
 		OPT_FLAG("enable", 'e', &cfg.enable, "tracker enable"),
 		OPT_FLAG("disable", 'd', &cfg.disable, "tracker disable"),
 		OPT_STRING("sample-time", 's', sample_options, &cfg.sample_time, sample_interval),
@@ -542,15 +542,20 @@ int sldgm_get_workload_tracker(int argc, char **argv, struct command *cmd, struc
 			 "Trigger on delta to stop sampling"),
 		OPT_FLAG("trigger-on-latency", 'L', &cfg.trigger_on_latency,
 			 "Use latency tracker to trigger stop sampling"),
-		OPT_INCR("verbose", 'v', &wlt.verbose, "Increase logging verbosity"),
+		OPT_INCR("verbose", 'v', &nvme_cfg.verbose, "Increase logging verbosity"),
 		OPT_END()
 	};
 
-	err = parse_and_open(&dev, argc, argv, desc, opts);
+	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err)
 		return err;
 
-	wlt.fd = dev_fd(dev);
+	if (wlt.uuid_index > 127) {
+		nvme_show_error("invalid uuid index param: %u", wlt.uuid_index);
+		return -1;
+	}
+
+	wlt.hdl = hdl;
 
 	if ((cfg.flush_frequency < 1) || (cfg.flush_frequency > MAX_WORKLOAD_LOG_ENTRIES)) {
 		nvme_show_error("Invalid number of samples: %s. Valid values: 1-%d",
@@ -598,8 +603,8 @@ int sldgm_get_workload_tracker(int argc, char **argv, struct command *cmd, struc
 		we.triggerEnable = true;
 		we.triggerDelta = cfg.trigger_on_delta;
 		we.triggerSynchronous = !cfg.trigger_on_latency;
-		err = nvme_set_features_data(wlt.fd, 0xf5, 0, cfg.trigger_treshold, 0, 0, NULL,
-					     NULL);
+		err = nvme_set_features(wlt.hdl, 0, 0xf5, 0, cfg.trigger_treshold, 0,
+				0, wlt.uuid_index, 0, NULL, 0, NULL);
 		if (err < 0) {
 			nvme_show_error("Trigger Threshold set-feature: %s", nvme_strerror(errno));
 			return err;
@@ -651,7 +656,7 @@ int sldgm_get_workload_tracker(int argc, char **argv, struct command *cmd, struc
 		if (interval > elapsed) {
 			__u64 period_us = min(next_sample_us - wlt.run_time_us,
 					      stop_time_us - wlt.run_time_us);
-			if (wlt.verbose > 1)
+			if (nvme_cfg.verbose > 1)
 				printf("Sleeping %lluus..\n", period_us);
 			usleep(period_us);
 			wltracker_run_time_update(&wlt);
@@ -666,7 +671,7 @@ int sldgm_get_workload_tracker(int argc, char **argv, struct command *cmd, struc
 	if (cfg.disable) {
 		union WorkloadLogEnable we2 = wlt.workload_log.config;
 
-		if (wlt.verbose > 1)
+		if (nvme_cfg.verbose > 1)
 			printf("Original config value: 0x%08x\n", we2.dword);
 
 		we2.trackerEnable = false;
@@ -679,7 +684,7 @@ int sldgm_get_workload_tracker(int argc, char **argv, struct command *cmd, struc
 			nvme_show_status(err);
 			return err;
 		}
-		if (wlt.verbose > 1)
+		if (nvme_cfg.verbose > 1)
 			printf("Modified config value: 0x%08x\n", we2.dword);
 		printf("Tracker disabled\n");
 		return 0;

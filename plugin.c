@@ -34,24 +34,29 @@ static int help(int argc, char **argv, struct plugin *plugin)
 	int i;
 
 	if (argc == 1) {
-		general_help(plugin);
+		general_help(plugin, NULL);
 		return 0;
 	}
 
 	for (i = 0; plugin->commands[i]; i++) {
-		struct command *cmd = plugin->commands[i];
+		struct command *command = plugin->commands[i];
 
-		if (strcmp(str, cmd->name))
-			if (!cmd->alias || (cmd->alias && strcmp(str, cmd->alias)))
+		if (strcmp(str, command->name))
+			if (!command->alias ||
+			    (command->alias && strcmp(str, command->alias)))
 				continue;
 
 		if (plugin->name)
-			sprintf(man, "%s-%s-%s", prog->name, plugin->name, cmd->name);
+			sprintf(man, "%s-%s-%s", prog->name,
+				plugin->name, command->name);
 		else
-			sprintf(man, "%s-%s", prog->name, cmd->name);
+			sprintf(man, "%s-%s", prog->name, command->name);
 		if (execlp("man", "man", man, (char *)NULL))
 			perror(argv[1]);
 	}
+
+	general_help(plugin, str);
+
 	return 0;
 }
 
@@ -65,7 +70,7 @@ static void usage_cmd(struct plugin *plugin)
 		printf("usage: %s %s\n", prog->name, prog->usage);
 }
 
-void general_help(struct plugin *plugin)
+void general_help(struct plugin *plugin, char *str)
 {
 	struct program *prog = plugin->parent;
 	struct plugin *extension;
@@ -88,6 +93,8 @@ void general_help(struct plugin *plugin)
 	}
 
 	printf("\nThe following are all implemented sub-commands:\n");
+	if (str)
+		printf("Note: Only sub-commands including %s\n", str);
 
 	/*
 	 * iterate through all commands to get maximum length
@@ -100,12 +107,16 @@ void general_help(struct plugin *plugin)
 	}
 
 	i = 0;
-	for (; plugin->commands[i]; i++)
-		printf("  %-*s %s\n", padding, plugin->commands[i]->name,
-					plugin->commands[i]->help);
+	for (; plugin->commands[i]; i++) {
+		if (!str || strstr(plugin->commands[i]->name, str))
+			printf("  %-*s %s\n", padding, plugin->commands[i]->name,
+			       plugin->commands[i]->help);
+	}
 
-	printf("  %-*s %s\n", padding, "version", "Shows the program version");
-	printf("  %-*s %s\n", padding, "help", "Display this help");
+	if (!str || strstr("version", str))
+		printf("  %-*s %s\n", padding, "version", "Shows the program version");
+	if (!str || strstr("help", str))
+		printf("  %-*s %s\n", padding, "help", "Display this help");
 	printf("\n");
 
 	if (plugin->name)
@@ -127,8 +138,12 @@ void general_help(struct plugin *plugin)
 		return;
 
 	printf("\nThe following are all installed plugin extensions:\n");
+	if (str)
+		printf("Note: Only extensions including %s\n", str);
+
 	while (extension) {
-		printf("  %-*s %s\n", 15, extension->name, extension->desc);
+		if (!str || strstr(extension->name, str))
+			printf("  %-*s %s\n", 15, extension->name, extension->desc);
 		extension = extension->next;
 	}
 	printf("\nSee '%s <plugin> help' for more information on a plugin\n",
@@ -144,9 +159,10 @@ int handle_plugin(int argc, char **argv, struct plugin *plugin)
 	struct command **cmd = plugin->commands;
 	struct command *cr = NULL;
 	bool cr_valid = false;
+	int dash_count = 0;
 
 	if (!argc) {
-		general_help(plugin);
+		general_help(plugin, NULL);
 		return 0;
 	}
 
@@ -156,11 +172,14 @@ int handle_plugin(int argc, char **argv, struct plugin *plugin)
 		sprintf(use, "%s %s %s <device> [OPTIONS]", prog->name, plugin->name, str);
 	argconfig_append_usage(use);
 
-	/* translate --help and --version into commands */
-	while (*str == '-')
-		str++;
+	/* translate --help, -h and --version into commands */
+	while (str[dash_count] == '-')
+		dash_count++;
 
-	if (!strcmp(str, "help"))
+	if (dash_count)
+		str += dash_count;
+
+	if (!strcmp(str, "help") || (dash_count == 1 && !strcmp(str, "h")))
 		return help(argc, argv, plugin);
 	if (!strcmp(str, "version"))
 		return version_cmd(plugin);

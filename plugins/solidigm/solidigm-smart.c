@@ -41,6 +41,19 @@ struct __packed nvme_additional_smart_log_item {
 	__u8			_rp;
 };
 
+struct __packed smart_ref_clk {
+	__u8 id;
+	__u8 _kp[2];
+	__u8 normalized;
+	__le16 gainCount0;
+	__le16 lossCount0;
+	__le16 gainCount1;
+	__le16 lossCount1;
+};
+
+_Static_assert(sizeof(struct nvme_additional_smart_log_item) == sizeof(struct smart_ref_clk),
+	"Size mismatch for smart_ref_clk");
+
 #define VU_SMART_PAGE_SIZE 512
 #define VU_SMART_MAX_ITEMS (VU_SMART_PAGE_SIZE / sizeof(struct nvme_additional_smart_log_item))
 struct vu_smart_log {
@@ -113,6 +126,8 @@ static char *id_to_name(__u8 id)
 
 static void smart_log_item_print(struct nvme_additional_smart_log_item *item)
 {
+	struct smart_ref_clk *pll_item = (struct smart_ref_clk *)item;
+
 	if (!item->id)
 		return;
 
@@ -131,6 +146,14 @@ static void smart_log_item_print(struct nvme_additional_smart_log_item *item)
 			item->thermal_throttle.pct,
 			le32_to_cpu(item->thermal_throttle.count));
 		return;
+	case 0xF3:
+		printf("gain0: %u, loss0: %u, gain1: %u, loss1: %u, legacy:%lu\n",
+			le16_to_cpu(pll_item->gainCount0),
+			le16_to_cpu(pll_item->lossCount0),
+			le16_to_cpu(pll_item->gainCount1),
+			le16_to_cpu(pll_item->lossCount1),
+			int48_to_long(item->raw));
+		return;
 	default:
 		printf("%"PRIu64"\n", int48_to_long(item->raw));
 	}
@@ -138,6 +161,7 @@ static void smart_log_item_print(struct nvme_additional_smart_log_item *item)
 
 static void smart_log_item_add_json(struct nvme_additional_smart_log_item *item, struct json_object *dev_stats)
 {
+	struct smart_ref_clk *pll_item = (struct smart_ref_clk *)item;
 	struct json_object *entry_stats = json_create_object();
 
 	if (!item->id)
@@ -154,6 +178,13 @@ static void smart_log_item_add_json(struct nvme_additional_smart_log_item *item,
 	case 0xEA:
 		json_object_add_value_int(entry_stats, "percentage", item->thermal_throttle.pct);
 		json_object_add_value_int(entry_stats, "count", le32_to_cpu(item->thermal_throttle.count));
+		break;
+	case 0xF3:
+		json_object_add_value_int(entry_stats, "gain0", le16_to_cpu(pll_item->gainCount0));
+		json_object_add_value_int(entry_stats, "loss0", le16_to_cpu(pll_item->lossCount0));
+		json_object_add_value_int(entry_stats, "gain1", le16_to_cpu(pll_item->gainCount1));
+		json_object_add_value_int(entry_stats, "loss1", le16_to_cpu(pll_item->lossCount1));
+		json_object_add_value_int(entry_stats, "legacy", int48_to_long(item->raw));
 		break;
 	default:
 		json_object_add_value_int(entry_stats, "raw", int48_to_long(item->raw));
@@ -191,14 +222,16 @@ static void vu_smart_log_show(struct vu_smart_log *payload, unsigned int nsid, c
 		smart_log_item_print(&item[i]);
 }
 
-int solidigm_get_additional_smart_log(int argc, char **argv, struct command *cmd, struct plugin *plugin)
+int solidigm_get_additional_smart_log(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
 	const char *desc =
 	    "Get Solidigm vendor specific smart log (optionally, for the specified namespace), and show it.";
 	const int solidigm_vu_smart_log_id = 0xCA;
 	struct vu_smart_log smart_log_payload;
 	nvme_print_flags_t flags;
-	struct nvme_dev *dev;
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
+	struct nvme_passthru_cmd cmd;
 	int err;
 	__u8 uuid_index;
 
@@ -215,57 +248,43 @@ int solidigm_get_additional_smart_log(int argc, char **argv, struct command *cmd
 	OPT_ARGS(opts) = {
 		OPT_UINT("namespace-id",   'n', &cfg.namespace_id,   "(optional) desired namespace"),
 		OPT_FMT("output-format",   'o', &cfg.output_format,  output_format),
+		OPT_INCR("verbose",        'v', &nvme_cfg.verbose, verbose),
 		OPT_END()
 	};
 
-	err = parse_and_open(&dev, argc, argv, desc, opts);
+	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err)
 		return err;
 
 	err = validate_output_format(cfg.output_format, &flags);
 	if (err < 0) {
 		fprintf(stderr, "Invalid output format '%s'\n", cfg.output_format);
-		dev_close(dev);
 		return err;
 	}
 
-	sldgm_get_uuid_index(dev, &uuid_index);
+	sldgm_get_uuid_index(hdl, &uuid_index);
 
-	struct nvme_get_log_args args = {
-		.lpo = 0,
-		.result = NULL,
-		.log = &smart_log_payload,
-		.args_size = sizeof(args),
-		.fd = dev_fd(dev),
-		.timeout = NVME_DEFAULT_IOCTL_TIMEOUT,
-		.lid = solidigm_vu_smart_log_id,
-		.len = sizeof(smart_log_payload),
-		.nsid = NVME_NSID_ALL,
-		.csi = NVME_CSI_NVM,
-		.lsi = NVME_LOG_LSI_NONE,
-		.lsp = NVME_LOG_LSP_NONE,
-		.uuidx = uuid_index,
-		.rae = false,
-		.ot = false,
-	};
-
-	err =  nvme_get_log(&args);
+	nvme_init_get_log(&cmd, NVME_NSID_ALL,
+			  solidigm_vu_smart_log_id, NVME_CSI_NVM,
+			  &smart_log_payload, sizeof(smart_log_payload));
+	cmd.cdw14 |= NVME_FIELD_ENCODE(uuid_index,
+				       NVME_LOG_CDW14_UUID_SHIFT,
+				       NVME_LOG_CDW14_UUID_MASK);
+	err = nvme_get_log(hdl, &cmd, false,
+				   NVME_LOG_PAGE_PDU_SIZE, NULL);
 	if (!err) {
 		if (flags & JSON)
 			vu_smart_log_show_json(&smart_log_payload,
-					       cfg.namespace_id, dev->name);
+					       cfg.namespace_id, nvme_transport_handle_get_name(hdl));
 		else if (flags & BINARY)
 			d_raw((unsigned char *)&smart_log_payload, sizeof(smart_log_payload));
 		else
 			vu_smart_log_show(&smart_log_payload, cfg.namespace_id,
-					  dev->name, uuid_index);
+					  nvme_transport_handle_get_name(hdl), uuid_index);
 	} else if (err > 0) {
 		nvme_show_status(err);
 	}
 
-	/* Redundant close() to make static code analysis happy */
-	close(dev->direct.fd);
-	dev_close(dev);
 	return err;
 }
 

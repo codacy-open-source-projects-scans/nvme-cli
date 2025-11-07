@@ -49,11 +49,98 @@ linknvme:nvme-micron-temperature-stats[1]::
 linknvme:nvme-ocp-internal-log[1]::
 	Retrieves and parses OCP Telemetry DA1 and DA2 logs.
 
+linknvme:nvme-ocp-telemetry-string-log[1]::
+	Retrieves and parses OCP Telemetry String Log page.
+
 linknvme:nvme-netapp-ontapdevices[1]::
 	Display information about ONTAP devices
 
 linknvme:nvme-netapp-smdevices[1]::
 	Display information for each NVMe path to an E-Series volume
+
+linknvme:nvme-sndk-capabilities[1]::
+	Display Sandisk plugin command capabilities
+
+linknvme:nvme-sndk-clear-assert-dump[1]::
+	Clears the assert dump (if present)
+
+linknvme:nvme-sndk-clear-fw-activate-history[1]::
+	Clears the firmware activate history table
+
+linknvme:nvme-sndk-clear-pcie-correctable-errors[1]::
+	Clears the pcie correctable errors returned in the smart-log-add command
+
+linknvme:nvme-sndk-cloud-SSD-plugin-version[1]::
+	Display Sandisk plugin Cloud SSD Plugin Version
+
+linknvme:nvme-sndk-cloud-boot-SSD-version[1]::
+	Display Sandisk Cloud Boot SSD Version
+
+linknvme:nvme-sndk-cu-smart-log[1]::
+	Display Sandisk Customer Unique Smart log pagee
+
+linknvme:nvme-sndk-drive-resize[1]::
+	Send NVMe Sandisk Resize Vendor Unique Command
+
+linknvme:nvme-sndk-get-drive-status[1]::
+	Send the NVMe Sandisk get-drive-status command
+
+linknvme:nvme-sndk-get-dev-capabilities-log[1]::
+	Display device capabilities og page data in human readable format
+
+linknvme:nvme-sndk-get-error-recovery-log[1]::
+	Display error recovery log page data in human readable format
+
+linknvme:nvme-sndk-get-latency-monitor-log[1]::
+	Display latency monitor log page data in human readable format
+
+linknvme:nvme-sndk-get-unsupported-reqs-log[1]::
+	Display unsupported requirements log page data in human readable format
+
+linknvme:nvme-sndk-log-page-directory[1]::
+	Retrieves the list of Log IDs supported by the drive
+
+linknvme:nvme-sndk-namespace-resize[1]::
+	Resizes the device's namespace
+
+linknvme:nvme-sndk-set-latency-monitor-feature[1]::
+	Set Latency Monitor feature
+
+linknvme:nvme-sndk-vs-cloud-log[1]::
+	Display the cloud log page
+
+linknvme:nvme-sndk-vs-device-waf[1]::
+	Display calculated device Write Amplication Factor
+
+linknvme:nvme-sndk-vs-drive-info[1]::
+	Send the NVMe Sandisk vs-drive-info command
+
+linknvme:nvme-sndk-vs-error-reason-identifier[1]::
+	Retrieve Sandisk device's telemetry log error reason identifier field
+
+linknvme:nvme-sndk-vs-fw-activate-history[1]::
+	Execute NVMe Sandisk vs-fw-activate-history Vendor Unique Command
+
+linknvme:nvme-sndk-vs-hw-rev-log[1]::
+	Display hardware revision log page
+
+linknvme:nvme-sndk-vs-internal-log[1]::
+	Retrieve Sandisk device's internal firmware log and save to file
+
+linknvme:nvme-sndk-vs-nand-stats[1]::
+	Send NVMe Sandisk vs-nand-stats Vendor Unique Command
+
+linknvme:nvme-sndk-vs-pcie-stats[1]::
+	Send the NVMe Sandisk vs-pcie-stats command
+
+linknvme:nvme-sndk-vs-smart-add-log[1]::
+	Send NVMe Sandisk smart add log Vendor Unique Command
+
+linknvme:nvme-sndk-vs-telemetry-controller-option[1]::
+	Disable/Enable the controller initiated option of the telemetry log page
+
+linknvme:nvme-sndk-vs-temperature-stats[1]::
+	Display temperature-related statistics
 
 linknvme:nvme-toshiba-clear-pcie-correctable-errors[1]::
 	Reset the PCIe correctable errors count to zero
@@ -96,6 +183,9 @@ linknvme:nvme-wdc-clear-pcie-correctable-errors[1]::
 
 linknvme:nvme-wdc-cloud-SSD-plugin-version[1]::
 	Display WDC plugin Cloud SSD Plugin Version
+
+linknvme:nvme-wdc-cu-smart-log[1]::
+	Display WDC plugin Customer Unique Log Page
 
 linknvme:nvme-wdc-drive-essentials[1]::
 	Retrieve WDC device's drive essentials bin files
@@ -207,3 +297,57 @@ linknvme:nvme-inspur-nvme-vendor-log[1]::
 
 linknvme:nvme-dapustor-smart-log-add[1]::
 	NVMe DapuStor Additional SMART log page
+
+linknvme:nvme-solidigm-id-ctrl[1]::
+	Solidigm - NVMe Identify Controller
+
+linknvme:nvme-solidigm-smart-log-add[1]::
+	Retrieve Solidigm SMART Log
+
+linknvme:nvme-solidigm-vs-internal-log[1]::
+	Retrieve Debug log binaries
+
+linknvme:nvme-solidigm-garbage-collect-log[1]::
+	Retrieve Garbage Collection Log
+
+linknvme:nvme-solidigm-market-log[1]::
+	Retrieve Market Log
+
+linknvme:nvme-solidigm-latency-tracking-log[1]::
+	Enable/Retrieve Latency tracking Log
+
+linknvme:nvme-solidigm-parse-telemetry-log[1]::
+	Parse Telemetry Log binary
+
+linknvme:nvme-solidigm-log-page-directory[1]::
+	Retrieve log page directory
+
+linknvme:nvme-solidigm-temp-stats[1]::
+	Retrieve Temperature Statistics log
+
+linknvme:nvme-solidigm-vs-drive-info[1]::
+	Retrieve drive information
+
+linknvme:nvme-solidigm-workload-tracker[1]::
+	Real Time capture Workload Tracker samples
+
+linknvme:nvme-sed-discover[1]::
+	Discover SED Opal Locking Features
+
+linknvme:nvme-sed-initialize[1]::
+	Initialize a SED Opal Device for locking
+
+linknvme:nvme-sed-revert[1]::
+	Revert a SED Opal Device from locking
+
+linknvme:nvme-sed-lock[1]::
+	Lock a SED Opal Device
+
+linknvme:nvme-sed-unlock[1]::
+	Unlock a SED Opal Device
+
+linknvme:nvme-sed-password[1]::
+	Change the SED Opal Device password
+
+linknvme:nvme-mangoboost-id-ctrl[1]::
+	MangoBoost - NVMe Identify Controller

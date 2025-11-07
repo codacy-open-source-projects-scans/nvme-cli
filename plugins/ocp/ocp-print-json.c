@@ -11,15 +11,16 @@
 
 static void print_hwcomp_desc_json(struct hwcomp_desc_entry *e, struct json_object *r)
 {
-	obj_add_str(r, "Description", hwcomp_id_to_string(le32_to_cpu(e->desc->id)));
-	obj_add_nprix64(r, "Date/Lot Size", e->date_lot_size);
-	obj_add_nprix64(r, "Additional Information Size", e->add_info_size);
-	obj_add_uint_0nx(r, "Identifier", le32_to_cpu(e->desc->id), 8);
-	obj_add_0nprix64(r, "Manufacture", le64_to_cpu(e->desc->mfg), 16);
-	obj_add_0nprix64(r, "Revision", le64_to_cpu(e->desc->rev), 16);
-	obj_add_0nprix64(r, "Manufacture Code", le64_to_cpu(e->desc->mfg_code), 16);
-	obj_add_byte_array(r, "Date/Lot Code", e->date_lot_code, e->date_lot_size);
-	obj_add_byte_array(r, "Additional Information", e->add_info, e->add_info_size);
+	json_object_add_value_string(r, "Description",
+				     hwcomp_id_to_string(le32_to_cpu(e->desc->id)));
+	json_object_add_nprix64(r, "Date/Lot Size", e->date_lot_size);
+	json_object_add_nprix64(r, "Additional Information Size", e->add_info_size);
+	json_object_add_uint_0nx(r, "Identifier", le32_to_cpu(e->desc->id), 8);
+	json_object_add_0nprix64(r, "Manufacture", le64_to_cpu(e->desc->mfg), 16);
+	json_object_add_0nprix64(r, "Revision", le64_to_cpu(e->desc->rev), 16);
+	json_object_add_0nprix64(r, "Manufacture Code", le64_to_cpu(e->desc->mfg_code), 16);
+	json_object_add_byte_array(r, "Date/Lot Code", e->date_lot_code, e->date_lot_size);
+	json_object_add_byte_array(r, "Additional Information", e->add_info, e->add_info_size);
 }
 
 static void print_hwcomp_desc_list_json(struct json_object *r, struct hwcomp_desc_entry *e,
@@ -31,7 +32,8 @@ static void print_hwcomp_desc_list_json(struct json_object *r, struct hwcomp_des
 		return;
 
 	if (list) {
-		obj_add_str(r, k, hwcomp_id_to_string(le32_to_cpu(e->desc->id)));
+		json_object_add_value_string(r, k,
+					     hwcomp_id_to_string(le32_to_cpu(e->desc->id)));
 		return;
 	}
 
@@ -63,19 +65,19 @@ static void print_hwcomp_descs_json(struct hwcomp_desc *desc, long double log_si
 
 static void json_hwcomp_log(struct hwcomp_log *log, __u32 id, bool list)
 {
+	long double log_bytes = uint128_t_to_double(le128_to_cpu(log->size));
 	struct json_object *r = json_create_object();
 
-	long double log_size = uint128_t_to_double(le128_to_cpu(log->size));
 	if (log->ver == 1)
-		log_size *= sizeof(__le32);
+		log_bytes *= sizeof(__le32);
 
-	obj_add_uint_02x(r, "Log Identifier", LID_HWCOMP);
-	obj_add_uint_0x(r, "Log Page Version", le16_to_cpu(log->ver));
-	obj_add_byte_array(r, "Reserved2", log->rsvd2, ARRAY_SIZE(log->rsvd2));
-	obj_add_byte_array(r, "Log page GUID", log->guid, ARRAY_SIZE(log->guid));
-	obj_add_nprix64(r, "Hardware Component Log Size", (unsigned long long)log_size);
-	obj_add_byte_array(r, "Reserved48", log->rsvd48, ARRAY_SIZE(log->rsvd48));
-	print_hwcomp_descs_json(log->desc, log_size - offsetof(struct hwcomp_log, desc), id, list,
+	json_object_add_uint_02x(r, "Log Identifier", OCP_LID_HWCOMP);
+	json_object_add_uint_0x(r, "Log Page Version", le16_to_cpu(log->ver));
+	json_object_add_byte_array(r, "Reserved2", log->rsvd2, ARRAY_SIZE(log->rsvd2));
+	json_object_add_byte_array(r, "Log page GUID", log->guid, ARRAY_SIZE(log->guid));
+	json_object_add_nprix64(r, "Hardware Component Log Size", (unsigned long long)log_bytes);
+	json_object_add_byte_array(r, "Reserved48", log->rsvd48, ARRAY_SIZE(log->rsvd48));
+	print_hwcomp_descs_json(log->desc, log_bytes - offsetof(struct hwcomp_log, desc), id, list,
 				obj_create_array_obj(r, "Component Descriptions"));
 
 	json_print(r);
@@ -99,7 +101,7 @@ static void json_fw_activation_history(const struct fw_activation_history *fw_hi
 		json_object_add_value_uint(entry_obj, "activation count",
 					   le16_to_cpu(entry->activation_count));
 		json_object_add_value_uint64(entry_obj, "timestamp",
-				(0x0000FFFFFFFFFFFF & le64_to_cpu(entry->timestamp)));
+					     int48_to_long(entry->ts.timestamp));
 		json_object_add_value_uint(entry_obj, "power cycle count",
 					   le64_to_cpu(entry->power_cycle_count));
 
@@ -136,85 +138,88 @@ static void json_fw_activation_history(const struct fw_activation_history *fw_hi
 	printf("\n");
 }
 
-static void json_smart_extended_log(void *data)
+static void json_smart_extended_log_v1(struct ocp_smart_extended_log *log)
 {
 	struct json_object *root;
 	struct json_object *pmuw;
 	struct json_object *pmur;
 	uint16_t smart_log_ver = 0;
-	__u8 *log_data = data;
+	uint16_t dssd_version = 0;
+	int i = 0;
 	char guid[40];
+	char ascii_arr[65];
+	char *ascii = ascii_arr;
 
 	root = json_create_object();
 	pmuw = json_create_object();
 	pmur = json_create_object();
 
 	json_object_add_value_uint64(pmuw, "hi",
-		(uint64_t)le64_to_cpu(*(uint64_t *)&log_data[SCAO_PMUW + 8] & 0xFFFFFFFFFFFFFFFF));
+		le64_to_cpu(*(uint64_t *)&log->physical_media_units_written[8]));
 	json_object_add_value_uint64(pmuw, "lo",
-		(uint64_t)le64_to_cpu(*(uint64_t *)&log_data[SCAO_PMUW] & 0xFFFFFFFFFFFFFFFF));
+		le64_to_cpu(*(uint64_t *)&log->physical_media_units_written));
 	json_object_add_value_object(root, "Physical media units written", pmuw);
 	json_object_add_value_uint64(pmur, "hi",
-		(uint64_t)le64_to_cpu(*(uint64_t *)&log_data[SCAO_PMUR + 8] & 0xFFFFFFFFFFFFFFFF));
+		le64_to_cpu(*(uint64_t *)&log->physical_media_units_read[8]));
 	json_object_add_value_uint64(pmur, "lo",
-		(uint64_t)le64_to_cpu(*(uint64_t *)&log_data[SCAO_PMUR] & 0xFFFFFFFFFFFFFFFF));
+		le64_to_cpu(*(uint64_t *)&log->physical_media_units_read));
 	json_object_add_value_object(root, "Physical media units read", pmur);
 	json_object_add_value_uint64(root, "Bad user nand blocks - Raw",
-		(uint64_t)le64_to_cpu(*(uint64_t *)&log_data[SCAO_BUNBR] & 0x0000FFFFFFFFFFFF));
+		int48_to_long(log->bad_user_nand_blocks_raw));
 	json_object_add_value_uint(root, "Bad user nand blocks - Normalized",
-		(uint16_t)le16_to_cpu(*(uint16_t *)&log_data[SCAO_BUNBN]));
+		le16_to_cpu(log->bad_user_nand_blocks_normalized));
 	json_object_add_value_uint64(root, "Bad system nand blocks - Raw",
-		(uint64_t)le64_to_cpu(*(uint64_t *)&log_data[SCAO_BSNBR] & 0x0000FFFFFFFFFFFF));
+		int48_to_long(log->bad_system_nand_blocks_raw));
 	json_object_add_value_uint(root, "Bad system nand blocks - Normalized",
-		(uint16_t)le16_to_cpu(*(uint16_t *)&log_data[SCAO_BSNBN]));
+		le16_to_cpu(log->bad_system_nand_blocks_normalized));
 	json_object_add_value_uint64(root, "XOR recovery count",
-		(uint64_t)le64_to_cpu(*(uint64_t *)&log_data[SCAO_XRC]));
+		le64_to_cpu(log->xor_recovery_count));
 	json_object_add_value_uint64(root, "Uncorrectable read error count",
-		(uint64_t)le64_to_cpu(*(uint64_t *)&log_data[SCAO_UREC]));
+		le64_to_cpu(log->uncorrectable_read_err_count));
 	json_object_add_value_uint64(root, "Soft ecc error count",
-		(uint64_t)le64_to_cpu(*(uint64_t *)&log_data[SCAO_SEEC]));
+		le64_to_cpu(log->soft_ecc_err_count));
 	json_object_add_value_uint(root, "End to end detected errors",
-		(uint32_t)le32_to_cpu(*(uint32_t *)&log_data[SCAO_EEDC]));
+		le32_to_cpu(log->end_to_end_detected_err));
 	json_object_add_value_uint(root, "End to end corrected errors",
-		(uint32_t)le32_to_cpu(*(uint32_t *)&log_data[SCAO_EECE]));
+		le32_to_cpu(log->end_to_end_corrected_err));
 	json_object_add_value_uint(root, "System data percent used",
-		(__u8)log_data[SCAO_SDPU]);
+		log->system_data_used_percent);
 	json_object_add_value_uint64(root, "Refresh counts",
-		(uint64_t)(le64_to_cpu(*(uint64_t *)&log_data[SCAO_RFSC]) & 0x00FFFFFFFFFFFFFF));
+		int56_to_long(log->refresh_counts));
 	json_object_add_value_uint(root, "Max User data erase counts",
-		(uint32_t)le32_to_cpu(*(uint32_t *)&log_data[SCAO_MXUDEC]));
+		le32_to_cpu(log->user_data_erase_count_max));
 	json_object_add_value_uint(root, "Min User data erase counts",
-		(uint32_t)le32_to_cpu(*(uint32_t *)&log_data[SCAO_MNUDEC]));
+		le32_to_cpu(log->user_data_erase_count_min));
 	json_object_add_value_uint(root, "Number of Thermal throttling events",
-		(__u8)log_data[SCAO_NTTE]);
+		log->thermal_throttling_event_count);
 	json_object_add_value_uint(root, "Current throttling status",
-		(__u8)log_data[SCAO_CTS]);
+		log->thermal_throttling_current_status);
 	json_object_add_value_uint64(root, "PCIe correctable error count",
-		(uint64_t)le64_to_cpu(*(uint64_t *)&log_data[SCAO_PCEC]));
+		le64_to_cpu(log->pcie_correctable_err_count));
 	json_object_add_value_uint(root, "Incomplete shutdowns",
-		(uint32_t)le32_to_cpu(*(uint32_t *)&log_data[SCAO_ICS]));
+		le32_to_cpu(log->incomplete_shoutdowns));
 	json_object_add_value_uint(root, "Percent free blocks",
-		(__u8)log_data[SCAO_PFB]);
+		log->percent_free_blocks);
 	json_object_add_value_uint(root, "Capacitor health",
-		(uint16_t)le16_to_cpu(*(uint16_t *)&log_data[SCAO_CPH]));
+		le16_to_cpu(log->capacitor_health));
 	json_object_add_value_uint64(root, "Unaligned I/O",
-		(uint64_t)le64_to_cpu(*(uint64_t *)&log_data[SCAO_UIO]));
+		le64_to_cpu(log->unaligned_io));
 	json_object_add_value_uint64(root, "Security Version Number",
-		(uint64_t)le64_to_cpu(*(uint64_t *)&log_data[SCAO_SVN]));
+		le64_to_cpu(log->security_version));
 	json_object_add_value_uint64(root, "NUSE - Namespace utilization",
-		(uint64_t)le64_to_cpu(*(uint64_t *)&log_data[SCAO_NUSE]));
+		le64_to_cpu(log->total_nuse));
 	json_object_add_value_uint128(root, "PLP start count",
-		le128_to_cpu(&log_data[SCAO_PSC]));
+		le128_to_cpu(log->plp_start_count));
 	json_object_add_value_uint128(root, "Endurance estimate",
-		le128_to_cpu(&log_data[SCAO_EEST]));
-	smart_log_ver = (uint16_t)le16_to_cpu(*(uint16_t *)&log_data[SCAO_LPV]);
+		le128_to_cpu(log->endurance_estimate));
+	smart_log_ver = le16_to_cpu(log->log_page_version);
 
 	json_object_add_value_uint(root, "Log page version", smart_log_ver);
 
 	memset((void *)guid, 0, 40);
 	sprintf((char *)guid, "0x%"PRIx64"%"PRIx64"",
-		(uint64_t)le64_to_cpu(*(uint64_t *)&log_data[SCAO_LPG + 8]),
-		(uint64_t)le64_to_cpu(*(uint64_t *)&log_data[SCAO_LPG]));
+		le64_to_cpu(*(uint64_t *)&log->log_page_guid[8]),
+		le64_to_cpu(*(uint64_t *)&log->log_page_guid));
 	json_object_add_value_string(root, "Log page GUID", guid);
 
 	switch (smart_log_ver) {
@@ -223,37 +228,257 @@ static void json_smart_extended_log(void *data)
 	default:
 	case 4:
 		json_object_add_value_uint(root, "NVMe Command Set Errata Version",
-					   (__u8)log_data[SCAO_NCSEV]);
+						log->nvme_cmdset_errata_version);
 		json_object_add_value_uint(root, "Lowest Permitted Firmware Revision",
-					   le64_to_cpu(*(uint64_t *)&log_data[SCAO_PSCC]));
+						le64_to_cpu(log->lowest_permitted_fw_rev));
+		json_object_add_value_uint(root, "NVMe Over Pcie Errata Version",
+						log->nvme_over_pcie_errate_version);
+		json_object_add_value_uint(root, "NVMe Mi Errata Version",
+						log->nvme_mi_errata_version);
+		json_object_add_value_uint(root, "Total media dies",
+						le16_to_cpu(log->total_media_dies));
+		json_object_add_value_uint(root, "Total die failure tolerance",
+						le16_to_cpu(log->total_die_failure_tolerance));
+		json_object_add_value_uint(root, "Media dies offline",
+						le16_to_cpu(log->media_dies_offline));
+		json_object_add_value_uint(root, "Max temperature recorded",
+						log->max_temperature_recorded);
+		json_object_add_value_uint64(root, "Nand avg erase count",
+						le64_to_cpu(log->nand_avg_erase_count));
+		json_object_add_value_uint(root, "Command timeouts",
+						le32_to_cpu(log->command_timeouts));
+		json_object_add_value_uint(root, "Sys area program fail count raw",
+						le32_to_cpu(log->sys_area_program_fail_count_raw));
+		json_object_add_value_uint(root, "Sys area program fail count noralized",
+						log->sys_area_program_fail_count_normalized);
+		json_object_add_value_uint(root, "Sys area uncorrectable read count raw",
+						le32_to_cpu(log->sys_area_uncorr_read_count_raw));
+		json_object_add_value_uint(root, "Sys area uncorrectable read count noralized",
+						log->sys_area_uncorr_read_count_normalized);
+		json_object_add_value_uint(root, "Sys area erase fail count raw",
+						le32_to_cpu(log->sys_area_erase_fail_count_raw));
+		json_object_add_value_uint(root, "Sys area erase fail count noralized",
+						log->sys_area_erase_fail_count_normalized);
+		json_object_add_value_uint(root, "Max peak power capability",
+						le16_to_cpu(log->max_peak_power_capability));
+		json_object_add_value_uint(root, "Current max avg power",
+						le16_to_cpu(log->current_max_avg_power));
+		json_object_add_value_uint64(root, "Lifetime power consumed",
+						int48_to_long(log->lifetime_power_consumed));
+		memset((void *)ascii, 0, 65);
+		for (i = 0; i < 8; i++)
+			ascii += sprintf(ascii, "%c", log->dssd_firmware_revision[i]);
+		json_object_add_value_string(root, "Dssd firmware revision", ascii_arr);
+		json_object_add_value_string(root, "Dssd firmware build UUID",
+						util_uuid_to_string(log->dssd_firmware_build_uuid));
+		ascii = ascii_arr;
+		memset((void *)ascii, 0, 65);
+		for (i = 0; i < 64; i++)
+			ascii += sprintf(ascii, "%c", log->dssd_firmware_build_label[i]);
+		json_object_add_value_string(root, "Dssd firmware build label", ascii_arr);
 		fallthrough;
 	case 2 ... 3:
 		json_object_add_value_uint(root, "Errata Version Field",
-					   (__u8)log_data[SCAO_EVF]);
+						log->dssd_errata_version);
+		memcpy(&dssd_version, log->dssd_point_version, sizeof(dssd_version));
 		json_object_add_value_uint(root, "Point Version Field",
-					   le16_to_cpu(*(uint16_t *)&log_data[SCAO_PVF]));
+						le16_to_cpu(dssd_version));
+		memcpy(&dssd_version, log->dssd_minor_version, sizeof(dssd_version));
 		json_object_add_value_uint(root, "Minor Version Field",
-					   le16_to_cpu(*(uint16_t *)&log_data[SCAO_MIVF]));
+						le16_to_cpu(dssd_version));
 		json_object_add_value_uint(root, "Major Version Field",
-					   (__u8)log_data[SCAO_MAVF]);
+						log->dssd_major_version);
 		json_object_add_value_uint(root, "NVMe Base Errata Version",
-					   (__u8)log_data[SCAO_NBEV]);
+						log->nvme_base_errata_version);
 		json_object_add_value_uint(root, "PCIe Link Retraining Count",
-					   le64_to_cpu(*(uint64_t *)&log_data[SCAO_PLRC]));
+						le64_to_cpu(log->pcie_link_retaining_count));
 		json_object_add_value_uint(root, "Power State Change Count",
-					   le64_to_cpu(*(uint64_t *)&log_data[SCAO_PSCC]));
+						le64_to_cpu(log->power_state_change_count));
 	}
 	json_print_object(root, NULL);
 	printf("\n");
 	json_free_object(root);
 }
 
+static void json_smart_extended_log_v2(struct ocp_smart_extended_log *log)
+{
+	struct json_object *root;
+	struct json_object *pmuw;
+	struct json_object *pmur;
+	int i = 0;
+	uint16_t smart_log_ver = 0;
+	uint16_t dssd_version = 0;
+	char guid[40];
+	char ascii_arr[65];
+	char *ascii = ascii_arr;
+
+	root = json_create_object();
+	pmuw = json_create_object();
+	pmur = json_create_object();
+
+	json_object_add_value_uint64(pmuw, "hi",
+		le64_to_cpu(*(uint64_t *)&log->physical_media_units_written[8]));
+	json_object_add_value_uint64(pmuw, "lo",
+		le64_to_cpu(*(uint64_t *)&log->physical_media_units_written));
+	json_object_add_value_object(root, "physical_media_units_written", pmuw);
+	json_object_add_value_uint64(pmur, "hi",
+		le64_to_cpu(*(uint64_t *)&log->physical_media_units_read[8]));
+	json_object_add_value_uint64(pmur, "lo",
+		le64_to_cpu(*(uint64_t *)&log->physical_media_units_read));
+	json_object_add_value_object(root, "physical_media_units_read", pmur);
+	json_object_add_value_uint64(root, "bad_user_nand_blocks_raw",
+		int48_to_long(log->bad_user_nand_blocks_raw));
+	json_object_add_value_uint(root, "bad_user_nand_blocks_normalized",
+		le16_to_cpu(log->bad_user_nand_blocks_normalized));
+	json_object_add_value_uint64(root, "bad_system_nand_blocks_raw",
+		int48_to_long(log->bad_system_nand_blocks_raw));
+	json_object_add_value_uint(root, "bad_system_nand_blocks_normalized",
+		le16_to_cpu(log->bad_system_nand_blocks_normalized));
+	json_object_add_value_uint64(root, "xor_recovery_count",
+		le64_to_cpu(log->xor_recovery_count));
+	json_object_add_value_uint64(root, "uncorrectable_read_errors",
+		le64_to_cpu(log->uncorrectable_read_err_count));
+	json_object_add_value_uint64(root, "soft_ecc_error_count",
+		le64_to_cpu(log->soft_ecc_err_count));
+	json_object_add_value_uint(root, "end_to_end_detected_errors",
+		le32_to_cpu(log->end_to_end_detected_err));
+	json_object_add_value_uint(root, "end_to_end_corrected_errors",
+		le32_to_cpu(log->end_to_end_corrected_err));
+	json_object_add_value_uint(root, "system_data_percent_used",
+		log->system_data_used_percent);
+	json_object_add_value_uint64(root, "refresh_count",
+		int56_to_long(log->refresh_counts));
+	json_object_add_value_uint(root, "max_user_data_erase_count",
+		le32_to_cpu(log->user_data_erase_count_max));
+	json_object_add_value_uint(root, "min_user_data_erase_count",
+		le32_to_cpu(log->user_data_erase_count_min));
+	json_object_add_value_uint(root, "thermal_throttling_events",
+		log->thermal_throttling_event_count);
+	json_object_add_value_uint(root, "current_throttling_status",
+		log->thermal_throttling_current_status);
+	json_object_add_value_uint64(root, "pcie_correctable_errors",
+		le64_to_cpu(log->pcie_correctable_err_count));
+	json_object_add_value_uint(root, "incomplete_shutdowns",
+		le32_to_cpu(log->incomplete_shoutdowns));
+	json_object_add_value_uint(root, "percent_free_blocks",
+		log->percent_free_blocks);
+	json_object_add_value_uint(root, "capacitor_health",
+		le16_to_cpu(log->capacitor_health));
+	json_object_add_value_uint64(root, "unaligned_io",
+		le64_to_cpu(log->unaligned_io));
+	json_object_add_value_uint64(root, "security_version_number",
+		le64_to_cpu(log->security_version));
+	json_object_add_value_uint64(root, "nuse_namespace_utilization",
+		le64_to_cpu(log->total_nuse));
+	json_object_add_value_uint128(root, "plp_start_count",
+		le128_to_cpu(log->plp_start_count));
+	json_object_add_value_uint128(root, "endurance_estimate",
+		le128_to_cpu(log->endurance_estimate));
+	smart_log_ver = le16_to_cpu(log->log_page_version);
+
+	json_object_add_value_uint(root, "log_page_version", smart_log_ver);
+
+	memset((void *)guid, 0, 40);
+	sprintf((char *)guid, "0x%"PRIx64"%"PRIx64"",
+		le64_to_cpu(*(uint64_t *)&log->log_page_guid[8]),
+		le64_to_cpu(*(uint64_t *)&log->log_page_guid));
+	json_object_add_value_string(root, "log_page_guid", guid);
+
+	switch (smart_log_ver) {
+	case 0 ... 1:
+		break;
+	default:
+	case 4:
+		json_object_add_value_uint(root, "nvme_command_set_errata_version",
+						log->nvme_cmdset_errata_version);
+		json_object_add_value_uint(root, "lowest_permitted_firmware_revision",
+						le64_to_cpu(log->lowest_permitted_fw_rev));
+		json_object_add_value_uint(root, "nvme_over_pcie_errata_version",
+						log->nvme_over_pcie_errate_version);
+		json_object_add_value_uint(root, "nvme_mi_errata_version",
+						log->nvme_mi_errata_version);
+		json_object_add_value_uint(root, "total_media_dies",
+						le16_to_cpu(log->total_media_dies));
+		json_object_add_value_uint(root, "total_die_failure_tolerance",
+						le16_to_cpu(log->total_die_failure_tolerance));
+		json_object_add_value_uint(root, "media_dies_offline",
+						le16_to_cpu(log->media_dies_offline));
+		json_object_add_value_uint(root, "max_temperature_recorded",
+						log->max_temperature_recorded);
+		json_object_add_value_uint64(root, "nand_avg_erase_count",
+						le64_to_cpu(log->nand_avg_erase_count));
+		json_object_add_value_uint(root, "command_timeouts",
+						le32_to_cpu(log->command_timeouts));
+		json_object_add_value_uint(root, "sys_area_program_fail_count_raw",
+						le32_to_cpu(log->sys_area_program_fail_count_raw));
+		json_object_add_value_uint(root, "sys_area_program_fail_count_noralized",
+						log->sys_area_program_fail_count_normalized);
+		json_object_add_value_uint(root, "sys_area_uncorrectable_read_count_raw",
+						le32_to_cpu(log->sys_area_uncorr_read_count_raw));
+		json_object_add_value_uint(root, "sys_area_uncorrectable_read_count_noralized",
+						log->sys_area_uncorr_read_count_normalized);
+		json_object_add_value_uint(root, "sys_area_erase_fail_count_raw",
+						le32_to_cpu(log->sys_area_erase_fail_count_raw));
+		json_object_add_value_uint(root, "sys_area_erase_fail_count_noralized",
+						log->sys_area_erase_fail_count_normalized);
+		json_object_add_value_uint(root, "max_peak_power_capability",
+						le16_to_cpu(log->max_peak_power_capability));
+		json_object_add_value_uint(root, "current_max_avg_power",
+						le16_to_cpu(log->current_max_avg_power));
+		json_object_add_value_uint64(root, "lifetime_power_consumed",
+						int48_to_long(log->lifetime_power_consumed));
+		memset((void *)ascii, 0, 65);
+		for (i = 0; i < 8; i++)
+			ascii += sprintf(ascii, "%c", log->dssd_firmware_revision[i]);
+		json_object_add_value_string(root, "dssd_firmware_revision", ascii_arr);
+		json_object_add_value_string(root, "dssd_firmware_build_uuid",
+						util_uuid_to_string(log->dssd_firmware_build_uuid));
+		ascii = ascii_arr;
+		memset((void *)ascii, 0, 65);
+		for (i = 0; i < 64; i++)
+			ascii += sprintf(ascii, "%c", log->dssd_firmware_build_label[i]);
+		json_object_add_value_string(root, "dssd_firmware_build_label", ascii_arr);
+		fallthrough;
+	case 2 ... 3:
+		json_object_add_value_uint(root, "errata_version_field",
+						log->dssd_errata_version);
+		memcpy(&dssd_version, log->dssd_point_version, sizeof(dssd_version));
+		json_object_add_value_uint(root, "point_version_field",
+						le16_to_cpu(dssd_version));
+		memcpy(&dssd_version, log->dssd_minor_version, sizeof(dssd_version));
+		json_object_add_value_uint(root, "minor_version_field",
+						le16_to_cpu(dssd_version));
+		json_object_add_value_uint(root, "major_version_field",
+						log->dssd_major_version);
+		json_object_add_value_uint(root, "nvme_base_errata_version",
+						log->nvme_base_errata_version);
+		json_object_add_value_uint(root, "pcie_link_retraining_count",
+						le64_to_cpu(log->pcie_link_retaining_count));
+		json_object_add_value_uint(root, "power_state_change_count",
+						le64_to_cpu(log->power_state_change_count));
+	}
+	json_print_object(root, NULL);
+	printf("\n");
+	json_free_object(root);
+}
+
+static void json_smart_extended_log(struct ocp_smart_extended_log *log, unsigned int version)
+{
+	switch (version) {
+	default:
+	case 1:
+		json_smart_extended_log_v1(log);
+		break;
+	case 2:
+		json_smart_extended_log_v2(log);
+	}
+}
 static void json_telemetry_log(struct ocp_telemetry_parse_options *options)
 {
 	print_ocp_telemetry_json(options);
 }
 
-static void json_c3_log(struct nvme_dev *dev, struct ssd_latency_monitor_log *log_data)
+static void json_c3_log(struct nvme_transport_handle *hdl, struct ssd_latency_monitor_log *log_data)
 {
 	struct json_object *root;
 	char ts_buf[128];
@@ -424,7 +649,7 @@ static void json_c3_log(struct nvme_dev *dev, struct ssd_latency_monitor_log *lo
 	json_free_object(root);
 }
 
-static void json_c5_log(struct nvme_dev *dev, struct unsupported_requirement_log *log_data)
+static void json_c5_log(struct nvme_transport_handle *hdl, struct unsupported_requirement_log *log_data)
 {
 	int j;
 	struct json_object *root;
@@ -537,15 +762,23 @@ static void json_c4_log(struct ocp_device_capabilities_log_page *log_data)
 	json_free_object(root);
 }
 
+/* Array lengths need to be doubled + 2 to handle
+ * conversion to null terminated strings
+ */
+#define RESERVED_ARRAY_LEN 98   /* (2*48) + 2       */
+#define GUID_BUFFER_LEN 34      /* (2*GUID_LEN) + 2 */
+/* Add one additional space for the null terminating char */
+#define FIFO_ARRAY_LEN 17
+
 static void json_c9_log(struct telemetry_str_log_format *log_data, __u8 *log_data_buf,
 			int total_log_page_size)
 {
 	struct json_object *root = json_create_object();
-	char res_arr[48];
+	char res_arr[RESERVED_ARRAY_LEN];
 	char *res = res_arr;
-	char guid_buf[GUID_LEN];
+	char guid_buf[GUID_BUFFER_LEN];
 	char *guid = guid_buf;
-	char fifo_arr[16];
+	char fifo_arr[FIFO_ARRAY_LEN];
 	char *fifo = fifo_arr;
 	char buf[128];
 	//calculating the index value for array
@@ -561,20 +794,20 @@ static void json_c9_log(struct telemetry_str_log_format *log_data, __u8 *log_dat
 	struct statistics_id_str_table_entry stat_id_str_table_arr[stat_id_index];
 	struct event_id_str_table_entry event_id_str_table_arr[eve_id_index];
 	struct vu_event_id_str_table_entry vu_event_id_str_table_arr[vu_eve_index];
-	__u8 ascii_table_info_arr[ascii_table_index];
-	char ascii_buf[ascii_table_index];
+	__u8 ascii_table_info_arr[(2*ascii_table_index) + 2];
+	char ascii_buf[(2*ascii_table_index) + 2];
 	char *ascii = ascii_buf;
 	int j;
 
 	json_object_add_value_int(root, "Log Page Version",
 				  le16_to_cpu(log_data->log_page_version));
 
-	memset((__u8 *)res, 0, 48);
+	memset((__u8 *)res, 0, RESERVED_ARRAY_LEN);
 	for (j = 0; j < 15; j++)
-		res += sprintf(res, "%d", log_data->reserved1[j]);
-	json_object_add_value_string(root, "Reserved", res_arr);
+		res += sprintf(res, "%x", log_data->reserved1[j]);
+	json_object_add_value_string(root, "Reserved 1", res_arr);
 
-	memset((void *)guid, 0, GUID_LEN);
+	memset((void *)guid, 0, GUID_BUFFER_LEN);
 	for (j = GUID_LEN - 1; j >= 0; j--)
 		guid += sprintf(guid, "%02x", log_data->log_page_guid[j]);
 	json_object_add_value_string(root, "Log page GUID", guid_buf);
@@ -582,10 +815,10 @@ static void json_c9_log(struct telemetry_str_log_format *log_data, __u8 *log_dat
 	json_object_add_value_int(root, "Telemetry String Log Size", le64_to_cpu(log_data->sls));
 
 	res = res_arr;
-	memset((__u8 *)res, 0, 48);
+	memset((__u8 *)res, 0, RESERVED_ARRAY_LEN);
 	for (j = 0; j < 24; j++)
-		res += sprintf(res, "%d", log_data->reserved2[j]);
-	json_object_add_value_string(root, "Reserved", res_arr);
+		res += sprintf(res, "%x", log_data->reserved2[j]);
+	json_object_add_value_string(root, "Reserved 2", res_arr);
 
 	json_object_add_value_int(root, "Statistics Identifier String Table Start",
 				  le64_to_cpu(log_data->sits));
@@ -600,106 +833,106 @@ static void json_c9_log(struct telemetry_str_log_format *log_data, __u8 *log_dat
 	json_object_add_value_int(root, "ASCII Table Size",
 				  le64_to_cpu(log_data->asctsz));
 
-	memset((void *)fifo, 0, 16);
+	memset((void *)fifo, 0, FIFO_ARRAY_LEN);
 	for (j = 0; j < 16; j++)
 		fifo += sprintf(fifo, "%c", log_data->fifo1[j]);
 	json_object_add_value_string(root, "FIFO 1 ASCII String", fifo_arr);
 
 	fifo = fifo_arr;
-	memset((void *)fifo, 0, 16);
+	memset((void *)fifo, 0, FIFO_ARRAY_LEN);
 	for (j = 0; j < 16; j++)
 		fifo += sprintf(fifo, "%c", log_data->fifo2[j]);
 	json_object_add_value_string(root, "FIFO 2 ASCII String", fifo_arr);
 
 	fifo = fifo_arr;
-	memset((void *)fifo, 0, 16);
+	memset((void *)fifo, 0, FIFO_ARRAY_LEN);
 	for (j = 0; j < 16; j++)
 		fifo += sprintf(fifo, "%c", log_data->fifo3[j]);
 	json_object_add_value_string(root, "FIFO 3 ASCII String", fifo_arr);
 
 	fifo = fifo_arr;
-	memset((void *)fifo, 0, 16);
+	memset((void *)fifo, 0, FIFO_ARRAY_LEN);
 	for (j = 0; j < 16; j++)
 		fifo += sprintf(fifo, "%c", log_data->fifo4[j]);
 	json_object_add_value_string(root, "FIFO 4 ASCII String", fifo_arr);
 
 	fifo = fifo_arr;
-	memset((void *)fifo, 0, 16);
+	memset((void *)fifo, 0, FIFO_ARRAY_LEN);
 	for (j = 0; j < 16; j++)
 		fifo += sprintf(fifo, "%c", log_data->fifo5[j]);
 	json_object_add_value_string(root, "FIFO 5 ASCII String", fifo_arr);
 
 	fifo = fifo_arr;
-	memset((void *)fifo, 0, 16);
+	memset((void *)fifo, 0, FIFO_ARRAY_LEN);
 	for (j = 0; j < 16; j++)
 		fifo += sprintf(fifo, "%c", log_data->fifo6[j]);
 	json_object_add_value_string(root, "FIFO 6 ASCII String", fifo_arr);
 
 	fifo = fifo_arr;
-	memset((void *)fifo, 0, 16);
+	memset((void *)fifo, 0, FIFO_ARRAY_LEN);
 	for (j = 0; j < 16; j++)
 		fifo += sprintf(fifo, "%c", log_data->fifo7[j]);
 	json_object_add_value_string(root, "FIFO 7 ASCII String", fifo_arr);
 
 	fifo = fifo_arr;
-	memset((void *)fifo, 0, 16);
+	memset((void *)fifo, 0, FIFO_ARRAY_LEN);
 	for (j = 0; j < 16; j++)
 		fifo += sprintf(fifo, "%c", log_data->fifo8[j]);
 	json_object_add_value_string(root, "FIFO 8 ASCII String", fifo_arr);
 
 	fifo = fifo_arr;
-	memset((void *)fifo, 0, 16);
+	memset((void *)fifo, 0, FIFO_ARRAY_LEN);
 	for (j = 0; j < 16; j++)
 		fifo += sprintf(fifo, "%c", log_data->fifo9[j]);
 	json_object_add_value_string(root, "FIFO 9 ASCII String", fifo_arr);
 
 	fifo = fifo_arr;
-	memset((void *)fifo, 0, 16);
+	memset((void *)fifo, 0, FIFO_ARRAY_LEN);
 	for (j = 0; j < 16; j++)
 		fifo += sprintf(fifo, "%c", log_data->fifo10[j]);
 	json_object_add_value_string(root, "FIFO 10 ASCII String", fifo_arr);
 
 	fifo = fifo_arr;
-	memset((void *)fifo, 0, 16);
+	memset((void *)fifo, 0, FIFO_ARRAY_LEN);
 	for (j = 0; j < 16; j++)
 		fifo += sprintf(fifo, "%c", log_data->fifo11[j]);
 	json_object_add_value_string(root, "FIFO 11 ASCII String", fifo_arr);
 
 	fifo = fifo_arr;
-	memset((void *)fifo, 0, 16);
+	memset((void *)fifo, 0, FIFO_ARRAY_LEN);
 	for (j = 0; j < 16; j++)
 		fifo += sprintf(fifo, "%c", log_data->fifo12[j]);
 	json_object_add_value_string(root, "FIFO 12 ASCII String", fifo_arr);
 
 	fifo = fifo_arr;
-	memset((void *)fifo, 0, 16);
+	memset((void *)fifo, 0, FIFO_ARRAY_LEN);
 	for (j = 0; j < 16; j++)
 		fifo += sprintf(fifo, "%c", log_data->fifo13[j]);
 	json_object_add_value_string(root, "FIFO 13 ASCII String", fifo_arr);
 
 	fifo = fifo_arr;
-	memset((void *)fifo, 0, 16);
+	memset((void *)fifo, 0, FIFO_ARRAY_LEN);
 	for (j = 0; j < 16; j++)
 		fifo += sprintf(fifo, "%c", log_data->fifo14[j]);
 	json_object_add_value_string(root, "FIFO 14 ASCII String", fifo_arr);
 
 	fifo = fifo_arr;
-	memset((void *)fifo, 0, 16);
+	memset((void *)fifo, 0, FIFO_ARRAY_LEN);
 	for (j = 0; j < 16; j++)
 		fifo += sprintf(fifo, "%c", log_data->fifo15[j]);
 	json_object_add_value_string(root, "FIFO 15 ASCII String", fifo_arr);
 
 	fifo = fifo_arr;
-	memset((void *)fifo, 0, 16);
+	memset((void *)fifo, 0, FIFO_ARRAY_LEN);
 	for (j = 0; j < 16; j++)
 		fifo += sprintf(fifo, "%c", log_data->fifo16[j]);
 	json_object_add_value_string(root, "FIFO 16 ASCII String", fifo_arr);
 
 	res = res_arr;
-	memset((__u8 *)res, 0, 48);
+	memset((__u8 *)res, 0, RESERVED_ARRAY_LEN);
 	for (j = 0; j < 48; j++)
-		res += sprintf(res, "%d", log_data->reserved3[j]);
-	json_object_add_value_string(root, "Reserved", res_arr);
+		res += sprintf(res, "%x", log_data->reserved3[j]);
+	json_object_add_value_string(root, "Reserved 3", res_arr);
 
 	if (log_data->sitsz != 0) {
 
@@ -798,7 +1031,7 @@ static void json_c9_log(struct telemetry_str_log_format *log_data, __u8 *log_dat
 	json_free_object(root);
 }
 
-static void json_c7_log(struct nvme_dev *dev, struct tcg_configuration_log *log_data)
+static void json_c7_log(struct nvme_transport_handle *hdl, struct tcg_configuration_log *log_data)
 {
 	int j;
 	struct json_object *root;

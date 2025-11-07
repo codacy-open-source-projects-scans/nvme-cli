@@ -156,6 +156,31 @@ static void netapp_get_ns_attrs(char *size, char *used, char *blk_size,
 		version[i] = '\0';
 }
 
+static void ontap_get_subsysname(char *subnqn, char *subsysname,
+		 struct nvme_id_ctrl *ctrl)
+{
+	char *subname;
+	int i, len = sizeof(ctrl->subnqn);
+
+	/* get the target NQN */
+	memcpy(subnqn, ctrl->subnqn, len);
+	subnqn[len] = '\0';
+
+	/* strip trailing whitespaces */
+	for (i = len - 1; i >= 0 && subnqn[i] == ' '; i--)
+		subnqn[i] = '\0';
+
+	/* get the subsysname from the target NQN */
+	subname = strrchr(subnqn, '.');
+	if (subname) {
+		subname++;
+		len = strlen(subname);
+		memcpy(subsysname, subname, len);
+		subsysname[len] = '\0';
+	} else
+		fprintf(stderr, "Unable to fetch ONTAP subsystem name\n");
+}
+
 static void ontap_labels_to_str(char *dst, char *src, int count)
 {
 	int i;
@@ -272,8 +297,8 @@ static void netapp_smdevice_json(struct json_object *devices, char *devname,
 }
 
 static void netapp_ontapdevice_json(struct json_object *devices, char *devname,
-		char *vsname, char *nspath, int nsid, char *uuid,
-		unsigned long long lba, char *version,
+		char *vsname, char *subsysname, char *nspath, int nsid,
+		char *uuid, unsigned long long lba, char *version,
 		unsigned long long nsze, unsigned long long nuse)
 {
 	struct json_object *device_attrs;
@@ -283,6 +308,7 @@ static void netapp_ontapdevice_json(struct json_object *devices, char *devname,
 	device_attrs = json_create_object();
 	json_object_add_value_string(device_attrs, "Device", devname);
 	json_object_add_value_string(device_attrs, "Vserver", vsname);
+	json_object_add_value_string(device_attrs, "Subsystem", subsysname);
 	json_object_add_value_string(device_attrs, "Namespace_Path", nspath);
 	json_object_add_value_int(device_attrs, "NSID", nsid);
 	json_object_add_value_string(device_attrs, "UUID", uuid);
@@ -307,7 +333,8 @@ static void netapp_smdevices_print_verbose(struct smdevice_info *devices,
 
 	char *formatstr = NULL;
 	char basestr[] =
-		"%s, Array %s, Vol %s, NSID %d, ID %s, Ctrl %c, %s, %s, %s, %s\n";
+		"%s, Array Name %s, Volume Name %s, NSID %d, Volume ID %s, "
+		"Controller %c, Access State %s, Size %s, Format %s, Version %s\n";
 	char columnstr[] =
 		"%-16s %-30s %-30s %4d %32s  %c   %-12s %-9s %-9s %-9s\n";
 
@@ -518,22 +545,25 @@ static void netapp_ontapdevices_print_verbose(struct ontapdevice_info *devices,
 	char size[128], used[128];
 	char blk_size[128], version[9];
 	char uuid_str[37] = " ";
+	char subnqn[257], subsysname[65];
 	int i;
 
 	char *formatstr = NULL;
 	char basestr[] =
-		"%s, Vserver %s, Path %s, NSID %d, UUID %s, %s, %s, %s, %s\n";
-	char columnstr[] = "%-16s %-25s %-50s %-4d %-38s %-9s %-9s %-9s %-9s\n";
+		"%s, Vserver %s, Subsystem %s, Namespace Path %s, NSID %d, "
+		"UUID %s, Size %s, Used %s, Format %s, Version %s\n";
+	char columnstr[] = "%-16s %-25s %-25s %-50s %-4d %-38s %-9s %-9s %-9s %-9s\n";
 
 	if (format == NNORMAL)
 		formatstr = basestr;
 	else if (format == NCOLUMN) {
-		printf("%-16s %-25s %-50s %-4s %-38s %-9s %-9s %-9s %-9s\n",
-				"Device", "Vserver", "Namespace Path",
+		printf("%-16s %-25s %-25s %-50s %-4s %-38s %-9s %-9s %-9s %-9s\n",
+				"Device", "Vserver", "Subsystem", "Namespace Path",
 				"NSID", "UUID", "Size", "Used",
 				"Format", "Version");
-		printf("%-16s %-25s %-50s %-4s %-38s %-9s %-9s %-9s %-9s\n",
+		printf("%-16s %-25s %-25s %-50s %-4s %-38s %-9s %-9s %-9s %-9s\n",
 			"----------------", "-------------------------",
+			"-------------------------",
 			"--------------------------------------------------",
 			"----", "--------------------------------------",
 			"---------", "---------", "---------", "---------");
@@ -545,13 +575,15 @@ static void netapp_ontapdevices_print_verbose(struct ontapdevice_info *devices,
 			/* found the device, fetch and print for that alone */
 			netapp_get_ns_attrs(size, used, blk_size, version,
 					&lba, &devices[i].ctrl, &devices[i].ns);
+			ontap_get_subsysname(subnqn, subsysname,
+					&devices[i].ctrl);
 			nvme_uuid_to_string(devices[i].uuid, uuid_str);
 			netapp_get_ontap_labels(vsname, nspath,
 					devices[i].log_data);
 
-			printf(formatstr, devices[i].dev, vsname, nspath,
-					devices[i].nsid, uuid_str, size, used,
-					blk_size, version);
+			printf(formatstr, devices[i].dev, vsname, subsysname,
+					nspath, devices[i].nsid, uuid_str,
+					size, used, blk_size, version);
 			return;
 		}
 	}
@@ -560,12 +592,14 @@ static void netapp_ontapdevices_print_verbose(struct ontapdevice_info *devices,
 		/* fetch info and print for all devices */
 		netapp_get_ns_attrs(size, used, blk_size, version,
 				&lba, &devices[i].ctrl, &devices[i].ns);
+		ontap_get_subsysname(subnqn, subsysname,
+				&devices[i].ctrl);
 		nvme_uuid_to_string(devices[i].uuid, uuid_str);
 		netapp_get_ontap_labels(vsname, nspath, devices[i].log_data);
 
-		printf(formatstr, devices[i].dev, vsname, nspath,
-				devices[i].nsid, uuid_str, size, used,
-				blk_size, version);
+		printf(formatstr, devices[i].dev, vsname, subsysname,
+				nspath, devices[i].nsid, uuid_str,
+				size, used, blk_size, version);
 	}
 }
 
@@ -577,21 +611,23 @@ static void netapp_ontapdevices_print_regular(struct ontapdevice_info *devices,
 	unsigned long long lba;
 	char size[128];
 	char uuid_str[37] = " ";
+	char subnqn[257], subsysname[65];
 	int i;
 
 	char *formatstr = NULL;
 	char basestr[] =
-		"%s, Vserver %s, Namespace Path %s, NSID %d, UUID %s, %s\n";
-	char columnstr[] = "%-16s %-25s %-50s %-4d %-38s %-9s\n";
+		"%s, Vserver %s, Subsystem %s, Namespace Path %s, NSID %d, UUID %s, %s\n";
+	char columnstr[] = "%-16s %-25s %-25s %-50s %-4d %-38s %-9s\n";
 
 	if (format == NNORMAL)
 		formatstr = basestr;
 	else if (format == NCOLUMN) {
-		printf("%-16s %-25s %-50s %-4s %-38s %-9s\n",
-			"Device", "Vserver", "Namespace Path",
+		printf("%-16s %-25s %-25s %-50s %-4s %-38s %-9s\n",
+			"Device", "Vserver", "Subsystem", "Namespace Path",
 			"NSID", "UUID", "Size");
-		printf("%-16s %-25s %-50s %-4s %-38s %-9s\n",
+		printf("%-16s %-25s %-25s %-50s %-4s %-38s %-9s\n",
 			"----------------", "-------------------------",
+			"-------------------------",
 			"--------------------------------------------------",
 			"----", "--------------------------------------",
 			"---------");
@@ -605,9 +641,11 @@ static void netapp_ontapdevices_print_regular(struct ontapdevice_info *devices,
 			nvme_uuid_to_string(devices[i].uuid, uuid_str);
 			netapp_get_ontap_labels(vsname, nspath,
 					devices[i].log_data);
+			ontap_get_subsysname(subnqn, subsysname,
+					&devices[i].ctrl);
 
-			printf(formatstr, devices[i].dev, vsname, nspath,
-					devices[i].nsid, uuid_str, size);
+			printf(formatstr, devices[i].dev, vsname, subsysname,
+					nspath, devices[i].nsid, uuid_str, size);
 			return;
 		}
 	}
@@ -617,9 +655,10 @@ static void netapp_ontapdevices_print_regular(struct ontapdevice_info *devices,
 		netapp_get_ns_size(size, &lba, &devices[i].ns);
 		nvme_uuid_to_string(devices[i].uuid, uuid_str);
 		netapp_get_ontap_labels(vsname, nspath, devices[i].log_data);
+		ontap_get_subsysname(subnqn, subsysname, &devices[i].ctrl);
 
-		printf(formatstr, devices[i].dev, vsname, nspath,
-				devices[i].nsid, uuid_str, size);
+		printf(formatstr, devices[i].dev, vsname, subsysname,
+				nspath, devices[i].nsid, uuid_str, size);
 	}
 }
 
@@ -634,6 +673,7 @@ static void netapp_ontapdevices_print_json(struct ontapdevice_info *devices,
 	char size[128], used[128];
 	char blk_size[128], version[9];
 	char uuid_str[37] = " ";
+	char subnqn[257], subsysname[65];
 	int i;
 
 	/* prepare for the json output */
@@ -645,13 +685,15 @@ static void netapp_ontapdevices_print_json(struct ontapdevice_info *devices,
 			/* found the device, fetch info for that alone */
 			netapp_get_ns_attrs(size, used, blk_size, version,
 					&lba, &devices[i].ctrl, &devices[i].ns);
+			ontap_get_subsysname(subnqn, subsysname,
+					&devices[i].ctrl);
 			nvme_uuid_to_string(devices[i].uuid, uuid_str);
 			netapp_get_ontap_labels(vsname, nspath,
 					devices[i].log_data);
 
 			netapp_ontapdevice_json(json_devices, devices[i].dev,
-					vsname, nspath, devices[i].nsid,
-					uuid_str, lba, version,
+					vsname, subsysname, nspath,
+					devices[i].nsid, uuid_str, lba, version,
 					le64_to_cpu(devices[i].ns.nsze),
 					le64_to_cpu(devices[i].ns.nuse));
 			goto out;
@@ -662,12 +704,14 @@ static void netapp_ontapdevices_print_json(struct ontapdevice_info *devices,
 		/* fetch info for all devices */
 		netapp_get_ns_attrs(size, used, blk_size, version,
 				&lba, &devices[i].ctrl, &devices[i].ns);
+		ontap_get_subsysname(subnqn, subsysname,
+				&devices[i].ctrl);
 		nvme_uuid_to_string(devices[i].uuid, uuid_str);
 		netapp_get_ontap_labels(vsname, nspath, devices[i].log_data);
 
 		netapp_ontapdevice_json(json_devices, devices[i].dev,
-				vsname, nspath, devices[i].nsid,
-				uuid_str, lba, version,
+				vsname, subsysname, nspath,
+				devices[i].nsid, uuid_str, lba, version,
 				le64_to_cpu(devices[i].ns.nsze),
 				le64_to_cpu(devices[i].ns.nuse));
 	}
@@ -680,7 +724,7 @@ out:
 	json_free_object(root);
 }
 
-static int nvme_get_ontap_c2_log(int fd, __u32 nsid, void *buf, __u32 buflen)
+static int nvme_get_ontap_c2_log(struct nvme_transport_handle *hdl, __u32 nsid, void *buf, __u32 buflen)
 {
 	struct nvme_passthru_cmd get_log;
 	int err;
@@ -701,7 +745,7 @@ static int nvme_get_ontap_c2_log(int fd, __u32 nsid, void *buf, __u32 buflen)
 	get_log.cdw10 |= ONTAP_C2_LOG_NSINFO_LSP << 8;
 	get_log.cdw11 = numdu;
 
-	err = nvme_submit_admin_passthru(fd, &get_log, NULL);
+	err = nvme_submit_admin_passthru(hdl, &get_log, NULL);
 	if (err) {
 		fprintf(stderr, "ioctl error %0x\n", err);
 		return 1;
@@ -710,12 +754,13 @@ static int nvme_get_ontap_c2_log(int fd, __u32 nsid, void *buf, __u32 buflen)
 	return 0;
 }
 
-static int netapp_smdevices_get_info(int fd, struct smdevice_info *item,
+static int netapp_smdevices_get_info(struct nvme_transport_handle *hdl,
+				     struct smdevice_info *item,
 				     const char *dev)
 {
 	int err;
 
-	err = nvme_identify_ctrl(fd, &item->ctrl);
+	err = nvme_identify_ctrl(hdl, &item->ctrl);
 	if (err) {
 		fprintf(stderr,
 			"Identify Controller failed to %s (%s)\n", dev,
@@ -727,8 +772,11 @@ static int netapp_smdevices_get_info(int fd, struct smdevice_info *item,
 	if (strncmp("NetApp E-Series", item->ctrl.mn, 15) != 0)
 		return 0; /* not the right model of controller */
 
-	err = nvme_get_nsid(fd, &item->nsid);
-	err = nvme_identify_ns(fd, item->nsid, &item->ns);
+	err = nvme_get_nsid(hdl, &item->nsid);
+	if (err)
+		return err;
+
+	err = nvme_identify_ns(hdl, item->nsid, &item->ns);
 	if (err) {
 		fprintf(stderr,
 			"Unable to identify namespace for %s (%s)\n",
@@ -741,13 +789,14 @@ static int netapp_smdevices_get_info(int fd, struct smdevice_info *item,
 	return 1;
 }
 
-static int netapp_ontapdevices_get_info(int fd, struct ontapdevice_info *item,
-		const char *dev)
+static int netapp_ontapdevices_get_info(struct nvme_transport_handle *hdl,
+					struct ontapdevice_info *item,
+					const char *dev)
 {
-	int err;
 	void *nsdescs;
+	int err;
 
-	err = nvme_identify_ctrl(fd, &item->ctrl);
+	err = nvme_identify_ctrl(hdl, &item->ctrl);
 	if (err) {
 		fprintf(stderr, "Identify Controller failed to %s (%s)\n",
 			dev, err < 0 ? strerror(-err) :
@@ -759,9 +808,9 @@ static int netapp_ontapdevices_get_info(int fd, struct ontapdevice_info *item,
 		/* not the right controller model */
 		return 0;
 
-	err = nvme_get_nsid(fd, &item->nsid);
+	err = nvme_get_nsid(hdl, &item->nsid);
 
-	err = nvme_identify_ns(fd, item->nsid, &item->ns);
+	err = nvme_identify_ns(hdl, item->nsid, &item->ns);
 	if (err) {
 		fprintf(stderr, "Unable to identify namespace for %s (%s)\n",
 			dev, err < 0 ? strerror(-err) :
@@ -776,7 +825,7 @@ static int netapp_ontapdevices_get_info(int fd, struct ontapdevice_info *item,
 
 	memset(nsdescs, 0, 0x1000);
 
-	err = nvme_identify_ns_descs(fd, item->nsid, nsdescs);
+	err = nvme_identify_ns_descs_list(hdl, item->nsid, nsdescs);
 	if (err) {
 		fprintf(stderr, "Unable to identify namespace descriptor for %s (%s)\n",
 			dev, err < 0 ? strerror(-err) :
@@ -788,7 +837,7 @@ static int netapp_ontapdevices_get_info(int fd, struct ontapdevice_info *item,
 	memcpy(item->uuid, nsdescs + sizeof(struct nvme_ns_id_desc), sizeof(item->uuid));
 	free(nsdescs);
 
-	err = nvme_get_ontap_c2_log(fd, item->nsid, item->log_data, ONTAP_C2_LOG_SIZE);
+	err = nvme_get_ontap_c2_log(hdl, item->nsid, item->log_data, ONTAP_C2_LOG_SIZE);
 	if (err) {
 		fprintf(stderr, "Unable to get log page data for %s (%s)\n",
 			dev, err < 0 ? strerror(-err) :
@@ -829,25 +878,28 @@ static int netapp_output_format(char *format)
 		return -EINVAL;
 	if (!strcmp(format, "normal"))
 		return NNORMAL;
+#ifdef CONFIG_JSONC
 	if (!strcmp(format, "json"))
 		return NJSON;
+#endif /* CONFIG_JSONC */
 	if (!strcmp(format, "column"))
 		return NCOLUMN;
 	return -EINVAL;
 }
 
 /* handler for 'nvme netapp smdevices' */
-static int netapp_smdevices(int argc, char **argv, struct command *command,
-		struct plugin *plugin)
+static int netapp_smdevices(int argc, char **argv, struct command *acmd,
+			    struct plugin *plugin)
 {
 	const char *desc = "Display information about E-Series volumes.";
-
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = nvme_create_global_ctx(stdout, DEFAULT_LOGLEVEL);
 	struct dirent **devices;
-	int num, i, fd, ret, fmt;
+	int num, i, ret, fmt;
 	struct smdevice_info *smdevices;
 	char path[264];
 	char *devname = NULL;
 	int num_smdevices = 0;
+	struct nvme_transport_handle *hdl;
 
 	struct config {
 		bool verbose;
@@ -864,6 +916,9 @@ static int netapp_smdevices(int argc, char **argv, struct command *command,
 		OPT_END()
 	};
 
+	if (!ctx)
+		return -ENOMEM;
+
 	ret = argconfig_parse(argc, argv, desc, opts);
 	if (ret < 0)
 		return ret;
@@ -876,7 +931,7 @@ static int netapp_smdevices(int argc, char **argv, struct command *command,
 
 	num = scandir(dev_path, &devices, netapp_nvme_filter, alphasort);
 	if (num <= 0) {
-		fprintf(stderr, "No NVMe devices detected\n");
+		fprintf(stderr, "No smdevices detected\n");
 		return num;
 	}
 
@@ -885,9 +940,17 @@ static int netapp_smdevices(int argc, char **argv, struct command *command,
 
 	if (devname) {
 		int subsys_num, nsid;
+		struct stat st;
+		char path[512];
 
 		if (sscanf(devname, "nvme%dn%d", &subsys_num, &nsid) != 2) {
 			fprintf(stderr, "Invalid device name %s\n", devname);
+			return -EINVAL;
+		}
+
+		sprintf(path, "/dev/%s", devname);
+		if (stat(path, &st) != 0) {
+			fprintf(stderr, "%s does not exist\n", path);
 			return -EINVAL;
 		}
 	}
@@ -901,16 +964,16 @@ static int netapp_smdevices(int argc, char **argv, struct command *command,
 	for (i = 0; i < num; i++) {
 		snprintf(path, sizeof(path), "%s%s", dev_path,
 			devices[i]->d_name);
-		fd = open(path, O_RDONLY);
-		if (fd < 0) {
+		ret = nvme_open(ctx, path, &hdl);
+		if (ret) {
 			fprintf(stderr, "Unable to open %s: %s\n", path,
-				strerror(errno));
+				strerror(-ret));
 			continue;
 		}
 
-		num_smdevices += netapp_smdevices_get_info(fd,
+		num_smdevices += netapp_smdevices_get_info(hdl,
 						&smdevices[num_smdevices], path);
-		close(fd);
+		nvme_close(hdl);
 	}
 
 	if (num_smdevices) {
@@ -936,16 +999,18 @@ static int netapp_smdevices(int argc, char **argv, struct command *command,
 }
 
 /* handler for 'nvme netapp ontapdevices' */
-static int netapp_ontapdevices(int argc, char **argv, struct command *command,
+static int netapp_ontapdevices(int argc, char **argv, struct command *acmd,
 		struct plugin *plugin)
 {
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = nvme_create_global_ctx(stdout, DEFAULT_LOGLEVEL);
 	const char *desc = "Display information about ONTAP devices.";
 	struct dirent **devices;
-	int num, i, fd, ret, fmt;
+	int num, i, ret, fmt;
 	struct ontapdevice_info *ontapdevices;
 	char path[264];
 	char *devname = NULL;
 	int num_ontapdevices = 0;
+	struct nvme_transport_handle *hdl;
 
 	struct config {
 		bool verbose;
@@ -962,6 +1027,9 @@ static int netapp_ontapdevices(int argc, char **argv, struct command *command,
 		OPT_END()
 	};
 
+	if (!ctx)
+		return -ENOMEM;
+
 	ret = argconfig_parse(argc, argv, desc, opts);
 	if (ret < 0)
 		return ret;
@@ -977,16 +1045,24 @@ static int netapp_ontapdevices(int argc, char **argv, struct command *command,
 
 	if (devname) {
 		int subsys_num, nsid;
+		struct stat st;
+		char path[512];
 
 		if (sscanf(devname, "nvme%dn%d", &subsys_num, &nsid) != 2) {
 			fprintf(stderr, "Invalid device name %s\n", devname);
+			return -EINVAL;
+		}
+
+		sprintf(path, "/dev/%s", devname);
+		if (stat(path, &st) != 0) {
+			fprintf(stderr, "%s does not exist\n", path);
 			return -EINVAL;
 		}
 	}
 
 	num = scandir(dev_path, &devices, netapp_nvme_filter, alphasort);
 	if (num <= 0) {
-		fprintf(stderr, "No NVMe devices detected\n");
+		fprintf(stderr, "No ontapdevices detected\n");
 		return num;
 	}
 
@@ -999,17 +1075,17 @@ static int netapp_ontapdevices(int argc, char **argv, struct command *command,
 	for (i = 0; i < num; i++) {
 		snprintf(path, sizeof(path), "%s%s", dev_path,
 				devices[i]->d_name);
-		fd = open(path, O_RDONLY);
-		if (fd < 0) {
+		ret = nvme_open(ctx, path, &hdl);
+		if (ret) {
 			fprintf(stderr, "Unable to open %s: %s\n", path,
-					strerror(errno));
+					strerror(-ret));
 			continue;
 		}
 
-		num_ontapdevices += netapp_ontapdevices_get_info(fd,
+		num_ontapdevices += netapp_ontapdevices_get_info(hdl,
 				&ontapdevices[num_ontapdevices], path);
 
-		close(fd);
+		nvme_close(hdl);
 	}
 
 	if (num_ontapdevices) {

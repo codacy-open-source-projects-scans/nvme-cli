@@ -64,15 +64,16 @@ struct huawei_list_element_len {
 	unsigned int array_name;
 };
 
-static int huawei_get_nvme_info(int fd, struct huawei_list_item *item, const char *node)
+static int huawei_get_nvme_info(struct nvme_transport_handle *hdl,
+				struct huawei_list_item *item, const char *node)
 {
+	struct stat nvme_stat_info;
 	int err;
 	int len;
-	struct stat nvme_stat_info;
 
 	memset(item, 0, sizeof(*item));
 
-	err = nvme_identify_ctrl(fd, &item->ctrl);
+	err = nvme_identify_ctrl(hdl, &item->ctrl);
 	if (err)
 		return err;
 
@@ -84,12 +85,12 @@ static int huawei_get_nvme_info(int fd, struct huawei_list_item *item, const cha
 	}
 
 	item->huawei_device = true;
-	err = nvme_get_nsid(fd, &item->nsid);
-	err = nvme_identify_ns(fd, item->nsid, &item->ns);
+	err = nvme_get_nsid(hdl, &item->nsid);
+	err = nvme_identify_ns(hdl, item->nsid, &item->ns);
 	if (err)
 		return err;
 
-	err = fstat(fd, &nvme_stat_info);
+	err = fstat(nvme_transport_handle_get_fd(hdl), &nvme_stat_info);
 	if (err < 0)
 		return err;
 
@@ -117,6 +118,7 @@ static int huawei_get_nvme_info(int fd, struct huawei_list_item *item, const cha
 	return 0;
 }
 
+#ifdef CONFIG_JSONC
 static void format(char *formatter, size_t fmt_sz, char *tofmt, size_t tofmtsz)
 {
 	fmt_sz = snprintf(formatter, fmt_sz, "%-*.*s", (int)tofmtsz, (int)tofmtsz, tofmt);
@@ -177,6 +179,7 @@ static void huawei_json_print_list_items(struct huawei_list_item *list_items,
 	printf("\n");
 	json_free_object(root);
 }
+#endif /* CONFIG_JSONC */
 
 static void huawei_print_list_head(struct huawei_list_element_len element_len)
 {
@@ -288,9 +291,11 @@ static void huawei_print_list_items(struct huawei_list_item *list_items, unsigne
 		huawei_print_list_item(&list_items[i], element_len);
 }
 
-static int huawei_list(int argc, char **argv, struct command *command,
-		struct plugin *plugin)
+static int huawei_list(int argc, char **argv, struct command *acmd,
+		       struct plugin *plugin)
 {
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx =
+		nvme_create_global_ctx(stdout, DEFAULT_LOGLEVEL);
 	char path[264];
 	struct dirent **devices;
 	struct huawei_list_item *list_items;
@@ -310,6 +315,9 @@ static int huawei_list(int argc, char **argv, struct command *command,
 		OPT_FMT("output-format", 'o', &cfg.output_format, "Output Format: normal|json"),
 		OPT_END()
 	};
+
+	if (!ctx)
+		return -ENOMEM;
 
 	ret = argconfig_parse(argc, argv, desc, opts);
 	if (ret)
@@ -331,29 +339,29 @@ static int huawei_list(int argc, char **argv, struct command *command,
 	}
 
 	for (i = 0; i < n; i++) {
-		int fd;
+		_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
 
 		snprintf(path, sizeof(path), "/dev/%s", devices[i]->d_name);
-		fd = open(path, O_RDONLY);
-		if (fd < 0) {
+		ret = nvme_open(ctx, path, &hdl);
+		if (ret) {
 			fprintf(stderr, "Cannot open device %s: %s\n",
-				path, strerror(errno));
+				path, strerror(-ret));
 			continue;
 		}
-		ret = huawei_get_nvme_info(fd, &list_items[huawei_num], path);
-		if (ret) {
-			close(fd);
+		ret = huawei_get_nvme_info(hdl, &list_items[huawei_num], path);
+		if (ret)
 			goto out_free_list_items;
-		}
+
 		if (list_items[huawei_num].huawei_device == true)
 			huawei_num++;
-		close(fd);
 	}
 
 	if (huawei_num > 0) {
+#ifdef CONFIG_JSONC
 		if (fmt == JSON)
 			huawei_json_print_list_items(list_items, huawei_num);
 		else
+#endif /* CONFIG_JSONC */
 			huawei_print_list_items(list_items, huawei_num);
 	}
 out_free_list_items:
@@ -377,7 +385,7 @@ static void huawei_do_id_ctrl(__u8 *vs, struct json_object *root)
 		printf("array name : %s\n", strlen(array_name) > 1 ? array_name : "NULL");
 }
 
-static int huawei_id_ctrl(int argc, char **argv, struct command *cmd, struct plugin *plugin)
+static int huawei_id_ctrl(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
-	return __id_ctrl(argc, argv, cmd, plugin, huawei_do_id_ctrl);
+	return __id_ctrl(argc, argv, acmd, plugin, huawei_do_id_ctrl);
 }

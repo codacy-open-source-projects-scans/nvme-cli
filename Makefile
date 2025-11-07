@@ -9,6 +9,10 @@ NAME          := nvme
 .DEFAULT_GOAL := ${NAME}
 BUILD-DIR     := .build
 
+.PHONY: update-subprojects
+update-subprojects:
+	meson subprojects update
+
 ${BUILD-DIR}:
 	meson setup $@
 	@echo "Configuration located in: $@"
@@ -21,30 +25,37 @@ ${NAME}: ${BUILD-DIR}
 .PHONY: clean
 clean:
 ifneq ("$(wildcard ${BUILD-DIR})","")
-	meson compile --clean -C ${BUILD-DIR}
+	rm -rf ${BUILD-DIR}
+	meson subprojects purge --confirm
 endif
 
 .PHONY: purge
-purge:
-ifneq ("$(wildcard ${BUILD-DIR})","")
-	rm -rf ${BUILD-DIR}
-endif
+purge: clean
 
-.PHONY: install dist
-install dist: ${BUILD-DIR}
-	cd ${BUILD-DIR} && meson $@
+.PHONY: install
+install: ${NAME}
+	meson install -C ${BUILD-DIR} --skip-subprojects
 
 .PHONY: uninstall
 uninstall:
 	cd ${BUILD-DIR} && meson --internal uninstall
 
+.PHONY: dist
+dist: ${NAME}
+	meson dist -C ${BUILD-DIR} --formats gztar
+
 .PHONY: test
-test: ${BUILD-DIR}
-	ninja -C ${BUILD-DIR} $@
+test: ${NAME}
+	meson test -C ${BUILD-DIR}
+
+# Test strictly nvme-cli (do not run tests on all the subprojects)
+.PHONY: test-strict
+test-strict: ${NAME}
+	meson test -C ${BUILD-DIR} --suite nvme-cli
 
 .PHONY: rpm
 rpm:
-	meson ${BUILD-DIR} \
+	meson setup ${BUILD-DIR} \
 		-Dudevrulesdir=$(shell rpm --eval '%{_udevrulesdir}') \
 		-Dsystemddir=$(shell rpm --eval '%{_unitdir}') \
 		-Ddocs=man -Ddocs-build=true
@@ -52,13 +63,22 @@ rpm:
 
 .PHONY: debug
 debug:
-	meson ${BUILD-DIR} --buildtype=debug
-	ninja -C ${BUILD-DIR}
+	meson setup ${BUILD-DIR} --buildtype=debug
+	meson compile -C ${BUILD-DIR}
 
 .PHONY: static
 static:
-	meson ${BUILD-DIR} --buildtype=release \
-		--default-library=static -Dc_link_args="-static" \
+	meson setup ${BUILD-DIR} --buildtype=release \
 		--wrap-mode=forcefallback \
-		-Dlibnvme:tests=false -Dlibnvme:keyutils=disabled
-	ninja -C ${BUILD-DIR}
+		--default-library=static \
+		--prefix=/usr \
+		-Dc_link_args="-static" \
+		-Dlibnvme:default_library=static \
+		-Dlibnvme:keyutils=disabled \
+		-Dlibnvme:liburing=disabled \
+		-Dlibnvme:python=disabled \
+		-Dlibnvme:openssl=disabled \
+		-Dlibnvme:tests=false \
+		-Dlibnvme:examples=false
+
+	meson compile -C ${BUILD-DIR}

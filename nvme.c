@@ -61,19 +61,19 @@
 #include "plugin.h"
 #include "util/base64.h"
 #include "util/crc32.h"
-#include "nvme-wrap.h"
 #include "util/argconfig.h"
 #include "util/suffix.h"
-#include "util/logging.h"
+#include "logging.h"
+#include "util/sighdl.h"
 #include "fabrics.h"
 #define CREATE_CMD
 #include "nvme-builtin.h"
 #include "malloc.h"
 
 struct feat_cfg {
-	enum nvme_features_id feature_id;
+	__u8 feature_id;   /* enum nvme_features_id */
+	__u8 sel;          /* enum nvme_get_features_sel */
 	__u32 namespace_id;
-	enum nvme_get_features_sel sel;
 	__u32 cdw11;
 	__u32 cdw12;
 	__u8 uuid_index;
@@ -102,7 +102,6 @@ struct passthru_config {
 	char	*metadata;
 	bool	raw_binary;
 	bool	show_command;
-	bool	dry_run;
 	bool	read;
 	bool	write;
 	__u8	prefill;
@@ -192,6 +191,7 @@ const char *output_format = "Output format: normal|binary";
 #endif /* CONFIG_JSONC */
 const char *timeout = "timeout value, in milliseconds";
 const char *verbose = "Increase output verbosity";
+const char *dry_run = "show command instead of sending";
 
 static const char *app_tag = "app tag for end-to-end PI";
 static const char *app_tag_mask = "app tag mask for end-to-end PI";
@@ -199,11 +199,12 @@ static const char *block_count = "number of blocks (zeroes based) on device to a
 static const char *crkey = "current reservation key";
 static const char *csi = "command set identifier";
 static const char *buf_len = "buffer len (if) data is sent or received";
+static const char *deprecated = "deprecated; does nothing";
 static const char *domainid = "Domain Identifier";
 static const char *doper = "directive operation";
-static const char *dry = "show command instead of sending";
 static const char *dspec_w_dtype = "directive specification associated with directive type";
 static const char *dtype = "directive type";
+static const char *endgid = "Endurance Group Identifier (ENDGID)";
 static const char *force_unit_access = "force device to commit data before command completes";
 static const char *human_readable_directive = "show directive in readable format";
 static const char *human_readable_identify = "show identify in readable format";
@@ -258,9 +259,59 @@ static const char *pmrmscu = "PMRMSCU=0xe18 register offset";
 
 struct nvme_config nvme_cfg = {
 	.output_format = "normal",
+	.output_format_ver = 1,
+	.timeout = NVME_DEFAULT_IOCTL_TIMEOUT,
 };
 
-static void *mmap_registers(struct nvme_dev *dev, bool writable);
+static void *mmap_registers(struct nvme_transport_handle *hdl, bool writable);
+
+static OPT_VALS(feature_name) = {
+	VAL_BYTE("arbitration", NVME_FEAT_FID_ARBITRATION),
+	VAL_BYTE("power-mgmt", NVME_FEAT_FID_POWER_MGMT),
+	VAL_BYTE("lba-range", NVME_FEAT_FID_LBA_RANGE),
+	VAL_BYTE("temp-thresh", NVME_FEAT_FID_TEMP_THRESH),
+	VAL_BYTE("err-recovery", NVME_FEAT_FID_ERR_RECOVERY),
+	VAL_BYTE("volatile-wc", NVME_FEAT_FID_VOLATILE_WC),
+	VAL_BYTE("num-queues", NVME_FEAT_FID_NUM_QUEUES),
+	VAL_BYTE("irq-coalesce", NVME_FEAT_FID_IRQ_COALESCE),
+	VAL_BYTE("irq-config", NVME_FEAT_FID_IRQ_CONFIG),
+	VAL_BYTE("write-atomic", NVME_FEAT_FID_WRITE_ATOMIC),
+	VAL_BYTE("async-event", NVME_FEAT_FID_ASYNC_EVENT),
+	VAL_BYTE("auto-pst", NVME_FEAT_FID_AUTO_PST),
+	VAL_BYTE("host-mem-buf", NVME_FEAT_FID_HOST_MEM_BUF),
+	VAL_BYTE("timestamp", NVME_FEAT_FID_TIMESTAMP),
+	VAL_BYTE("kato", NVME_FEAT_FID_KATO),
+	VAL_BYTE("hctm", NVME_FEAT_FID_HCTM),
+	VAL_BYTE("nopsc", NVME_FEAT_FID_NOPSC),
+	VAL_BYTE("rrl", NVME_FEAT_FID_RRL),
+	VAL_BYTE("plm-config", NVME_FEAT_FID_PLM_CONFIG),
+	VAL_BYTE("plm-window", NVME_FEAT_FID_PLM_WINDOW),
+	VAL_BYTE("lba-sts-interval", NVME_FEAT_FID_LBA_STS_INTERVAL),
+	VAL_BYTE("host-behavior", NVME_FEAT_FID_HOST_BEHAVIOR),
+	VAL_BYTE("sanitize", NVME_FEAT_FID_SANITIZE),
+	VAL_BYTE("endurance-evt-cfg", NVME_FEAT_FID_ENDURANCE_EVT_CFG),
+	VAL_BYTE("iocs-profile", NVME_FEAT_FID_IOCS_PROFILE),
+	VAL_BYTE("spinup-control", NVME_FEAT_FID_SPINUP_CONTROL),
+	VAL_BYTE("power-loss-signal", NVME_FEAT_FID_POWER_LOSS_SIGNAL),
+	VAL_BYTE("perf-characteristics", NVME_FEAT_FID_PERF_CHARACTERISTICS),
+	VAL_BYTE("fdp", NVME_FEAT_FID_FDP),
+	VAL_BYTE("fdp-events", NVME_FEAT_FID_FDP_EVENTS),
+	VAL_BYTE("ns-admin-label", NVME_FEAT_FID_NS_ADMIN_LABEL),
+	VAL_BYTE("key-value", NVME_FEAT_FID_KEY_VALUE),
+	VAL_BYTE("ctrl-data-queue", NVME_FEAT_FID_CTRL_DATA_QUEUE),
+	VAL_BYTE("emb-mgmt-ctrl-addr", NVME_FEAT_FID_EMB_MGMT_CTRL_ADDR),
+	VAL_BYTE("host-mgmt-agent-addr", NVME_FEAT_FID_HOST_MGMT_AGENT_ADDR),
+	VAL_BYTE("enh-ctrl-metadata", NVME_FEAT_FID_ENH_CTRL_METADATA),
+	VAL_BYTE("ctrl-metadata", NVME_FEAT_FID_CTRL_METADATA),
+	VAL_BYTE("ns-metadata", NVME_FEAT_FID_NS_METADATA),
+	VAL_BYTE("sw-progress", NVME_FEAT_FID_SW_PROGRESS),
+	VAL_BYTE("host-id", NVME_FEAT_FID_HOST_ID),
+	VAL_BYTE("resv-mask", NVME_FEAT_FID_RESV_MASK),
+	VAL_BYTE("resv-persist", NVME_FEAT_FID_RESV_PERSIST),
+	VAL_BYTE("write-protect", NVME_FEAT_FID_WRITE_PROTECT),
+	VAL_BYTE("bp-write-protect", NVME_FEAT_FID_BP_WRITE_PROTECT),
+	VAL_END()
+};
 
 const char *nvme_strerror(int errnum)
 {
@@ -271,135 +322,20 @@ const char *nvme_strerror(int errnum)
 
 static ssize_t getrandom_bytes(void *buf, size_t buflen)
 {
-#if HAVE_SYS_RANDOM
-	return getrandom(buf, buflen, GRND_NONBLOCK);
-#else
 	ssize_t result;
-	int fd, err = 0;
+#if HAVE_SYS_RANDOM
+	result = getrandom(buf, buflen, GRND_NONBLOCK);
+#else
+	_cleanup_fd_ int fd = -1;
 
 	fd = open("/dev/urandom", O_RDONLY);
 	if (fd < 0)
-		return fd;
+		return -errno;
 	result = read(fd, buf, buflen);
-	if (result < 0)
-		err = errno;
-	close(fd);
-	errno = err;
-	return result;
 #endif
-}
-
-static bool is_chardev(struct nvme_dev *dev)
-{
-	return S_ISCHR(dev->direct.stat.st_mode);
-}
-
-static bool is_blkdev(struct nvme_dev *dev)
-{
-	return S_ISBLK(dev->direct.stat.st_mode);
-}
-
-static int open_dev_direct(struct nvme_dev **devp, char *devstr, int flags)
-{
-	struct nvme_dev *dev;
-	int err;
-
-	dev = calloc(1, sizeof(*dev));
-	if (!dev)
-		return -1;
-
-	dev->type = NVME_DEV_DIRECT;
-	dev->name = basename(devstr);
-	err = open(devstr, flags);
-	if (err < 0) {
-		nvme_show_perror(devstr);
-		goto err_free;
-	}
-	dev->direct.fd = err;
-
-	err = fstat(dev_fd(dev), &dev->direct.stat);
-	if (err < 0) {
-		nvme_show_perror(devstr);
-		goto err_close;
-	}
-	if (!is_chardev(dev) && !is_blkdev(dev)) {
-		nvme_show_error("%s is not a block or character device", devstr);
-		errno = ENODEV;
-		err = -1;
-		goto err_close;
-	}
-	*devp = dev;
-	return 0;
-
-err_close:
-	close(dev_fd(dev));
-err_free:
-	free(dev);
-	return err;
-}
-
-static int parse_mi_dev(char *dev, unsigned int *net, uint8_t *eid,
-			unsigned int *ctrl)
-{
-	int rc;
-
-	/* <net>,<eid>:<ctrl-id> form */
-	rc = sscanf(dev, "mctp:%u,%hhu:%u", net, eid, ctrl);
-	if (rc == 3)
-		return 0;
-
-	/* <net>,<eid> form, implicit ctrl-id = 0 */
-	*ctrl = 0;
-	rc = sscanf(dev, "mctp:%u,%hhu", net, eid);
-	if (rc == 2)
-		return 0;
-
-	return -1;
-}
-
-static int open_dev_mi_mctp(struct nvme_dev **devp, char *devstr)
-{
-	unsigned int net, ctrl_id;
-	struct nvme_dev *dev;
-	unsigned char eid;
-	int rc;
-
-	rc = parse_mi_dev(devstr, &net, &eid, &ctrl_id);
-	if (rc) {
-		nvme_show_error("invalid device specifier '%s'", devstr);
-		return rc;
-	}
-
-	dev = calloc(1, sizeof(*dev));
-	if (!dev)
-		return -1;
-
-	dev->type = NVME_DEV_MI;
-	dev->name = devstr;
-
-	/* todo: verbose argument */
-	dev->mi.root = nvme_mi_create_root(stderr, LOG_WARNING);
-	if (!dev->mi.root)
-		goto err_free;
-
-	dev->mi.ep = nvme_mi_open_mctp(dev->mi.root, net, eid);
-	if (!dev->mi.ep)
-		goto err_free_root;
-
-	dev->mi.ctrl = nvme_mi_init_ctrl(dev->mi.ep, ctrl_id);
-	if (!dev->mi.ctrl)
-		goto err_close_ep;
-
-	*devp = dev;
-	return 0;
-
-err_close_ep:
-	nvme_mi_close(dev->mi.ep);
-err_free_root:
-	nvme_mi_free_root(dev->mi.root);
-err_free:
-	free(dev);
-	return -1;
+	if (result < 0)
+		return -errno;
+	return result;
 }
 
 static int check_arg_dev(int argc, char **argv)
@@ -412,7 +348,9 @@ static int check_arg_dev(int argc, char **argv)
 	return 0;
 }
 
-static int get_dev(struct nvme_dev **dev, int argc, char **argv, int flags)
+static int get_transport_handle(struct nvme_global_ctx *ctx, int argc,
+					char **argv, int flags,
+					struct nvme_transport_handle **hdl)
 {
 	char *devname;
 	int ret;
@@ -422,14 +360,12 @@ static int get_dev(struct nvme_dev **dev, int argc, char **argv, int flags)
 		return ret;
 
 	devname = argv[optind];
-	errno = ENXIO;
 
-	if (!strncmp(devname, "mctp:", strlen("mctp:")))
-		ret = open_dev_mi_mctp(dev, devname);
-	else
-		ret = open_dev_direct(dev, devname, flags);
+	ret = nvme_open(ctx, devname, hdl);
+	if (!ret && log_level >= LOG_DEBUG)
+		nvme_show_init();
 
-	return ret ? -errno : 0;
+	return ret;
 }
 
 static int parse_args(int argc, char *argv[], const char *desc,
@@ -447,32 +383,59 @@ static int parse_args(int argc, char *argv[], const char *desc,
 	return 0;
 }
 
-int parse_and_open(struct nvme_dev **dev, int argc, char **argv,
-		   const char *desc,
-		   struct argconfig_commandline_options *opts)
+int parse_and_open(struct nvme_global_ctx **ctx,
+		   struct nvme_transport_handle **hdl, int argc, char **argv,
+		   const char *desc, struct argconfig_commandline_options *opts)
 {
+	struct nvme_transport_handle *hdl_new;
+	struct nvme_global_ctx *ctx_new;
 	int ret;
 
 	ret = parse_args(argc, argv, desc, opts);
 	if (ret)
 		return ret;
 
-	ret = get_dev(dev, argc, argv, O_RDONLY);
-	if (ret < 0)
-		argconfig_print_help(desc, opts);
+	ctx_new = nvme_create_global_ctx(stdout, log_level);
+	if (!ctx_new)
+		return -ENOMEM;
 
-	return ret;
+	ret = get_transport_handle(ctx_new, argc, argv, O_RDONLY, &hdl_new);
+	if (ret) {
+		nvme_free_global_ctx(ctx_new);
+		argconfig_print_help(desc, opts);
+		return -ENXIO;
+	}
+
+	*ctx = ctx_new;
+	*hdl = hdl_new;
+	return 0;
 }
 
-int open_exclusive(struct nvme_dev **dev, int argc, char **argv,
+int open_exclusive(struct nvme_global_ctx **ctx,
+		   struct nvme_transport_handle **hdl, int argc, char **argv,
 		   int ignore_exclusive)
 {
+	struct nvme_transport_handle *hdl_new;
+	struct nvme_global_ctx *ctx_new;
 	int flags = O_RDONLY;
+	int ret;
 
 	if (!ignore_exclusive)
 		flags |= O_EXCL;
 
-	return get_dev(dev, argc, argv, flags);
+	ctx_new = nvme_create_global_ctx(stdout, log_level);
+	if (!ctx_new)
+		return -ENOMEM;
+
+	ret = get_transport_handle(ctx_new, argc, argv, flags, &hdl_new);
+	if (ret) {
+		nvme_free_global_ctx(ctx_new);
+		return -ENXIO;
+	}
+
+	*ctx = ctx_new;
+	*hdl = hdl_new;
+	return 0;
 }
 
 int validate_output_format(const char *format, nvme_print_flags_t *flags)
@@ -490,6 +453,8 @@ int validate_output_format(const char *format, nvme_print_flags_t *flags)
 #endif /* CONFIG_JSONC */
 	else if (!strcmp(format, "binary"))
 		f = BINARY;
+	else if (!strcmp(format, "tabular"))
+		f = TABULAR;
 	else
 		return -EINVAL;
 
@@ -508,28 +473,15 @@ bool nvme_is_output_format_json(void)
 	return flags == JSON;
 }
 
-void dev_close(struct nvme_dev *dev)
-{
-	switch (dev->type) {
-	case NVME_DEV_DIRECT:
-		close(dev_fd(dev));
-		break;
-	case NVME_DEV_MI:
-		nvme_mi_close(dev->mi.ep);
-		nvme_mi_free_root(dev->mi.root);
-		break;
-	}
-	free(dev);
-}
-
-static int get_smart_log(int argc, char **argv, struct command *cmd, struct plugin *plugin)
+static int get_smart_log(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
 	const char *desc = "Retrieve SMART log for the given device "
 		"(or optionally a namespace) in either decoded format "
 		"(default) or binary.";
 
 	_cleanup_free_ struct nvme_smart_log *smart_log = NULL;
-	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
 	const char *namespace = "(optional) desired namespace";
 	nvme_print_flags_t flags;
 	int err = -1;
@@ -551,7 +503,7 @@ static int get_smart_log(int argc, char **argv, struct command *cmd, struct plug
 		  OPT_FLAG("raw-binary",     'b', &cfg.raw_binary,     raw_output),
 		  OPT_FLAG("human-readable", 'H', &cfg.human_readable, human_readable_info));
 
-	err = parse_and_open(&dev, argc, argv, desc, opts);
+	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err)
 		return err;
 
@@ -571,27 +523,27 @@ static int get_smart_log(int argc, char **argv, struct command *cmd, struct plug
 	if (!smart_log)
 		return -ENOMEM;
 
-	err = nvme_cli_get_log_smart(dev, cfg.namespace_id, false,
-				     smart_log);
+	err = nvme_get_log_smart(hdl, cfg.namespace_id, smart_log);
 	if (!err)
 		nvme_show_smart_log(smart_log, cfg.namespace_id,
-				    dev->name, flags);
+				    nvme_transport_handle_get_name(hdl), flags);
 	else if (err > 0)
 		nvme_show_status(err);
 	else
-		nvme_show_error("smart log: %s", nvme_strerror(errno));
+		nvme_show_error("smart log: %s", nvme_strerror(err));
 
 	return err;
 }
 
-static int get_ana_log(int argc, char **argv, struct command *cmd,
+static int get_ana_log(int argc, char **argv, struct command *acmd,
 		struct plugin *plugin)
 {
 	const char *desc = "Retrieve ANA log for the given device in "
 		"decoded format (default), json or binary.";
 	const char *groups = "Return ANA groups only.";
 
-	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
 	_cleanup_free_ struct nvme_id_ctrl *ctrl = NULL;
 	_cleanup_free_ struct nvme_ana_log *ana_log = NULL;
 	size_t max_ana_log_len;
@@ -610,7 +562,8 @@ static int get_ana_log(int argc, char **argv, struct command *cmd,
 	NVME_ARGS(opts,
 		  OPT_FLAG("groups", 'g', &cfg.groups, groups));
 
-	err = parse_and_open(&dev, argc, argv, desc, opts);
+
+	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err)
 		return err;
 
@@ -624,10 +577,10 @@ static int get_ana_log(int argc, char **argv, struct command *cmd,
 	if (!ctrl)
 		return -ENOMEM;
 
-	err = nvme_cli_identify_ctrl(dev, ctrl);
+	err = nvme_identify_ctrl(hdl, ctrl);
 	if (err) {
 		nvme_show_error("ERROR : nvme_identify_ctrl() failed: %s",
-			nvme_strerror(errno));
+			nvme_strerror(err));
 		return err;
 	}
 
@@ -642,43 +595,30 @@ static int get_ana_log(int argc, char **argv, struct command *cmd,
 	if (!ana_log)
 		return -ENOMEM;
 
-	err = nvme_cli_get_ana_log_atomic(dev, cfg.groups, true, 10,
-					  ana_log, &ana_log_len);
+	err = nvme_get_ana_log_atomic(hdl, true, cfg.groups, ana_log, &ana_log_len, 10);
 	if (!err)
-		nvme_show_ana_log(ana_log, dev->name, ana_log_len, flags);
+		nvme_show_ana_log(ana_log, nvme_transport_handle_get_name(hdl), ana_log_len, flags);
 	else if (err > 0)
 		nvme_show_status(err);
 	else
-		nvme_show_error("ana-log: %s", nvme_strerror(errno));
+		nvme_show_error("ana-log: %s", nvme_strerror(err));
 
 	return err;
 }
 
-static int parse_telemetry_da(struct nvme_dev *dev,
+static int parse_telemetry_da(struct nvme_transport_handle *hdl,
 			      enum nvme_telemetry_da da,
 			      struct nvme_telemetry_log *telem,
-			      size_t *size)
+			      size_t *size,
+			      bool da4_support)
 
 {
-	_cleanup_free_ struct nvme_id_ctrl *id_ctrl = NULL;
 	size_t dalb, da1lb = le16_to_cpu(telem->dalb1), da2lb = le16_to_cpu(telem->dalb2),
 		da3lb = le16_to_cpu(telem->dalb3), da4lb = le32_to_cpu(telem->dalb4);
-	bool data_area_4_support;
-
-	id_ctrl = nvme_alloc(sizeof(*id_ctrl));
-	if (!id_ctrl)
-		return -ENOMEM;
-
-	if (nvme_cli_identify_ctrl(dev, id_ctrl)) {
-		perror("identify-ctrl");
-		return -errno;
-	}
-
-	data_area_4_support = id_ctrl->lpa & 0x40;
 
 	switch (da) {
 	case NVME_TELEMETRY_DA_CTRL_DETERMINE:
-		if (data_area_4_support)
+		if (da4_support)
 			dalb = da4lb;
 		else
 			dalb = da3lb;
@@ -694,7 +634,7 @@ static int parse_telemetry_da(struct nvme_dev *dev,
 		dalb = da3lb;
 		break;
 	case NVME_TELEMETRY_DA_4:
-		if (data_area_4_support) {
+		if (da4_support) {
 			dalb = da4lb;
 		} else {
 			nvme_show_error(
@@ -715,7 +655,7 @@ static int parse_telemetry_da(struct nvme_dev *dev,
 	return 0;
 }
 
-static int get_log_telemetry_ctrl(struct nvme_dev *dev, bool rae, size_t size,
+static int get_log_telemetry_ctrl(struct nvme_transport_handle *hdl, bool rae, size_t size,
 				  struct nvme_telemetry_log **buf)
 {
 	struct nvme_telemetry_log *log;
@@ -723,22 +663,19 @@ static int get_log_telemetry_ctrl(struct nvme_dev *dev, bool rae, size_t size,
 
 	log = nvme_alloc(size);
 	if (!log)
-		return -errno;
+		return -ENOMEM;
 
-	err = nvme_cli_get_log_telemetry_ctrl(dev, rae, 0, size, log);
+	err = nvme_get_log_telemetry_ctrl(hdl, rae, 0, log, size);
 	if (err) {
 		free(log);
-		if (errno)
-			return -errno;
-		else
-			return err;
+		return err;
 	}
 
 	*buf = log;
 	return 0;
 }
 
-static int get_log_telemetry_host(struct nvme_dev *dev, size_t size,
+static int get_log_telemetry_host(struct nvme_transport_handle *hdl, size_t size,
 				  struct nvme_telemetry_log **buf)
 {
 	struct nvme_telemetry_log *log;
@@ -746,25 +683,23 @@ static int get_log_telemetry_host(struct nvme_dev *dev, size_t size,
 
 	log = nvme_alloc(size);
 	if (!log)
-		return -errno;
+		return -ENOMEM;
 
-	err = nvme_cli_get_log_telemetry_host(dev, 0, size, log);
+	err = nvme_get_log_telemetry_host(hdl, 0, log, size);
 	if (err) {
 		free(log);
-		if (errno)
-			return -errno;
-		else
-			return err;
+		return err;
 	}
 
 	*buf = log;
 	return 0;
 }
 
-static int __create_telemetry_log_host(struct nvme_dev *dev,
+static int __create_telemetry_log_host(struct nvme_transport_handle *hdl,
 				       enum nvme_telemetry_da da,
 				       size_t *size,
-				       struct nvme_telemetry_log **buf)
+				       struct nvme_telemetry_log **buf,
+				       bool da4_support)
 {
 	_cleanup_free_ struct nvme_telemetry_log *log = NULL;
 	int err;
@@ -773,49 +708,44 @@ static int __create_telemetry_log_host(struct nvme_dev *dev,
 	if (!log)
 		return -ENOMEM;
 
-	err = nvme_cli_get_log_create_telemetry_host_mcda(dev, da, log);
-	if (err) {
-		if (errno)
-			return -errno;
-		else
-			return err;
-	}
-
-	err = parse_telemetry_da(dev, da, log, size);
+	err = nvme_get_log_create_telemetry_host_mcda(hdl, da, log);
 	if (err)
 		return err;
 
-	return get_log_telemetry_host(dev, *size, buf);
+	err = parse_telemetry_da(hdl, da, log, size, da4_support);
+	if (err)
+		return err;
+
+	return get_log_telemetry_host(hdl, *size, buf);
 }
 
-static int __get_telemetry_log_ctrl(struct nvme_dev *dev,
+static int __get_telemetry_log_ctrl(struct nvme_transport_handle *hdl,
 				    bool rae,
 				    enum nvme_telemetry_da da,
 				    size_t *size,
-				    struct nvme_telemetry_log **buf)
+				    struct nvme_telemetry_log **buf,
+				    bool da4_support)
 {
 	struct nvme_telemetry_log *log;
 	int err;
 
 	log = nvme_alloc(NVME_LOG_TELEM_BLOCK_SIZE);
 	if (!log)
-		return -errno;
+		return -ENOMEM;
 
 	/*
 	 * set rae = true so it won't clear the current telemetry log in
 	 * controller
 	 */
-	err = nvme_cli_get_log_telemetry_ctrl(dev, true, 0,
-					      NVME_LOG_TELEM_BLOCK_SIZE,
-					      log);
+	err = nvme_get_log_telemetry_ctrl(hdl, true, 0, log,
+					  NVME_LOG_TELEM_BLOCK_SIZE);
 	if (err)
 		goto free;
 
 	if (!log->ctrlavail) {
 		if (!rae) {
-			err = nvme_cli_get_log_telemetry_ctrl(dev, rae, 0,
-							      NVME_LOG_TELEM_BLOCK_SIZE,
-							      log);
+			err = nvme_get_log_telemetry_ctrl(hdl, rae, 0, log,
+				NVME_LOG_TELEM_BLOCK_SIZE);
 			goto free;
 		}
 
@@ -826,43 +756,43 @@ static int __get_telemetry_log_ctrl(struct nvme_dev *dev,
 		return 0;
 	}
 
-	err = parse_telemetry_da(dev, da, log, size);
+	err = parse_telemetry_da(hdl, da, log, size, da4_support);
 	if (err)
 		goto free;
 
-	return get_log_telemetry_ctrl(dev, rae, *size, buf);
+	return get_log_telemetry_ctrl(hdl, rae, *size, buf);
 
 free:
 	free(log);
 	return err;
 }
 
-static int __get_telemetry_log_host(struct nvme_dev *dev,
+static int __get_telemetry_log_host(struct nvme_transport_handle *hdl,
 				    enum nvme_telemetry_da da,
 				    size_t *size,
-				    struct nvme_telemetry_log **buf)
+				    struct nvme_telemetry_log **buf,
+				    bool da4_support)
 {
 	_cleanup_free_ struct nvme_telemetry_log *log = NULL;
 	int err;
 
 	log = nvme_alloc(sizeof(*log));
 	if (!log)
-		return -errno;
+		return -ENOMEM;
 
-	err = nvme_cli_get_log_telemetry_host(dev, 0,
-					      NVME_LOG_TELEM_BLOCK_SIZE,
-					      log);
+	err = nvme_get_log_telemetry_host(hdl, 0, log,
+					  NVME_LOG_TELEM_BLOCK_SIZE);
 	if (err)
 		return  err;
 
-	err = parse_telemetry_da(dev, da, log, size);
+	err = parse_telemetry_da(hdl, da, log, size, da4_support);
 	if (err)
 		return err;
 
-	return get_log_telemetry_host(dev, *size, buf);
+	return get_log_telemetry_host(hdl, *size, buf);
 }
 
-static int get_telemetry_log(int argc, char **argv, struct command *cmd,
+static int get_telemetry_log(int argc, char **argv, struct command *acmd,
 			     struct plugin *plugin)
 {
 	const char *desc = "Retrieve telemetry log and write to binary file";
@@ -874,12 +804,17 @@ static int get_telemetry_log(int argc, char **argv, struct command *cmd,
 		"If given, This option will override dgen. 0 : controller determines data area";
 
 	_cleanup_free_ struct nvme_telemetry_log *log = NULL;
-	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
+	_cleanup_free_ struct nvme_id_ctrl *id_ctrl = NULL;
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
 	_cleanup_fd_ int output = -1;
 	int err = 0;
-	size_t total_size;
+	size_t total_size = 0;
 	__u8 *data_ptr = NULL;
 	int data_written = 0, data_remaining = 0;
+	nvme_print_flags_t flags;
+	bool da4_support = false,
+	host_behavior_changed = false;
 
 	struct config {
 		char	*file_name;
@@ -906,9 +841,16 @@ static int get_telemetry_log(int argc, char **argv, struct command *cmd,
 		  OPT_FLAG("rae",             'r', &cfg.rae,       rae),
 		  OPT_BYTE("mcda",            'm', &cfg.mcda,      mcda));
 
-	err = parse_and_open(&dev, argc, argv, desc, opts);
+
+	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err)
 		return err;
+
+	err = validate_output_format(nvme_cfg.output_format, &flags);
+	if (err < 0) {
+		nvme_show_error("Invalid output format");
+		return err;
+	}
 
 	if (!cfg.file_name) {
 		nvme_show_error("Please provide an output file!");
@@ -925,6 +867,32 @@ static int get_telemetry_log(int argc, char **argv, struct command *cmd,
 		cfg.data_area = cfg.mcda;
 	}
 
+	if (cfg.data_area == 4) {
+		id_ctrl = nvme_alloc(sizeof(*id_ctrl));
+		if (!id_ctrl)
+			return -ENOMEM;
+
+		err = nvme_identify_ctrl(hdl, id_ctrl);
+		if (err) {
+			nvme_show_error("identify-ctrl");
+			return err;
+		}
+
+		da4_support = id_ctrl->lpa & 0x40;
+
+		if (!da4_support) {
+			fprintf(stderr, "%s: Telemetry data area 4 not supported by device\n",
+				__func__);
+			return -EINVAL;
+		}
+
+		err = nvme_set_etdas(hdl, &host_behavior_changed);
+		if (err) {
+			fprintf(stderr, "%s: Failed to set ETDAS bit\n", __func__);
+			return err;
+		}
+	}
+
 	output = open(cfg.file_name, O_WRONLY | O_CREAT | O_TRUNC, 0666);
 	if (output < 0) {
 		nvme_show_error("Failed to open output file %s: %s!",
@@ -937,17 +905,17 @@ static int get_telemetry_log(int argc, char **argv, struct command *cmd,
 		return -ENOMEM;
 
 	if (cfg.ctrl_init)
-		err = __get_telemetry_log_ctrl(dev, cfg.rae, cfg.data_area,
-					       &total_size, &log);
+		err = __get_telemetry_log_ctrl(hdl, cfg.rae, cfg.data_area,
+					       &total_size, &log, da4_support);
 	else if (cfg.host_gen)
-		err = __create_telemetry_log_host(dev, cfg.data_area,
-						  &total_size, &log);
+		err = __create_telemetry_log_host(hdl, cfg.data_area,
+						  &total_size, &log, da4_support);
 	else
-		err = __get_telemetry_log_host(dev, cfg.data_area,
-					       &total_size, &log);
+		err = __get_telemetry_log_host(hdl, cfg.data_area,
+					       &total_size, &log, da4_support);
 
 	if (err < 0) {
-		nvme_show_error("get-telemetry-log: %s", nvme_strerror(errno));
+		nvme_show_error("get-telemetry-log: %s", nvme_strerror(err));
 		return err;
 	} else if (err > 0) {
 		nvme_show_status(err);
@@ -983,16 +951,26 @@ static int get_telemetry_log(int argc, char **argv, struct command *cmd,
 		return -1;
 	}
 
+	if (host_behavior_changed) {
+		host_behavior_changed = false;
+		err = nvme_clear_etdas(hdl, &host_behavior_changed);
+		if (err) {
+			fprintf(stderr, "%s: Failed to clear ETDAS bit\n", __func__);
+			return err;
+		}
+	}
+
 	return err;
 }
 
-static int get_endurance_log(int argc, char **argv, struct command *cmd, struct plugin *plugin)
+static int get_endurance_log(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
 	const char *desc = "Retrieves endurance groups log page and prints the log.";
 	const char *group_id = "The endurance group identifier";
 
 	_cleanup_free_ struct nvme_endurance_group_log *endurance_log = NULL;
-	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
 	nvme_print_flags_t flags;
 	int err;
 
@@ -1007,7 +985,8 @@ static int get_endurance_log(int argc, char **argv, struct command *cmd, struct 
 	NVME_ARGS(opts,
 		  OPT_SHRT("group-id",     'g', &cfg.group_id,      group_id));
 
-	err = parse_and_open(&dev, argc, argv, desc, opts);
+
+	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err)
 		return err;
 
@@ -1021,20 +1000,20 @@ static int get_endurance_log(int argc, char **argv, struct command *cmd, struct 
 	if (!endurance_log)
 		return -ENOMEM;
 
-	err = nvme_cli_get_log_endurance_group(dev, cfg.group_id,
-					       endurance_log);
+	err = nvme_get_log_endurance_group(hdl, cfg.group_id,
+					   endurance_log);
 	if (!err)
 		nvme_show_endurance_log(endurance_log, cfg.group_id,
-					dev->name, flags);
+					nvme_transport_handle_get_name(hdl), flags);
 	else if (err > 0)
 		nvme_show_status(err);
 	else
-		nvme_show_error("endurance log: %s", nvme_strerror(errno));
+		nvme_show_error("endurance log: %s", nvme_strerror(err));
 
 	return err;
 }
 
-static int collect_effects_log(struct nvme_dev *dev, enum nvme_csi csi,
+static int collect_effects_log(struct nvme_transport_handle *hdl, enum nvme_csi csi,
 			       struct list_head *list, int flags)
 {
 	nvme_effects_log_node_t *node;
@@ -1046,7 +1025,7 @@ static int collect_effects_log(struct nvme_dev *dev, enum nvme_csi csi,
 
 	node->csi = csi;
 
-	err = nvme_cli_get_log_cmd_effects(dev, csi, &node->effects);
+	err = nvme_get_log_cmd_effects(hdl, csi, &node->effects);
 	if (err) {
 		free(node);
 		return err;
@@ -1055,11 +1034,13 @@ static int collect_effects_log(struct nvme_dev *dev, enum nvme_csi csi,
 	return 0;
 }
 
-static int get_effects_log(int argc, char **argv, struct command *cmd, struct plugin *plugin)
+static int get_effects_log(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
 	const char *desc = "Retrieve command effects log page and print the table.";
 
-	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
+	struct nvme_passthru_cmd64 cmd;
 	struct list_head log_pages;
 	nvme_effects_log_node_t *node;
 
@@ -1085,7 +1066,8 @@ static int get_effects_log(int argc, char **argv, struct command *cmd, struct pl
 		  OPT_FLAG("raw-binary",     'b', &cfg.raw_binary,     raw_log),
 		  OPT_INT("csi",             'c', &cfg.csi,            csi));
 
-	err = parse_and_open(&dev, argc, argv, desc, opts);
+
+	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err)
 		return err;
 
@@ -1105,34 +1087,31 @@ static int get_effects_log(int argc, char **argv, struct command *cmd, struct pl
 
 	if (cfg.csi < 0) {
 		__u64 cap;
-
-		bar = mmap_registers(dev, false);
+		if (nvme_transport_handle_is_blkdev(hdl)) {
+			nvme_show_error("Block device isn't allowed without csi");
+			return -EINVAL;
+		}
+		bar = mmap_registers(hdl, false);
 
 		if (bar) {
 			cap = mmio_read64(bar + NVME_REG_CAP);
 			munmap(bar, getpagesize());
 		} else {
-			struct nvme_get_property_args args = {
-				.args_size	= sizeof(args),
-				.fd		= dev_fd(dev),
-				.offset		= NVME_REG_CAP,
-				.value		= &cap,
-				.timeout	= nvme_cfg.timeout,
-			};
-			err = nvme_get_property(&args);
+			nvme_init_get_property(&cmd, NVME_REG_CAP);
+			err = nvme_submit_admin_passthru64(hdl, &cmd, &cap);
 			if (err)
 				goto cleanup_list;
 		}
 
 		if (NVME_CAP_CSS(cap) & NVME_CAP_CSS_NVM)
-			err = collect_effects_log(dev, NVME_CSI_NVM,
+			err = collect_effects_log(hdl, NVME_CSI_NVM,
 						  &log_pages, flags);
 
 		if (!err && (NVME_CAP_CSS(cap) & NVME_CAP_CSS_CSI))
-			err = collect_effects_log(dev, NVME_CSI_ZNS,
+			err = collect_effects_log(hdl, NVME_CSI_ZNS,
 						  &log_pages, flags);
 	} else {
-		err = collect_effects_log(dev, cfg.csi, &log_pages, flags);
+		err = collect_effects_log(hdl, cfg.csi, &log_pages, flags);
 	}
 
 	if (!err)
@@ -1149,19 +1128,20 @@ cleanup_list:
 	return err;
 }
 
-static int get_supported_log_pages(int argc, char **argv, struct command *cmd,
+static int get_supported_log_pages(int argc, char **argv, struct command *acmd,
 	struct plugin *plugin)
 {
 	const char *desc = "Retrieve supported logs and print the table.";
 
 	_cleanup_free_ struct nvme_supported_log_pages *supports = NULL;
-	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
 	nvme_print_flags_t flags;
 	int err = -1;
 
 	NVME_ARGS(opts);
 
-	err = parse_and_open(&dev, argc, argv, desc, opts);
+	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err)
 		return err;
 
@@ -1178,18 +1158,18 @@ static int get_supported_log_pages(int argc, char **argv, struct command *cmd,
 	if (!supports)
 		return -ENOMEM;
 
-	err = nvme_cli_get_log_supported_log_pages(dev, false, supports);
+	err = nvme_get_log_supported_log_pages(hdl, supports);
 	if (!err)
-		nvme_show_supported_log(supports, dev->name, flags);
+		nvme_show_supported_log(supports, nvme_transport_handle_get_name(hdl), flags);
 	else if (err > 0)
 		nvme_show_status(err);
 	else
-		nvme_show_error("supported log pages: %s", nvme_strerror(errno));
+		nvme_show_error("supported log pages: %s", nvme_strerror(err));
 
 	return err;
 }
 
-static int get_error_log(int argc, char **argv, struct command *cmd, struct plugin *plugin)
+static int get_error_log(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
 	const char *desc = "Retrieve specified number of "
 		"error log entries from a given device "
@@ -1198,7 +1178,8 @@ static int get_error_log(int argc, char **argv, struct command *cmd, struct plug
 	const char *raw = "dump in binary format";
 
 	_cleanup_free_ struct nvme_error_log_page *err_log = NULL;
-	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
 	struct nvme_id_ctrl ctrl = { 0 };
 	nvme_print_flags_t flags;
 	int err = -1;
@@ -1217,7 +1198,7 @@ static int get_error_log(int argc, char **argv, struct command *cmd, struct plug
 		  OPT_UINT("log-entries",  'e', &cfg.log_entries,   log_entries),
 		  OPT_FLAG("raw-binary",   'b', &cfg.raw_binary,    raw));
 
-	err = parse_and_open(&dev, argc, argv, desc, opts);
+	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err)
 		return err;
 
@@ -1235,7 +1216,7 @@ static int get_error_log(int argc, char **argv, struct command *cmd, struct plug
 		return -1;
 	}
 
-	err = nvme_cli_identify_ctrl(dev, &ctrl);
+	err = nvme_identify_ctrl(hdl, &ctrl);
 	if (err < 0) {
 		nvme_show_perror("identify controller");
 		return err;
@@ -1249,10 +1230,10 @@ static int get_error_log(int argc, char **argv, struct command *cmd, struct plug
 	if (!err_log)
 		return -ENOMEM;
 
-	err = nvme_cli_get_log_error(dev, cfg.log_entries, false, err_log);
+	err = nvme_get_log_error(hdl, NVME_NSID_ALL, cfg.log_entries, err_log);
 	if (!err)
 		nvme_show_error_log(err_log, cfg.log_entries,
-				    dev->name, flags);
+				    nvme_transport_handle_get_name(hdl), flags);
 	else if (err > 0)
 		nvme_show_status(err);
 	else
@@ -1261,13 +1242,14 @@ static int get_error_log(int argc, char **argv, struct command *cmd, struct plug
 	return err;
 }
 
-static int get_fw_log(int argc, char **argv, struct command *cmd, struct plugin *plugin)
+static int get_fw_log(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
 	const char *desc = "Retrieve the firmware log for the "
 		"specified device in either decoded format (default) or binary.";
 
 	_cleanup_free_ struct nvme_firmware_slot *fw_log = NULL;
-	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
 	nvme_print_flags_t flags;
 	int err;
 
@@ -1282,7 +1264,7 @@ static int get_fw_log(int argc, char **argv, struct command *cmd, struct plugin 
 	NVME_ARGS(opts,
 		  OPT_FLAG("raw-binary",   'b', &cfg.raw_binary,    raw_use));
 
-	err = parse_and_open(&dev, argc, argv, desc, opts);
+	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err)
 		return err;
 
@@ -1299,24 +1281,23 @@ static int get_fw_log(int argc, char **argv, struct command *cmd, struct plugin 
 	if (!fw_log)
 		return -ENOMEM;
 
-	err = nvme_cli_get_log_fw_slot(dev, false, fw_log);
+	err = nvme_get_log_fw_slot(hdl, false, fw_log);
 	if (!err)
-		nvme_show_fw_log(fw_log, dev->name, flags);
+		nvme_show_fw_log(fw_log, nvme_transport_handle_get_name(hdl), flags);
 	else if (err > 0)
 		nvme_show_status(err);
 	else
-		nvme_show_error("fw log: %s", nvme_strerror(errno));
+		nvme_show_error("fw log: %s", nvme_strerror(err));
 
 	return err;
 }
 
-static int get_changed_ns_list_log(int argc, char **argv, struct command *cmd, struct plugin *plugin)
+static int get_changed_ns_list_log(int argc, char **argv, bool alloc)
 {
-	const char *desc = "Retrieve Changed Namespaces log for the given device "
-		"in either decoded format (default) or binary.";
-
+	_cleanup_free_ char *desc = NULL;
 	_cleanup_free_ struct nvme_ns_list *changed_ns_list_log = NULL;
-	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
 	nvme_print_flags_t flags;
 	int err;
 
@@ -1331,7 +1312,12 @@ static int get_changed_ns_list_log(int argc, char **argv, struct command *cmd, s
 	NVME_ARGS(opts,
 		  OPT_FLAG("raw-binary",   'b', &cfg.raw_binary,    raw_output));
 
-	err = parse_and_open(&dev, argc, argv, desc, opts);
+	if (asprintf(&desc, "Retrieve Changed %s Namespaces log for the given device %s",
+		     alloc ? "Allocated" : "Attached",
+		     "in either decoded format (default) or binary.") < 0)
+		desc = NULL;
+
+	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err)
 		return err;
 
@@ -1348,21 +1334,38 @@ static int get_changed_ns_list_log(int argc, char **argv, struct command *cmd, s
 	if (!changed_ns_list_log)
 		return -ENOMEM;
 
-	err = nvme_cli_get_log_changed_ns_list(dev, true,
-					       changed_ns_list_log);
+	if (alloc)
+		err = nvme_get_log_changed_alloc_ns_list(hdl,
+			changed_ns_list_log, sizeof(*changed_ns_list_log));
+	else
+		err = nvme_get_log_changed_ns_list(hdl, NVME_NSID_NONE,
+			changed_ns_list_log);
 	if (!err)
-		nvme_show_changed_ns_list_log(changed_ns_list_log,
-					      dev->name, flags);
+		nvme_show_changed_ns_list_log(changed_ns_list_log, nvme_transport_handle_get_name(hdl),
+					      flags, alloc);
 	else if (err > 0)
 		nvme_show_status(err);
 	else
-		nvme_show_error("changed ns list log: %s", nvme_strerror(errno));
+		nvme_show_error("changed %s ns list log: %s", alloc ? "allocated" : "attached",
+				nvme_strerror(err));
 
 	return err;
 }
 
+static int get_changed_attach_ns_list_log(int argc, char **argv, struct command *acmd,
+					  struct plugin *plugin)
+{
+	return get_changed_ns_list_log(argc, argv, false);
+}
+
+static int get_changed_alloc_ns_list_log(int argc, char **argv, struct command *acmd,
+					 struct plugin *plugin)
+{
+	return get_changed_ns_list_log(argc, argv, true);
+}
+
 static int get_pred_lat_per_nvmset_log(int argc, char **argv,
-	struct command *cmd, struct plugin *plugin)
+	struct command *command, struct plugin *plugin)
 {
 	const char *desc = "Retrieve Predictable latency per nvm set log "
 		"page and prints it for the given device in either decoded "
@@ -1370,7 +1373,8 @@ static int get_pred_lat_per_nvmset_log(int argc, char **argv,
 	const char *nvmset_id = "NVM Set Identifier";
 
 	_cleanup_free_ struct nvme_nvmset_predictable_lat_log *plpns_log = NULL;
-	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
 	nvme_print_flags_t flags;
 	int err;
 
@@ -1388,7 +1392,7 @@ static int get_pred_lat_per_nvmset_log(int argc, char **argv,
 		  OPT_SHRT("nvmset-id",	   'i', &cfg.nvmset_id,     nvmset_id),
 		  OPT_FLAG("raw-binary",   'b', &cfg.raw_binary,    raw_use));
 
-	err = parse_and_open(&dev, argc, argv, desc, opts);
+	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err)
 		return err;
 
@@ -1405,28 +1409,30 @@ static int get_pred_lat_per_nvmset_log(int argc, char **argv,
 	if (!plpns_log)
 		return -ENOMEM;
 
-	err = nvme_cli_get_log_predictable_lat_nvmset(dev, cfg.nvmset_id,
-						      plpns_log);
+	err = nvme_get_log_predictable_lat_nvmset(hdl, cfg.nvmset_id,
+						  plpns_log);
 	if (!err)
-		nvme_show_predictable_latency_per_nvmset(plpns_log, cfg.nvmset_id, dev->name,
+		nvme_show_predictable_latency_per_nvmset(plpns_log, cfg.nvmset_id,
+							 nvme_transport_handle_get_name(hdl),
 							 flags);
 	else if (err > 0)
 		nvme_show_status(err);
 	else
-		nvme_show_error("predictable latency per nvm set: %s", nvme_strerror(errno));
+		nvme_show_error("predictable latency per nvm set: %s", nvme_strerror(err));
 
 	return err;
 }
 
 static int get_pred_lat_event_agg_log(int argc, char **argv,
-		struct command *cmd, struct plugin *plugin)
+		struct command *command, struct plugin *plugin)
 {
 	const char *desc = "Retrieve Predictable Latency Event "
 		"Aggregate Log page and prints it, for the given "
 		"device in either decoded format(default), json or binary.";
 	const char *log_entries = "Number of pending NVM Set log Entries list";
 
-	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
 	_cleanup_free_ struct nvme_id_ctrl *ctrl = NULL;
 	_cleanup_free_ void *pea_log = NULL;
 	nvme_print_flags_t flags;
@@ -1450,7 +1456,7 @@ static int get_pred_lat_event_agg_log(int argc, char **argv,
 		  OPT_FLAG("rae",          'r', &cfg.rae,           rae),
 		  OPT_FLAG("raw-binary",   'b', &cfg.raw_binary,    raw_use));
 
-	err = parse_and_open(&dev, argc, argv, desc, opts);
+	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err)
 		return err;
 
@@ -1472,9 +1478,9 @@ static int get_pred_lat_event_agg_log(int argc, char **argv,
 	if (!ctrl)
 		return -ENOMEM;
 
-	err = nvme_cli_identify_ctrl(dev, ctrl);
+	err = nvme_identify_ctrl(hdl, ctrl);
 	if (err < 0) {
-		nvme_show_error("identify controller: %s", nvme_strerror(errno));
+		nvme_show_error("identify controller: %s", nvme_strerror(err));
 		return err;
 	} else if (err) {
 		nvme_show_status(err);
@@ -1488,22 +1494,22 @@ static int get_pred_lat_event_agg_log(int argc, char **argv,
 	if (!pea_log)
 		return -ENOMEM;
 
-	err = nvme_cli_get_log_predictable_lat_event(dev, cfg.rae, 0,
-						     log_size, pea_log);
+	err = nvme_get_log_predictable_lat_event(hdl, cfg.rae, 0,
+						 pea_log, log_size);
 	if (!err)
 		nvme_show_predictable_latency_event_agg_log(pea_log, cfg.log_entries, log_size,
-							    dev->name, flags);
+							    nvme_transport_handle_get_name(hdl), flags);
 	else if (err > 0)
 		nvme_show_status(err);
 	else
 		nvme_show_error("predictable latency event aggregate log page: %s",
-				nvme_strerror(errno));
+				nvme_strerror(err));
 
 	return err;
 }
 
 static int get_persistent_event_log(int argc, char **argv,
-		struct command *cmd, struct plugin *plugin)
+		struct command *command, struct plugin *plugin)
 {
 	const char *desc = "Retrieve Persistent Event log info for "
 		"the given device in either decoded format(default), json or binary.";
@@ -1514,7 +1520,8 @@ static int get_persistent_event_log(int argc, char **argv,
 	_cleanup_free_ struct nvme_persistent_event_log *pevent = NULL;
 	struct nvme_persistent_event_log *pevent_collected = NULL;
 	_cleanup_huge_ struct nvme_mem_huge mh = { 0, };
-	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
 	nvme_print_flags_t flags;
 	void *pevent_log_info;
 	int err;
@@ -1536,7 +1543,7 @@ static int get_persistent_event_log(int argc, char **argv,
 		  OPT_UINT("log_len",	 'l', &cfg.log_len,	  log_len),
 		  OPT_FLAG("raw-binary",   'b', &cfg.raw_binary,    raw_use));
 
-	err = parse_and_open(&dev, argc, argv, desc, opts);
+	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err)
 		return err;
 
@@ -1553,10 +1560,10 @@ static int get_persistent_event_log(int argc, char **argv,
 	if (!pevent)
 		return -ENOMEM;
 
-	err = nvme_cli_get_log_persistent_event(dev, cfg.action,
-						sizeof(*pevent), pevent);
+	err = nvme_get_log_persistent_event(hdl, cfg.action,
+					    pevent, sizeof(*pevent));
 	if (err < 0) {
-		nvme_show_error("persistent event log: %s", nvme_strerror(errno));
+		nvme_show_error("persistent event log: %s", nvme_strerror(err));
 		return err;
 	} else if (err) {
 		nvme_show_status(err);
@@ -1586,17 +1593,19 @@ static int get_persistent_event_log(int argc, char **argv,
 		cfg.action = NVME_PEVENT_LOG_READ;
 
 	pevent_log_info = nvme_alloc_huge(cfg.log_len, &mh);
-	if (!pevent_log_info)
+	if (!pevent_log_info) {
+		nvme_show_error("failed to allocate huge memory");
 		return -ENOMEM;
+	}
 
-	err = nvme_cli_get_log_persistent_event(dev, cfg.action,
-						cfg.log_len, pevent_log_info);
+	err = nvme_get_log_persistent_event(hdl, cfg.action,
+					    pevent_log_info, cfg.log_len);
 	if (!err) {
-		err = nvme_cli_get_log_persistent_event(dev, cfg.action,
-							sizeof(*pevent),
-							pevent);
+		err = nvme_get_log_persistent_event(hdl, cfg.action,
+							pevent,
+							sizeof(*pevent));
 		if (err < 0) {
-			nvme_show_error("persistent event log: %s", nvme_strerror(errno));
+			nvme_show_error("persistent event log: %s", nvme_strerror(err));
 			return err;
 		} else if (err) {
 			nvme_show_status(err);
@@ -1610,25 +1619,26 @@ static int get_persistent_event_log(int argc, char **argv,
 		}
 
 		nvme_show_persistent_event_log(pevent_log_info, cfg.action,
-			cfg.log_len, dev->name, flags);
+			cfg.log_len, nvme_transport_handle_get_name(hdl), flags);
 	} else if (err > 0) {
 		nvme_show_status(err);
 	} else {
-		nvme_show_error("persistent event log: %s", nvme_strerror(errno));
+		nvme_show_error("persistent event log: %s", nvme_strerror(err));
 	}
 
 	return err;
 }
 
 static int get_endurance_event_agg_log(int argc, char **argv,
-		struct command *cmd, struct plugin *plugin)
+		struct command *command, struct plugin *plugin)
 {
 	const char *desc = "Retrieve Retrieve Predictable Latency "
 		"Event Aggregate page and prints it, for the given "
 		"device in either decoded format(default), json or binary.";
 	const char *log_entries = "Number of pending Endurance Group Event log Entries list";
 
-	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
 	_cleanup_free_ struct nvme_id_ctrl *ctrl = NULL;
 	_cleanup_free_ void *endurance_log = NULL;
 	nvme_print_flags_t flags;
@@ -1652,7 +1662,7 @@ static int get_endurance_event_agg_log(int argc, char **argv,
 		  OPT_FLAG("rae",          'r', &cfg.rae,           rae),
 		  OPT_FLAG("raw-binary",   'b', &cfg.raw_binary,    raw_use));
 
-	err = parse_and_open(&dev, argc, argv, desc, opts);
+	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err)
 		return err;
 
@@ -1674,9 +1684,9 @@ static int get_endurance_event_agg_log(int argc, char **argv,
 	if (!ctrl)
 		return -ENOMEM;
 
-	err = nvme_cli_identify_ctrl(dev, ctrl);
+	err = nvme_identify_ctrl(hdl, ctrl);
 	if (err < 0) {
-		nvme_show_error("identify controller: %s", nvme_strerror(errno));
+		nvme_show_error("identify controller: %s", nvme_strerror(err));
 		return err;
 	} else if (err) {
 		nvme_show_error("could not identify controller");
@@ -1690,27 +1700,28 @@ static int get_endurance_event_agg_log(int argc, char **argv,
 	if (!endurance_log)
 		return -ENOMEM;
 
-	err = nvme_cli_get_log_endurance_grp_evt(dev, cfg.rae, 0, log_size,
-						 endurance_log);
+	err = nvme_get_log_endurance_grp_evt(hdl, cfg.rae, 0,
+					     endurance_log, log_size);
 	if (!err)
 		nvme_show_endurance_group_event_agg_log(endurance_log, cfg.log_entries, log_size,
-							dev->name, flags);
+							nvme_transport_handle_get_name(hdl), flags);
 	else if (err > 0)
 		nvme_show_status(err);
 	else
 		nvme_show_error("endurance group event aggregate log page: %s",
-				nvme_strerror(errno));
+				nvme_strerror(err));
 
 	return err;
 }
 
 static int get_lba_status_log(int argc, char **argv,
-		struct command *cmd, struct plugin *plugin)
+		struct command *command, struct plugin *plugin)
 {
 	const char *desc = "Retrieve Get LBA Status Info Log and prints it, "
 		"for the given device in either decoded format(default),json or binary.";
 
-	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
 	_cleanup_free_ void *lba_status = NULL;
 	nvme_print_flags_t flags;
 	__u32 lslplen;
@@ -1727,7 +1738,7 @@ static int get_lba_status_log(int argc, char **argv,
 	NVME_ARGS(opts,
 		  OPT_FLAG("rae",          'r', &cfg.rae,           rae));
 
-	err = parse_and_open(&dev, argc, argv, desc, opts);
+	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err)
 		return err;
 
@@ -1737,10 +1748,9 @@ static int get_lba_status_log(int argc, char **argv,
 		return err;
 	}
 
-	err = nvme_cli_get_log_lba_status(dev, true, 0, sizeof(__u32),
-					  &lslplen);
+	err = nvme_get_log_lba_status(hdl, false, 0, &lslplen, sizeof(__u32));
 	if (err < 0) {
-		nvme_show_error("lba status log page: %s", nvme_strerror(errno));
+		nvme_show_error("lba status log page: %s", nvme_strerror(err));
 		return err;
 	} else if (err) {
 		nvme_show_status(err);
@@ -1751,19 +1761,19 @@ static int get_lba_status_log(int argc, char **argv,
 	if (!lba_status)
 		return -ENOMEM;
 
-	err = nvme_cli_get_log_lba_status(dev, cfg.rae, 0, lslplen, lba_status);
+	err = nvme_get_log_lba_status(hdl, cfg.rae, 0, lba_status, lslplen);
 	if (!err)
-		nvme_show_lba_status_log(lba_status, lslplen, dev->name, flags);
+		nvme_show_lba_status_log(lba_status, lslplen, nvme_transport_handle_get_name(hdl), flags);
 	else if (err > 0)
 		nvme_show_status(err);
 	else
-		nvme_show_error("lba status log page: %s", nvme_strerror(errno));
+		nvme_show_error("lba status log page: %s", nvme_strerror(err));
 
 	return err;
 }
 
 static int get_resv_notif_log(int argc, char **argv,
-	struct command *cmd, struct plugin *plugin)
+	struct command *command, struct plugin *plugin)
 {
 
 	const char *desc = "Retrieve Reservation Notification "
@@ -1771,13 +1781,14 @@ static int get_resv_notif_log(int argc, char **argv,
 		"device in either decoded format(default), json or binary.";
 
 	_cleanup_free_ struct nvme_resv_notification_log *resv = NULL;
-	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
 	nvme_print_flags_t flags;
 	int err;
 
 	NVME_ARGS(opts);
 
-	err = parse_and_open(&dev, argc, argv, desc, opts);
+	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err)
 		return err;
 
@@ -1791,26 +1802,27 @@ static int get_resv_notif_log(int argc, char **argv,
 	if (!resv)
 		return -ENOMEM;
 
-	err = nvme_cli_get_log_reservation(dev, false, resv);
+	err = nvme_get_log_reservation(hdl, resv);
 	if (!err)
-		nvme_show_resv_notif_log(resv, dev->name, flags);
+		nvme_show_resv_notif_log(resv, nvme_transport_handle_get_name(hdl), flags);
 	else if (err > 0)
 		nvme_show_status(err);
 	else
-		nvme_show_error("resv notifi log: %s", nvme_strerror(errno));
+		nvme_show_error("resv notifi log: %s", nvme_strerror(err));
 
 	return err;
 
 }
 
-static int get_boot_part_log(int argc, char **argv, struct command *cmd, struct plugin *plugin)
+static int get_boot_part_log(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
 	const char *desc = "Retrieve Boot Partition "
 		"log page and prints it, for the given "
 		"device in either decoded format(default), json or binary.";
 	const char *fname = "boot partition data output file name";
 
-	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
 	_cleanup_free_ struct nvme_boot_partition *boot = NULL;
 	_cleanup_free_ __u8 *bp_log = NULL;
 	nvme_print_flags_t flags;
@@ -1832,7 +1844,7 @@ static int get_boot_part_log(int argc, char **argv, struct command *cmd, struct 
 		  OPT_BYTE("lsp",          's', &cfg.lsp,           lsp),
 		  OPT_FILE("output-file",  'f', &cfg.file_name,     fname));
 
-	err = parse_and_open(&dev, argc, argv, desc, opts);
+	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err)
 		return err;
 
@@ -1863,10 +1875,9 @@ static int get_boot_part_log(int argc, char **argv, struct command *cmd, struct 
 	if (!boot)
 		return -ENOMEM;
 
-	err = nvme_cli_get_log_boot_partition(dev, false, cfg.lsp,
-					      sizeof(*boot), boot);
+	err = nvme_get_log_boot_partition(hdl, cfg.lsp, boot, sizeof(*boot));
 	if (err < 0) {
-		nvme_show_error("boot partition log: %s", nvme_strerror(errno));
+		nvme_show_error("boot partition log: %s", nvme_strerror(err));
 		return err;
 	} else if (err) {
 		nvme_show_status(err);
@@ -1878,15 +1889,16 @@ static int get_boot_part_log(int argc, char **argv, struct command *cmd, struct 
 	if (!bp_log)
 		return -ENOMEM;
 
-	err = nvme_cli_get_log_boot_partition(dev, false, cfg.lsp,
-					      sizeof(*boot) + bpsz,
-					      (struct nvme_boot_partition *)bp_log);
+	err = nvme_get_log_boot_partition(hdl, cfg.lsp,
+					  (struct nvme_boot_partition *)bp_log,
+					  sizeof(*boot) + bpsz);
 	if (!err)
-		nvme_show_boot_part_log(&bp_log, dev->name, sizeof(*boot) + bpsz, flags);
+		nvme_show_boot_part_log(&bp_log, nvme_transport_handle_get_name(hdl),
+					sizeof(*boot) + bpsz, flags);
 	else if (err > 0)
 		nvme_show_status(err);
 	else
-		nvme_show_error("boot partition log: %s", nvme_strerror(errno));
+		nvme_show_error("boot partition log: %s", nvme_strerror(err));
 
 	err = write(output, (void *) bp_log + sizeof(*boot), bpsz);
 	if (err != bpsz)
@@ -1898,7 +1910,7 @@ static int get_boot_part_log(int argc, char **argv, struct command *cmd, struct 
 	return err;
 }
 
-static int get_phy_rx_eom_log(int argc, char **argv, struct command *cmd,
+static int get_phy_rx_eom_log(int argc, char **argv, struct command *acmd,
 		struct plugin *plugin)
 {
 	const char *desc = "Retrieve Physical Interface Receiver Eye Opening "
@@ -1908,7 +1920,8 @@ static int get_phy_rx_eom_log(int argc, char **argv, struct command *cmd,
 	_cleanup_free_ struct nvme_phy_rx_eom_log *phy_rx_eom_log = NULL;
 	size_t phy_rx_eom_log_len;
 	nvme_print_flags_t flags;
-	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
 	int err = -1;
 	__u8 lsp_tmp;
 
@@ -1926,7 +1939,7 @@ static int get_phy_rx_eom_log(int argc, char **argv, struct command *cmd,
 		  OPT_BYTE("lsp",        's', &cfg.lsp,        lsp),
 		  OPT_SHRT("controller", 'c', &cfg.controller, controller));
 
-	err = parse_and_open(&dev, argc, argv, desc, opts);
+	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err)
 		return err;
 
@@ -1956,13 +1969,13 @@ static int get_phy_rx_eom_log(int argc, char **argv, struct command *cmd,
 	/* Just read measurement, take given action when fetching full log */
 	lsp_tmp = cfg.lsp & 0xf3;
 
-	err = nvme_cli_get_log_phy_rx_eom(dev, lsp_tmp, cfg.controller, phy_rx_eom_log_len,
-					  phy_rx_eom_log);
+	err = nvme_get_log_phy_rx_eom(hdl, lsp_tmp, cfg.controller, phy_rx_eom_log,
+								  phy_rx_eom_log_len);
 	if (err) {
 		if (err > 0)
 			nvme_show_status(err);
 		else
-			nvme_show_error("phy-rx-eom-log: %s", nvme_strerror(errno));
+			nvme_show_error("phy-rx-eom-log: %s", nvme_strerror(err));
 
 		return err;
 	}
@@ -1978,25 +1991,26 @@ static int get_phy_rx_eom_log(int argc, char **argv, struct command *cmd,
 	if (!phy_rx_eom_log)
 		return -ENOMEM;
 
-	err = nvme_cli_get_log_phy_rx_eom(dev, cfg.lsp, cfg.controller, phy_rx_eom_log_len,
-					  phy_rx_eom_log);
+	err = nvme_get_log_phy_rx_eom(hdl, cfg.lsp, cfg.controller, phy_rx_eom_log,
+								  phy_rx_eom_log_len);
 	if (!err)
 		nvme_show_phy_rx_eom_log(phy_rx_eom_log, cfg.controller, flags);
 	else if (err > 0)
 		nvme_show_status(err);
 	else
-		nvme_show_error("phy-rx-eom-log: %s", nvme_strerror(errno));
+		nvme_show_error("phy-rx-eom-log: %s", nvme_strerror(err));
 
 	return err;
 }
 
-static int get_media_unit_stat_log(int argc, char **argv, struct command *cmd,
+static int get_media_unit_stat_log(int argc, char **argv, struct command *acmd,
 				   struct plugin *plugin)
 {
 	const char *desc = "Retrieve the configuration and wear of media units and print it";
 
 	_cleanup_free_ struct nvme_media_unit_stat_log *mus = NULL;
-	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
 	nvme_print_flags_t flags;
 	int err = -1;
 
@@ -2014,7 +2028,7 @@ static int get_media_unit_stat_log(int argc, char **argv, struct command *cmd,
 		  OPT_UINT("domain-id",     'd', &cfg.domainid, domainid),
 		  OPT_FLAG("raw-binary",    'b', &cfg.raw_binary, raw_use));
 
-	err = parse_and_open(&dev, argc, argv, desc, opts);
+	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err)
 		return err;
 
@@ -2031,24 +2045,25 @@ static int get_media_unit_stat_log(int argc, char **argv, struct command *cmd,
 	if (!mus)
 		return -ENOMEM;
 
-	err = nvme_cli_get_log_media_unit_stat(dev, cfg.domainid, mus);
+	err = nvme_get_log_media_unit_stat(hdl, cfg.domainid, mus);
 	if (!err)
 		nvme_show_media_unit_stat_log(mus, flags);
 	else if (err > 0)
 		nvme_show_status(err);
 	else
-		nvme_show_error("media unit status log: %s", nvme_strerror(errno));
+		nvme_show_error("media unit status log: %s", nvme_strerror(err));
 
 	return err;
 }
 
-static int get_supp_cap_config_log(int argc, char **argv, struct command *cmd,
+static int get_supp_cap_config_log(int argc, char **argv, struct command *acmd,
 				   struct plugin *plugin)
 {
 	const char *desc = "Retrieve the list of Supported Capacity Configuration Descriptors";
 
 	_cleanup_free_ struct nvme_supported_cap_config_list_log *cap_log = NULL;
-	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
 	nvme_print_flags_t flags;
 	int err = -1;
 
@@ -2066,7 +2081,7 @@ static int get_supp_cap_config_log(int argc, char **argv, struct command *cmd,
 		  OPT_UINT("domain-id",     'd', &cfg.domainid,       domainid),
 		  OPT_FLAG("raw-binary",    'b', &cfg.raw_binary,     raw_use));
 
-	err = parse_and_open(&dev, argc, argv, desc, opts);
+	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err)
 		return err;
 
@@ -2083,8 +2098,8 @@ static int get_supp_cap_config_log(int argc, char **argv, struct command *cmd,
 	if (!cap_log)
 		return -ENOMEM;
 
-	err = nvme_cli_get_log_support_cap_config_list(dev, cfg.domainid,
-						       cap_log);
+	err = nvme_get_log_support_cap_config_list(hdl, cfg.domainid,
+						   cap_log);
 	if (!err)
 		nvme_show_supported_cap_config_log(cap_log, flags);
 	else if (err > 0)
@@ -2095,20 +2110,22 @@ static int get_supp_cap_config_log(int argc, char **argv, struct command *cmd,
 	return err;
 }
 
-static int io_mgmt_send(int argc, char **argv, struct command *cmd, struct plugin *plugin)
+static int io_mgmt_send(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
 	const char *desc = "I/O Management Send";
 	const char *data = "optional file for data (default stdin)";
 
-	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
-	_cleanup_free_ void *buf = NULL;
-	int err = -1;
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
 	_cleanup_fd_ int dfd = STDIN_FILENO;
+	_cleanup_free_ void *buf = NULL;
+	struct nvme_passthru_cmd cmd;
+	int err = -1;
 
 	struct config {
+		__u32 nsid;
 		__u16 mos;
 		__u8  mo;
-		__u32 namespace_id;
 		char  *file;
 		__u32 data_len;
 	};
@@ -2118,18 +2135,18 @@ static int io_mgmt_send(int argc, char **argv, struct command *cmd, struct plugi
 	};
 
 	NVME_ARGS(opts,
-		  OPT_UINT("namespace-id",  'n', &cfg.namespace_id,   namespace_id_desired),
-		  OPT_SHRT("mos",           's', &cfg.mos,            mos),
-		  OPT_BYTE("mo",            'm', &cfg.mo,             mo),
-		  OPT_FILE("data",          'd', &cfg.file,           data),
-		  OPT_UINT("data-len",      'l', &cfg.data_len,       buf_len));
+		  OPT_UINT("namespace-id",  'n', &cfg.nsid,		namespace_id_desired),
+		  OPT_SHRT("mos",           's', &cfg.mos,		mos),
+		  OPT_BYTE("mo",            'm', &cfg.mo,       mo),
+		  OPT_FILE("data",          'd', &cfg.file,     data),
+		  OPT_UINT("data-len",      'l', &cfg.data_len, buf_len));
 
-	err = parse_and_open(&dev, argc, argv, desc, opts);
+	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err)
 		return err;
 
-	if (!cfg.namespace_id) {
-		err = nvme_get_nsid(dev_fd(dev), &cfg.namespace_id);
+	if (!cfg.nsid) {
+		err = nvme_get_nsid(hdl, &cfg.nsid);
 		if (err < 0) {
 			nvme_show_perror("get-namespace-id");
 			return err;
@@ -2156,21 +2173,11 @@ static int io_mgmt_send(int argc, char **argv, struct command *cmd, struct plugi
 		return err;
 	}
 
-	struct nvme_io_mgmt_send_args args = {
-		.args_size	= sizeof(args),
-		.fd		= dev_fd(dev),
-		.nsid		= cfg.namespace_id,
-		.mos		= cfg.mos,
-		.mo		= cfg.mo,
-		.data_len	= cfg.data_len,
-		.data		= buf,
-		.timeout	= nvme_cfg.timeout,
-	};
-
-	err = nvme_io_mgmt_send(&args);
+	nvme_init_io_mgmt_send(&cmd, cfg.nsid, cfg.mo, cfg.mos, buf, cfg.data_len);
+	err = nvme_submit_io_passthru(hdl, &cmd, NULL);
 	if (!err)
 		printf("io-mgmt-send: Success, mos:%u mo:%u nsid:%d\n",
-			cfg.mos, cfg.mo, cfg.namespace_id);
+			cfg.mos, cfg.mo, cfg.nsid);
 	else if (err > 0)
 		nvme_show_status(err);
 	else
@@ -2179,20 +2186,22 @@ static int io_mgmt_send(int argc, char **argv, struct command *cmd, struct plugi
 	return err;
 }
 
-static int io_mgmt_recv(int argc, char **argv, struct command *cmd, struct plugin *plugin)
+static int io_mgmt_recv(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
 	const char *desc = "I/O Management Receive";
 	const char *data = "optional file for data (default stdout)";
 
-	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
 	_cleanup_free_ void *buf = NULL;
-	int err = -1;
+	struct nvme_passthru_cmd cmd;
 	_cleanup_fd_ int dfd = -1;
+	int err = -1;
 
 	struct config {
 		__u16 mos;
 		__u8  mo;
-		__u32 namespace_id;
+		__u32 nsid;
 		char  *file;
 		__u32 data_len;
 	};
@@ -2202,18 +2211,18 @@ static int io_mgmt_recv(int argc, char **argv, struct command *cmd, struct plugi
 	};
 
 	NVME_ARGS(opts,
-		  OPT_UINT("namespace-id",  'n', &cfg.namespace_id,   namespace_id_desired),
-		  OPT_SHRT("mos",           's', &cfg.mos,            mos),
-		  OPT_BYTE("mo",            'm', &cfg.mo,             mo),
-		  OPT_FILE("data",          'd', &cfg.file,           data),
-		  OPT_UINT("data-len",      'l', &cfg.data_len,       buf_len));
+		  OPT_UINT("namespace-id",  'n', &cfg.nsid,		namespace_id_desired),
+		  OPT_SHRT("mos",           's', &cfg.mos,      mos),
+		  OPT_BYTE("mo",            'm', &cfg.mo,       mo),
+		  OPT_FILE("data",          'd', &cfg.file,     data),
+		  OPT_UINT("data-len",      'l', &cfg.data_len, buf_len));
 
-	err = parse_and_open(&dev, argc, argv, desc, opts);
+	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err)
 		return err;
 
-	if (!cfg.namespace_id) {
-		err = nvme_get_nsid(dev_fd(dev), &cfg.namespace_id);
+	if (!cfg.nsid) {
+		err = nvme_get_nsid(hdl, &cfg.nsid);
 		if (err < 0) {
 			nvme_show_perror("get-namespace-id");
 			return err;
@@ -2226,21 +2235,12 @@ static int io_mgmt_recv(int argc, char **argv, struct command *cmd, struct plugi
 			return -ENOMEM;
 	}
 
-	struct nvme_io_mgmt_recv_args args = {
-		.args_size	= sizeof(args),
-		.fd		= dev_fd(dev),
-		.nsid		= cfg.namespace_id,
-		.mos		= cfg.mos,
-		.mo		= cfg.mo,
-		.data_len	= cfg.data_len,
-		.data		= buf,
-		.timeout	= nvme_cfg.timeout,
-	};
-
-	err = nvme_io_mgmt_recv(&args);
+	nvme_init_io_mgmt_recv(&cmd, cfg.nsid, cfg.mo, cfg.mos, buf,
+		cfg.data_len);
+	err = nvme_submit_io_passthru(hdl, &cmd, NULL);
 	if (!err) {
 		printf("io-mgmt-recv: Success, mos:%u mo:%u nsid:%d\n",
-			cfg.mos, cfg.mo, cfg.namespace_id);
+			cfg.mos, cfg.mo, cfg.nsid);
 
 		if (cfg.file) {
 			dfd = open(cfg.file, O_WRONLY | O_CREAT, 0644);
@@ -2266,7 +2266,7 @@ static int io_mgmt_recv(int argc, char **argv, struct command *cmd, struct plugi
 	return err;
 }
 
-static int get_log(int argc, char **argv, struct command *cmd, struct plugin *plugin)
+static int get_log(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
 	const char *desc = "Retrieve desired number of bytes "
 		"from a given log on a specified device in either "
@@ -2280,9 +2280,12 @@ static int get_log(int argc, char **argv, struct command *cmd, struct plugin *pl
 	const char *offset_type = "offset type";
 	const char *xfer_len = "read chunk size (default 4k)";
 
-	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
 	_cleanup_free_ unsigned char *log = NULL;
+	struct nvme_passthru_cmd cmd;
 	int err;
+	nvme_print_flags_t flags;
 
 	struct config {
 		__u32	namespace_id;
@@ -2316,9 +2319,55 @@ static int get_log(int argc, char **argv, struct command *cmd, struct plugin *pl
 		.xfer_len	= 4096,
 	};
 
+	OPT_VALS(log_name) = {
+		VAL_BYTE("supported-log-pages", NVME_LOG_LID_SUPPORTED_LOG_PAGES),
+		VAL_BYTE("error", NVME_LOG_LID_ERROR),
+		VAL_BYTE("smart", NVME_LOG_LID_SMART),
+		VAL_BYTE("fw-slot", NVME_LOG_LID_FW_SLOT),
+		VAL_BYTE("changed-ns", NVME_LOG_LID_CHANGED_NS),
+		VAL_BYTE("cmd-effects", NVME_LOG_LID_CMD_EFFECTS),
+		VAL_BYTE("device-self-test", NVME_LOG_LID_DEVICE_SELF_TEST),
+		VAL_BYTE("telemetry-host", NVME_LOG_LID_TELEMETRY_HOST),
+		VAL_BYTE("telemetry-ctrl", NVME_LOG_LID_TELEMETRY_CTRL),
+		VAL_BYTE("endurance-group", NVME_LOG_LID_ENDURANCE_GROUP),
+		VAL_BYTE("predictable-lat-nvmset", NVME_LOG_LID_PREDICTABLE_LAT_NVMSET),
+		VAL_BYTE("predictable-lat-agg", NVME_LOG_LID_PREDICTABLE_LAT_AGG),
+		VAL_BYTE("ana", NVME_LOG_LID_ANA),
+		VAL_BYTE("persistent-event", NVME_LOG_LID_PERSISTENT_EVENT),
+		VAL_BYTE("lba-status", NVME_LOG_LID_LBA_STATUS),
+		VAL_BYTE("endurance-grp-evt", NVME_LOG_LID_ENDURANCE_GRP_EVT),
+		VAL_BYTE("media-unit-status", NVME_LOG_LID_MEDIA_UNIT_STATUS),
+		VAL_BYTE("supported-cap-config-list", NVME_LOG_LID_SUPPORTED_CAP_CONFIG_LIST),
+		VAL_BYTE("fid-supported-effects", NVME_LOG_LID_FID_SUPPORTED_EFFECTS),
+		VAL_BYTE("mi-cmd-supported-effects", NVME_LOG_LID_MI_CMD_SUPPORTED_EFFECTS),
+		VAL_BYTE("cmd-and-feat-lockdown", NVME_LOG_LID_CMD_AND_FEAT_LOCKDOWN),
+		VAL_BYTE("boot-partition", NVME_LOG_LID_BOOT_PARTITION),
+		VAL_BYTE("rotational-media-info",
+			 NVME_LOG_LID_ROTATIONAL_MEDIA_INFO),
+		VAL_BYTE("dispersed-ns-participating-ns",
+			 NVME_LOG_LID_DISPERSED_NS_PARTICIPATING_NSS),
+		VAL_BYTE("mgmt-addr-list", NVME_LOG_LID_MGMT_ADDR_LIST),
+		VAL_BYTE("phy-rx-eom", NVME_LOG_LID_PHY_RX_EOM),
+		VAL_BYTE("reachability-groups", NVME_LOG_LID_REACHABILITY_GROUPS),
+		VAL_BYTE("reachability-associations", NVME_LOG_LID_REACHABILITY_ASSOCIATIONS),
+		VAL_BYTE("changed-alloc-ns-list", NVME_LOG_LID_CHANGED_ALLOC_NS),
+		VAL_BYTE("fdp-configs", NVME_LOG_LID_FDP_CONFIGS),
+		VAL_BYTE("fdp-ruh-usage", NVME_LOG_LID_FDP_RUH_USAGE),
+		VAL_BYTE("fdp-stats", NVME_LOG_LID_FDP_STATS),
+		VAL_BYTE("fdp-events", NVME_LOG_LID_FDP_EVENTS),
+		VAL_BYTE("discover", NVME_LOG_LID_DISCOVERY),
+		VAL_BYTE("host-discover", NVME_LOG_LID_HOST_DISCOVERY),
+		VAL_BYTE("ave-discover", NVME_LOG_LID_AVE_DISCOVERY),
+		VAL_BYTE("pull-model-ddc-req", NVME_LOG_LID_PULL_MODEL_DDC_REQ),
+		VAL_BYTE("reservation", NVME_LOG_LID_RESERVATION),
+		VAL_BYTE("sanitize", NVME_LOG_LID_SANITIZE),
+		VAL_BYTE("zns-changed-zones", NVME_LOG_LID_ZNS_CHANGED_ZONES),
+		VAL_END()
+	};
+
 	NVME_ARGS(opts,
 		  OPT_UINT("namespace-id", 'n', &cfg.namespace_id, namespace_desired),
-		  OPT_BYTE("log-id",       'i', &cfg.log_id,       log_id),
+		  OPT_BYTE("log-id",       'i', &cfg.log_id,       log_id, log_name),
 		  OPT_UINT("log-len",      'l', &cfg.log_len,      log_len),
 		  OPT_UINT("aen",          'a', &cfg.aen,          aen),
 		  OPT_SUFFIX("lpo",        'L', &cfg.lpo,          lpo),
@@ -2331,9 +2380,15 @@ static int get_log(int argc, char **argv, struct command *cmd, struct plugin *pl
 		  OPT_FLAG("ot",           'O', &cfg.ot,           offset_type),
 		  OPT_UINT("xfer-len",     'x', &cfg.xfer_len,     xfer_len));
 
-	err = parse_and_open(&dev, argc, argv, desc, opts);
+	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err)
 		return err;
+
+	err = validate_output_format(nvme_cfg.output_format, &flags);
+	if (err < 0) {
+		nvme_show_error("Invalid output format");
+		return err;
+	}
 
 	if (cfg.aen) {
 		cfg.log_len = 4096;
@@ -2365,44 +2420,63 @@ static int get_log(int argc, char **argv, struct command *cmd, struct plugin *pl
 		return -ENOMEM;
 
 	struct nvme_get_log_args args = {
-		.args_size	= sizeof(args),
-		.lid		= cfg.log_id,
 		.nsid		= cfg.namespace_id,
-		.lpo		= cfg.lpo,
-		.lsp		= cfg.lsp,
-		.lsi		= cfg.lsi,
 		.rae		= cfg.rae,
-		.uuidx		= cfg.uuid_index,
+		.lsp		= cfg.lsp,
+		.lid		= cfg.log_id,
+		.lsi		= cfg.lsi,
 		.csi		= cfg.csi,
 		.ot		= cfg.ot,
-		.len		= cfg.log_len,
+		.uidx		= cfg.uuid_index,
+		.lpo		= cfg.lpo,
 		.log		= log,
+		.len		= cfg.log_len,
 		.result		= NULL,
 	};
-	err = nvme_cli_get_log_page(dev, cfg.xfer_len, &args);
+	nvme_init_get_log(&cmd, cfg.namespace_id, cfg.log_id,
+			  cfg.csi, log, cfg.log_len);
+	cmd.cdw10 |= NVME_FIELD_ENCODE(cfg.lsp,
+			NVME_LOG_CDW10_LSP_SHIFT,
+			NVME_LOG_CDW10_LSP_MASK);
+	cmd.cdw11 |= NVME_FIELD_ENCODE(cfg.lsi,
+			NVME_LOG_CDW11_LSI_SHIFT,
+			NVME_LOG_CDW11_LSI_MASK);
+	cmd.cdw12 = cfg.lpo & 0xffffffff;
+	cmd.cdw13 = cfg.lpo >> 32;
+	cmd.cdw14 |= NVME_FIELD_ENCODE(cfg.uuid_index,
+			NVME_LOG_CDW14_UUID_SHIFT,
+			NVME_LOG_CDW14_UUID_MASK) |
+		     NVME_FIELD_ENCODE(cfg.ot,
+			NVME_LOG_CDW14_OT_SHIFT,
+			NVME_LOG_CDW14_OT_MASK);
+
+	err = nvme_get_log(hdl, &cmd, cfg.rae, NVME_LOG_PAGE_PDU_SIZE, NULL);
 	if (!err) {
 		if (!cfg.raw_binary) {
-			printf("Device:%s log-id:%d namespace-id:%#x\n", dev->name, cfg.log_id,
-			       cfg.namespace_id);
+			printf("Device:%s log-id:%d namespace-id:%#x\n", nvme_transport_handle_get_name(hdl),
+			       cfg.log_id, cfg.namespace_id);
 			d(log, cfg.log_len, 16, 1);
+			if (argconfig_parse_seen(opts, "verbose"))
+				nvme_show_log(nvme_transport_handle_get_name(hdl), &args, VERBOSE);
 		} else {
 			d_raw((unsigned char *)log, cfg.log_len);
 		}
 	} else if (err > 0) {
 		nvme_show_status(err);
 	} else {
-		nvme_show_error("log page: %s", nvme_strerror(errno));
+		nvme_show_error("log page: %s", nvme_strerror(err));
 	}
 
 	return err;
 }
 
-static int sanitize_log(int argc, char **argv, struct command *command, struct plugin *plugin)
+static int sanitize_log(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
 	const char *desc = "Retrieve sanitize log and show it.";
 
 	_cleanup_free_ struct nvme_sanitize_log_page *sanitize_log = NULL;
-	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
 	nvme_print_flags_t flags;
 	int err;
 
@@ -2423,7 +2497,7 @@ static int sanitize_log(int argc, char **argv, struct command *command, struct p
 		  OPT_FLAG("human-readable", 'H', &cfg.human_readable, human_readable_log),
 		  OPT_FLAG("raw-binary",     'b', &cfg.raw_binary,     raw_log));
 
-	err = parse_and_open(&dev, argc, argv, desc, opts);
+	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err)
 		return err;
 
@@ -2443,24 +2517,25 @@ static int sanitize_log(int argc, char **argv, struct command *command, struct p
 	if (!sanitize_log)
 		return -ENOMEM;
 
-	err = nvme_cli_get_log_sanitize(dev, cfg.rae, sanitize_log);
+	err = nvme_get_log_sanitize(hdl, cfg.rae, sanitize_log);
 	if (!err)
-		nvme_show_sanitize_log(sanitize_log, dev->name, flags);
+		nvme_show_sanitize_log(sanitize_log, nvme_transport_handle_get_name(hdl), flags);
 	else if (err > 0)
 		nvme_show_status(err);
 	else
-		nvme_show_error("sanitize status log: %s", nvme_strerror(errno));
+		nvme_show_error("sanitize status log: %s", nvme_strerror(err));
 
 	return err;
 }
 
-static int get_fid_support_effects_log(int argc, char **argv, struct command *cmd,
+static int get_fid_support_effects_log(int argc, char **argv, struct command *acmd,
 	struct plugin *plugin)
 {
 	const char *desc = "Retrieve FID Support and Effects log and show it.";
 
 	_cleanup_free_ struct nvme_fid_supported_effects_log *fid_support_log = NULL;
-	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
 	nvme_print_flags_t flags;
 	int err = -1;
 
@@ -2475,7 +2550,7 @@ static int get_fid_support_effects_log(int argc, char **argv, struct command *cm
 	NVME_ARGS(opts,
 		  OPT_FLAG("human-readable", 'H', &cfg.human_readable, human_readable_log));
 
-	err = parse_and_open(&dev, argc, argv, desc, opts);
+	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err)
 		return err;
 
@@ -2492,24 +2567,25 @@ static int get_fid_support_effects_log(int argc, char **argv, struct command *cm
 	if (!fid_support_log)
 		return -ENOMEM;
 
-	err = nvme_cli_get_log_fid_supported_effects(dev, false, fid_support_log);
+	err = nvme_get_log_fid_supported_effects(hdl, false, fid_support_log);
 	if (!err)
-		nvme_show_fid_support_effects_log(fid_support_log, dev->name, flags);
+		nvme_show_fid_support_effects_log(fid_support_log, nvme_transport_handle_get_name(hdl), flags);
 	else if (err > 0)
 		nvme_show_status(err);
 	else
-		nvme_show_error("fid support effects log: %s", nvme_strerror(errno));
+		nvme_show_error("fid support effects log: %s", nvme_strerror(err));
 
 	return err;
 }
 
-static int get_mi_cmd_support_effects_log(int argc, char **argv, struct command *cmd,
+static int get_mi_cmd_support_effects_log(int argc, char **argv, struct command *acmd,
 	struct plugin *plugin)
 {
 	const char *desc = "Retrieve NVMe-MI Command Support and Effects log and show it.";
 
 	_cleanup_free_ struct nvme_mi_cmd_supported_effects_log *mi_cmd_support_log = NULL;
-	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
 	nvme_print_flags_t flags;
 	int err = -1;
 
@@ -2524,7 +2600,7 @@ static int get_mi_cmd_support_effects_log(int argc, char **argv, struct command 
 	NVME_ARGS(opts,
 		  OPT_FLAG("human-readable", 'H', &cfg.human_readable, human_readable_log));
 
-	err = parse_and_open(&dev, argc, argv, desc, opts);
+	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err)
 		return err;
 
@@ -2541,25 +2617,27 @@ static int get_mi_cmd_support_effects_log(int argc, char **argv, struct command 
 	if (!mi_cmd_support_log)
 		return -ENOMEM;
 
-	err = nvme_cli_get_log_mi_cmd_supported_effects(dev, false, mi_cmd_support_log);
+	err = nvme_get_log_mi_cmd_supported_effects(hdl, mi_cmd_support_log);
 	if (!err)
-		nvme_show_mi_cmd_support_effects_log(mi_cmd_support_log, dev->name, flags);
+		nvme_show_mi_cmd_support_effects_log(mi_cmd_support_log, nvme_transport_handle_get_name(hdl), flags);
 	else if (err > 0)
 		nvme_show_status(err);
 	else
-		nvme_show_error("mi command support effects log: %s", nvme_strerror(errno));
+		nvme_show_error("mi command support effects log: %s", nvme_strerror(err));
 
 	return err;
 }
 
-static int list_ctrl(int argc, char **argv, struct command *cmd, struct plugin *plugin)
+static int list_ctrl(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
 	const char *desc = "Show controller list information for the subsystem the "
 		"given device is part of, or optionally controllers attached to a specific namespace.";
 	const char *controller = "controller to display";
 
 	_cleanup_free_ struct nvme_ctrl_list *cntlist = NULL;
-	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
+	struct nvme_passthru_cmd cmd;
 	nvme_print_flags_t flags;
 	int err;
 
@@ -2577,12 +2655,12 @@ static int list_ctrl(int argc, char **argv, struct command *cmd, struct plugin *
 		  OPT_SHRT("cntid",        'c', &cfg.cntid,         controller),
 		  OPT_UINT("namespace-id", 'n', &cfg.namespace_id,  namespace_id_optional));
 
-	err = parse_and_open(&dev, argc, argv, desc, opts);
+	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err)
 		return err;
 
 	err = validate_output_format(nvme_cfg.output_format, &flags);
-	if (err < 0) {
+	if (err < 0 || (flags != JSON && flags != NORMAL)) {
 		nvme_show_error("Invalid output format");
 		return err;
 	}
@@ -2592,21 +2670,23 @@ static int list_ctrl(int argc, char **argv, struct command *cmd, struct plugin *
 		return -ENOMEM;
 
 	if (cfg.namespace_id == NVME_NSID_NONE)
-		err = nvme_cli_identify_ctrl_list(dev, cfg.cntid, cntlist);
+		nvme_init_identify_ctrl_list(&cmd, cfg.cntid, cntlist);
 	else
-		err = nvme_cli_identify_nsid_ctrl_list(dev, cfg.namespace_id,
-							cfg.cntid, cntlist);
+		nvme_init_identify_ns_ctrl_list(&cmd, cfg.namespace_id,
+						cfg.cntid, cntlist);
+
+	err = nvme_submit_admin_passthru(hdl, &cmd, NULL);
 	if (!err)
 		nvme_show_list_ctrl(cntlist, flags);
 	else if (err > 0)
 		nvme_show_status(err);
 	else
-		nvme_show_error("id controller list: %s", nvme_strerror(errno));
+		nvme_show_error("id controller list: %s", nvme_strerror(err));
 
 	return err;
 }
 
-static int list_ns(int argc, char **argv, struct command *cmd, struct plugin *plugin)
+static int list_ns(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
 	const char *desc = "For the specified controller handle, show the "
 		"namespace list in the associated NVMe subsystem, optionally starting with a given nsid.";
@@ -2615,7 +2695,9 @@ static int list_ns(int argc, char **argv, struct command *cmd, struct plugin *pl
 	const char *all = "show all namespaces in the subsystem, whether attached or inactive";
 
 	_cleanup_free_ struct nvme_ns_list *ns_list = NULL;
-	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
+	enum nvme_identify_cns cns;
 	nvme_print_flags_t flags;
 	int err;
 
@@ -2636,7 +2718,7 @@ static int list_ns(int argc, char **argv, struct command *cmd, struct plugin *pl
 		  OPT_INT("csi",           'y', &cfg.csi,           csi),
 		  OPT_FLAG("all",          'a', &cfg.all,           all));
 
-	err = parse_and_open(&dev, argc, argv, desc, opts);
+	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err)
 		return err;
 
@@ -2651,43 +2733,42 @@ static int list_ns(int argc, char **argv, struct command *cmd, struct plugin *pl
 		return -EINVAL;
 	}
 
+	if (argconfig_parse_seen(opts, "verbose"))
+		flags |= VERBOSE;
+
 	ns_list = nvme_alloc(sizeof(*ns_list));
 	if (!ns_list)
 		return -ENOMEM;
 
-	struct nvme_identify_args args = {
-		.args_size	= sizeof(args),
-		.timeout	= nvme_cfg.timeout,
-		.data		= ns_list,
-		.nsid		= cfg.namespace_id - 1.
-	};
 	if (cfg.csi < 0) {
-		args.cns = cfg.all ? NVME_IDENTIFY_CNS_ALLOCATED_NS_LIST :
+		cns = cfg.all ? NVME_IDENTIFY_CNS_ALLOCATED_NS_LIST :
 			NVME_IDENTIFY_CNS_NS_ACTIVE_LIST;
-	} else {
-		args.cns = cfg.all ? NVME_IDENTIFY_CNS_CSI_ALLOCATED_NS_LIST :
+		cfg.csi = 0;
+	} else 	{
+		cns = cfg.all ? NVME_IDENTIFY_CNS_CSI_ALLOCATED_NS_LIST :
 			NVME_IDENTIFY_CNS_CSI_NS_ACTIVE_LIST;
-		args.csi = cfg.csi;
 	}
 
-	err = nvme_cli_identify(dev, &args);
+	err = nvme_identify(hdl, cfg.namespace_id - 1, cfg.csi, cns, ns_list,
+			    sizeof(*ns_list));
 	if (!err)
 		nvme_show_list_ns(ns_list, flags);
 	else if (err > 0)
 		nvme_show_status(err);
 	else
-		nvme_show_error("id namespace list: %s", nvme_strerror(errno));
+		nvme_show_error("id namespace list: %s", nvme_strerror(err));
 
 	return err;
 }
 
-static int id_ns_lba_format(int argc, char **argv, struct command *cmd, struct plugin *plugin)
+static int id_ns_lba_format(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
 	const char *desc = "Send an Identify Namespace command to the given "
 		"device, returns capability field properties of the specified "
 		"LBA Format index in  various formats.";
 
-	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
 	_cleanup_free_ struct nvme_id_ns *ns = NULL;
 	nvme_print_flags_t flags;
 	int err = -1;
@@ -2706,7 +2787,7 @@ static int id_ns_lba_format(int argc, char **argv, struct command *cmd, struct p
 		  OPT_UINT("lba-format-index", 'i', &cfg.lba_format_index, lba_format_index),
 		  OPT_BYTE("uuid-index",       'U', &cfg.uuid_index,       uuid_index));
 
-	err = parse_and_open(&dev, argc, argv, desc, opts);
+	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err)
 		return err;
 
@@ -2723,9 +2804,9 @@ static int id_ns_lba_format(int argc, char **argv, struct command *cmd, struct p
 	if (!ns)
 		return -ENOMEM;
 
-	err = nvme_identify_ns_csi_user_data_format(dev_fd(dev),
+	err = nvme_identify_csi_ns_user_data_format(hdl, NVME_CSI_NVM,
 						    cfg.lba_format_index,
-						    cfg.uuid_index, NVME_CSI_NVM, ns);
+						    cfg.uuid_index, ns);
 	if (!err)
 		nvme_show_id_ns(ns, 0, cfg.lba_format_index, true, flags);
 	else if (err > 0)
@@ -2736,14 +2817,16 @@ static int id_ns_lba_format(int argc, char **argv, struct command *cmd, struct p
 	return err;
 }
 
-static int id_endurance_grp_list(int argc, char **argv, struct command *cmd,
+static int id_endurance_grp_list(int argc, char **argv, struct command *acmd,
 	struct plugin *plugin)
 {
 	const char *desc = "Show endurance group list information for the given endurance group id";
 	const char *endurance_grp_id = "Endurance Group ID";
 
 	_cleanup_free_ struct nvme_id_endurance_group_list *endgrp_list = NULL;
-	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
+	struct nvme_passthru_cmd cmd;
 	nvme_print_flags_t flags;
 	int err = -1;
 
@@ -2758,7 +2841,7 @@ static int id_endurance_grp_list(int argc, char **argv, struct command *cmd,
 	NVME_ARGS(opts,
 		  OPT_SHRT("endgrp-id",    'i', &cfg.endgrp_id,     endurance_grp_id));
 
-	err = parse_and_open(&dev, argc, argv, desc, opts);
+	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err)
 		return err;
 
@@ -2772,18 +2855,57 @@ static int id_endurance_grp_list(int argc, char **argv, struct command *cmd,
 	if (!endgrp_list)
 		return -ENOMEM;
 
-	err = nvme_identify_endurance_group_list(dev_fd(dev), cfg.endgrp_id, endgrp_list);
+	nvme_init_identify_endurance_group_id(&cmd, cfg.endgrp_id,
+					      endgrp_list);
+	err = nvme_submit_admin_passthru(hdl, &cmd, NULL);
 	if (!err)
 		nvme_show_endurance_group_list(endgrp_list, flags);
 	else if (err > 0)
 		nvme_show_status(err);
 	else
-		nvme_show_error("Id endurance group list: %s", nvme_strerror(errno));
+		nvme_show_error("Id endurance group list: %s", nvme_strerror(err));
 
 	return err;
 }
 
-static int delete_ns(int argc, char **argv, struct command *cmd, struct plugin *plugin)
+static bool is_ns_mgmt_support(struct nvme_transport_handle *hdl)
+{
+	int err;
+
+	_cleanup_free_ struct nvme_id_ctrl *ctrl = nvme_alloc(sizeof(*ctrl));
+
+	if (ctrl)
+		return false;
+
+	err = nvme_identify_ctrl(hdl, ctrl);
+	if (err)
+		return false;
+
+	return le16_to_cpu(ctrl->oacs) & NVME_CTRL_OACS_NS_MGMT;
+}
+
+static void ns_mgmt_show_status(struct nvme_transport_handle *hdl, int err, char *cmd, __u32 nsid)
+{
+	if (err < 0) {
+		nvme_show_error("%s: %s", cmd, nvme_strerror(err));
+		return;
+	}
+
+	nvme_show_init();
+
+	if (!err) {
+		nvme_show_key_value(cmd, "success");
+		nvme_show_key_value("nsid", "%d", nsid);
+	} else {
+		nvme_show_status(err);
+		if (!is_ns_mgmt_support(hdl))
+			nvme_show_error("NS management and attachment not supported");
+	}
+
+	nvme_show_finish();
+}
+
+static int delete_ns(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
 	const char *desc = "Delete the given namespace by "
 		"sending a namespace management command to "
@@ -2793,7 +2915,10 @@ static int delete_ns(int argc, char **argv, struct command *cmd, struct plugin *
 		"the namespace is not already inactive, once deleted.";
 	const char *namespace_id = "namespace to delete";
 
-	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
+	struct nvme_passthru_cmd cmd;
+	nvme_print_flags_t flags;
 	int err;
 
 	struct config {
@@ -2804,74 +2929,87 @@ static int delete_ns(int argc, char **argv, struct command *cmd, struct plugin *
 		.namespace_id	= 0,
 	};
 
-	nvme_cfg.timeout = 120000;
-
 	NVME_ARGS(opts,
 		  OPT_UINT("namespace-id", 'n', &cfg.namespace_id, namespace_id));
 
-	err = parse_and_open(&dev, argc, argv, desc, opts);
+	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err)
 		return err;
 
+	err = validate_output_format(nvme_cfg.output_format, &flags);
+	if (err < 0) {
+		nvme_show_error("Invalid output format");
+		return err;
+	}
+
 	if (!cfg.namespace_id) {
-		err = nvme_get_nsid(dev_fd(dev), &cfg.namespace_id);
+		err = nvme_get_nsid(hdl, &cfg.namespace_id);
 		if (err < 0) {
-			nvme_show_error("get-namespace-id: %s", nvme_strerror(errno));
+			nvme_show_error("get-namespace-id: %s", nvme_strerror(err));
 			return err;
 		}
 	}
 
-	err = nvme_cli_ns_mgmt_delete(dev, cfg.namespace_id, nvme_cfg.timeout);
-	if (!err)
-		printf("%s: Success, deleted nsid:%d\n", cmd->name, cfg.namespace_id);
-	else if (err > 0)
-		nvme_show_status(err);
-	else
-		nvme_show_error("delete namespace: %s", nvme_strerror(errno));
+	nvme_init_ns_mgmt_delete(&cmd, cfg.namespace_id);
+	err = nvme_submit_admin_passthru(hdl, &cmd, NULL);
+	ns_mgmt_show_status(hdl, err, acmd->name, cfg.namespace_id);
 
 	return err;
 }
 
-static int nvme_attach_ns(int argc, char **argv, int attach, const char *desc, struct command *cmd)
+static int nvme_attach_ns(int argc, char **argv, int attach, const char *desc, struct command *acmd)
 {
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
+
 	_cleanup_free_ struct nvme_ctrl_list *cntlist = NULL;
-	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
-	int err, num;
 	__u16 list[NVME_ID_CTRL_LIST_MAX];
+	struct nvme_passthru_cmd cmd;
+	nvme_print_flags_t flags;
+	int err, num;
 
 	const char *namespace_id = "namespace to attach";
 	const char *cont = "optional comma-sep controller id list";
 
 	struct config {
-		__u32	namespace_id;
+		__u32	nsid;
 		char	*cntlist;
 	};
 
 	struct config cfg = {
-		.namespace_id	= 0,
+		.nsid		= 0,
 		.cntlist	= "",
 	};
 
 	NVME_ARGS(opts,
-		  OPT_UINT("namespace-id", 'n', &cfg.namespace_id, namespace_id),
-		  OPT_LIST("controllers",  'c', &cfg.cntlist,      cont));
+		  OPT_UINT("namespace-id", 'n', &cfg.nsid,		namespace_id),
+		  OPT_LIST("controllers",  'c', &cfg.cntlist,	cont));
 
-	err = parse_and_open(&dev, argc, argv, desc, opts);
+	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err)
 		return err;
 
-	if (!cfg.namespace_id) {
-		nvme_show_error("%s: namespace-id parameter required", cmd->name);
+	err = validate_output_format(nvme_cfg.output_format, &flags);
+	if (err < 0) {
+		nvme_show_error("Invalid output format");
+		return err;
+	}
+
+	if (nvme_transport_handle_is_blkdev(hdl)) {
+		nvme_show_error("%s: a block device opened (dev: %s, nsid: %d)", acmd->name,
+				nvme_transport_handle_get_name(hdl), cfg.nsid);
+		return -EINVAL;
+	}
+
+	if (!cfg.nsid) {
+		nvme_show_error("%s: namespace-id parameter required", acmd->name);
 		return -EINVAL;
 	}
 
 	num = argconfig_parse_comma_sep_array_u16(cfg.cntlist,
 						  list, ARRAY_SIZE(list));
-	if (!num)
-		fprintf(stderr, "warning: empty controller-id list will result in no actual change in namespace attachment\n");
-
 	if (num == -1) {
-		nvme_show_error("%s: controller id list is malformed", cmd->name);
+		nvme_show_error("%s: controller id list is malformed", acmd->name);
 		return -EINVAL;
 	}
 
@@ -2879,26 +3017,32 @@ static int nvme_attach_ns(int argc, char **argv, int attach, const char *desc, s
 	if (!cntlist)
 		return -ENOMEM;
 
-	nvme_init_ctrl_list(cntlist, num, list);
+	if (argconfig_parse_seen(opts, "controllers")) {
+		nvme_init_ctrl_list(cntlist, num, list);
+	} else {
+		struct nvme_id_ctrl ctrl = { 0 };
+
+		err = nvme_identify_ctrl(hdl, &ctrl);
+		if (err) {
+			fprintf(stderr, "identify-ctrl %s\n", nvme_strerror(-err));
+			return err;
+		}
+		cntlist->num = cpu_to_le16(1);
+		cntlist->identifier[0] = ctrl.cntlid;
+	}
 
 	if (attach)
-		err = nvme_cli_ns_attach_ctrls(dev, cfg.namespace_id,
-					       cntlist);
+		nvme_init_ns_attach_ctrls(&cmd, cfg.nsid, cntlist);
 	else
-		err = nvme_cli_ns_detach_ctrls(dev, cfg.namespace_id,
-					       cntlist);
+		nvme_init_ns_detach_ctrls(&cmd, cfg.nsid, cntlist);
 
-	if (!err)
-		printf("%s: Success, nsid:%d\n", cmd->name, cfg.namespace_id);
-	else if (err > 0)
-		nvme_show_status(err);
-	else
-		nvme_show_perror(attach ? "attach namespace" : "detach namespace");
+	err = nvme_submit_admin_passthru(hdl, &cmd, NULL);
+	ns_mgmt_show_status(hdl, err, acmd->name, cfg.nsid);
 
 	return err;
 }
 
-static int attach_ns(int argc, char **argv, struct command *cmd, struct plugin *plugin)
+static int attach_ns(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
 	const char *desc = "Attach the given namespace to the "
 		"given controller or comma-sep list of controllers. ID of the "
@@ -2906,21 +3050,21 @@ static int attach_ns(int argc, char **argv, struct command *cmd, struct plugin *
 		"controller. A namespace must be attached to a controller "
 		"before IO commands may be directed to that namespace.";
 
-	return nvme_attach_ns(argc, argv, 1, desc, cmd);
+	return nvme_attach_ns(argc, argv, 1, desc, acmd);
 }
 
-static int detach_ns(int argc, char **argv, struct command *cmd, struct plugin *plugin)
+static int detach_ns(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
 	const char *desc = "Detach the given namespace from the "
 		"given controller; de-activates the given namespace's ID. A "
 		"namespace must be attached to a controller before IO "
 		"commands may be directed to that namespace.";
 
-	return nvme_attach_ns(argc, argv, 0, desc, cmd);
+	return nvme_attach_ns(argc, argv, 0, desc, acmd);
 }
 
-static int parse_lba_num_si(struct nvme_dev *dev, const char *opt,
-			    const char *val, __u8 flbas, __u64 *num, __u32 align)
+static int parse_lba_num_si(struct nvme_transport_handle *hdl, const char *opt,
+			    const char *val, __u8 flbas, __u64 *num, __u64 align)
 {
 	_cleanup_free_ struct nvme_ns_list *ns_list = NULL;
 	_cleanup_free_ struct nvme_id_ctrl *ctrl = NULL;
@@ -2931,13 +3075,6 @@ static int parse_lba_num_si(struct nvme_dev *dev, const char *opt,
 	char *endptr;
 	int err = -EINVAL;
 	int lbas;
-
-	struct nvme_identify_args args = {
-		.args_size	= sizeof(args),
-		.timeout	= nvme_cfg.timeout,
-		.cns		= NVME_IDENTIFY_CNS_NS_ACTIVE_LIST,
-		.nsid		= nsid - 1.
-	};
 
 	if (!val)
 		return 0;
@@ -2953,10 +3090,10 @@ static int parse_lba_num_si(struct nvme_dev *dev, const char *opt,
 	if (!ctrl)
 		return -ENOMEM;
 
-	err = nvme_cli_identify_ctrl(dev, ctrl);
+	err = nvme_identify_ctrl(hdl, ctrl);
 	if (err) {
 		if (err < 0)
-			nvme_show_error("identify controller: %s", nvme_strerror(errno));
+			nvme_show_error("identify controller: %s", nvme_strerror(err));
 		else
 			nvme_show_status(err);
 		return err;
@@ -2965,16 +3102,15 @@ static int parse_lba_num_si(struct nvme_dev *dev, const char *opt,
 	ns_list = nvme_alloc(sizeof(*ns_list));
 	if (!ns_list)
 		return -ENOMEM;
-	args.data = ns_list;
 
-	if ((ctrl->oacs & 0x8) >> 3)
+	if ((ctrl->oacs & 0x8) >> 3) {
 		nsid = NVME_NSID_ALL;
-	else {
-		err = nvme_cli_identify(dev, &args);
+	} else {
+		err = nvme_identify_active_ns_list(hdl, nsid - 1, ns_list);
 		if (err) {
 			if (err < 0)
 				nvme_show_error("identify namespace list: %s",
-						nvme_strerror(errno));
+						nvme_strerror(err));
 			else
 				nvme_show_status(err);
 			return err;
@@ -2986,10 +3122,10 @@ static int parse_lba_num_si(struct nvme_dev *dev, const char *opt,
 	if (!ns)
 		return -ENOMEM;
 
-	err = nvme_cli_identify_ns(dev, nsid, ns);
+	err = nvme_identify_ns(hdl, nsid, ns);
 	if (err) {
 		if (err < 0)
-			nvme_show_error("identify namespace: %s", nvme_strerror(errno));
+			nvme_show_error("identify namespace: %s", nvme_strerror(err));
 		else
 			nvme_show_status(err);
 		return err;
@@ -2998,10 +3134,11 @@ static int parse_lba_num_si(struct nvme_dev *dev, const char *opt,
 	nvme_id_ns_flbas_to_lbaf_inuse(flbas, &lbaf);
 	lbas = (1 << ns->lbaf[lbaf].ds) + le16_to_cpu(ns->lbaf[lbaf].ms);
 
-	if (suffix_si_parse(val, &endptr, (uint64_t *)num)) {
+	err = suffix_si_parse(val, &endptr, (uint64_t *)num);
+	if (err) {
 		nvme_show_error("Expected long suffixed integer argument for '%s-si' but got '%s'!",
 				opt, val);
-		return -errno;
+		return -err;
 	}
 
 	if (endptr[0]) {
@@ -3016,7 +3153,7 @@ static int parse_lba_num_si(struct nvme_dev *dev, const char *opt,
 	return 0;
 }
 
-static int create_ns(int argc, char **argv, struct command *cmd, struct plugin *plugin)
+static int create_ns(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
 	const char *desc = "Send a namespace management command "
 		"to the specified device to create a namespace with the given "
@@ -3031,7 +3168,6 @@ static int create_ns(int argc, char **argv, struct command *cmd, struct plugin *
 	const char *nmic = "multipath and sharing capabilities (NMIC)";
 	const char *anagrpid = "ANA Group Identifier (ANAGRPID)";
 	const char *nvmsetid = "NVM Set Identifier (NVMSETID)";
-	const char *endgid = "Endurance Group Identifier (ENDGID)";
 	const char *csi = "command set identifier (CSI)";
 	const char *lbstm = "logical block storage tag mask (LBSTM)";
 	const char *nphndls = "Number of Placement Handles (NPHNDLS)";
@@ -3045,17 +3181,20 @@ static int create_ns(int argc, char **argv, struct command *cmd, struct plugin *
 	    "Requested Number of ZRWA Resources (RNUMZRWA) for Zoned Namespace Command Set";
 	const char *phndls = "Comma separated list of Placement Handle Associated RUH";
 
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
 	_cleanup_free_ struct nvme_ns_mgmt_host_sw_specified *data = NULL;
+	_cleanup_free_ struct nvme_id_ns_granularity_list *gr_list = NULL;
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
+	_cleanup_free_ struct nvme_id_ctrl *id = NULL;
 	_cleanup_free_ struct nvme_id_ns *ns = NULL;
-	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
+	__u64 align_nsze = 1 << 20; /* Default 1 MiB */
+	__u64 align_ncap = align_nsze;
+	struct nvme_passthru_cmd cmd;
+	uint16_t phndl[128] = { 0, };
+	nvme_print_flags_t flags;
+	uint16_t num_phandle;
 	int err = 0, i;
 	__u32 nsid;
-	uint16_t num_phandle;
-	uint16_t phndl[128] = { 0, };
-	_cleanup_free_ struct nvme_id_ctrl *id = NULL;
-	_cleanup_free_ struct nvme_id_ns_granularity_list *gr_list = NULL;
-	__u32 align_nsze = 1 << 20; /* Default 1 MiB */
-	__u32 align_ncap = align_nsze;
 
 	struct config {
 		__u64	nsze;
@@ -3101,8 +3240,6 @@ static int create_ns(int argc, char **argv, struct command *cmd, struct plugin *
 		.phndls		= "",
 	};
 
-	nvme_cfg.timeout = 120000;
-
 	NVME_ARGS(opts,
 		  OPT_SUFFIX("nsze",       's', &cfg.nsze,     nsze),
 		  OPT_SUFFIX("ncap",       'c', &cfg.ncap,     ncap),
@@ -3110,8 +3247,8 @@ static int create_ns(int argc, char **argv, struct command *cmd, struct plugin *
 		  OPT_BYTE("dps",          'd', &cfg.dps,      dps),
 		  OPT_BYTE("nmic",         'm', &cfg.nmic,     nmic),
 		  OPT_UINT("anagrp-id",    'a', &cfg.anagrpid, anagrpid),
-		  OPT_UINT("nvmset-id",    'i', &cfg.nvmsetid, nvmsetid),
-		  OPT_UINT("endg-id",      'e', &cfg.endgid,   endgid),
+		  OPT_SHRT("nvmset-id",    'i', &cfg.nvmsetid, nvmsetid),
+		  OPT_SHRT("endg-id",      'e', &cfg.endgid,   endgid),
 		  OPT_SUFFIX("block-size", 'b', &cfg.bs,       bs),
 		  OPT_BYTE("csi",          'y', &cfg.csi,      csi),
 		  OPT_SUFFIX("lbstm",      'l', &cfg.lbstm,    lbstm),
@@ -3124,9 +3261,15 @@ static int create_ns(int argc, char **argv, struct command *cmd, struct plugin *
 		  OPT_UINT("rnumzrwa",     'u', &cfg.rnumzrwa, rnumzrwa),
 		  OPT_LIST("phndls",       'p', &cfg.phndls,   phndls));
 
-	err = parse_and_open(&dev, argc, argv, desc, opts);
+	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err)
 		return err;
+
+	err = validate_output_format(nvme_cfg.output_format, &flags);
+	if (err < 0) {
+		nvme_show_error("Invalid output format");
+		return err;
+	}
 
 	if (cfg.flbas != 0xff && cfg.bs != 0x00) {
 		nvme_show_error(
@@ -3146,10 +3289,10 @@ static int create_ns(int argc, char **argv, struct command *cmd, struct plugin *
 		if (!ns)
 			return -ENOMEM;
 
-		err = nvme_cli_identify_ns(dev, NVME_NSID_ALL, ns);
+		err = nvme_identify_ns(hdl, NVME_NSID_ALL, ns);
 		if (err) {
 			if (err < 0) {
-				nvme_show_error("identify-namespace: %s", nvme_strerror(errno));
+				nvme_show_error("identify-namespace: %s", nvme_strerror(err));
 			} else {
 				fprintf(stderr, "identify failed\n");
 				nvme_show_status(err);
@@ -3176,10 +3319,10 @@ static int create_ns(int argc, char **argv, struct command *cmd, struct plugin *
 	if (!id)
 		return -ENOMEM;
 
-	err = nvme_identify_ctrl(dev_fd(dev), id);
+	err = nvme_identify_ctrl(hdl, id);
 	if (err) {
 		if (err < 0) {
-			nvme_show_error("identify-controller: %s", nvme_strerror(errno));
+			nvme_show_error("identify-controller: %s", nvme_strerror(err));
 		} else {
 			fprintf(stderr, "identify controller failed\n");
 			nvme_show_status(err);
@@ -3192,12 +3335,12 @@ static int create_ns(int argc, char **argv, struct command *cmd, struct plugin *
 		if (!gr_list)
 			return -ENOMEM;
 
-		if (!nvme_identify_ns_granularity(dev_fd(dev), gr_list)) {
+		if (!nvme_identify_ns_granularity(hdl, gr_list)) {
 			struct nvme_id_ns_granularity_desc *desc;
 			int index = cfg.flbas;
 
 			/* FIXME: add a proper bitmask to libnvme */
-			if (!(gr_list->attributes & 1)) {
+			if (!(le32_to_cpu(gr_list->attributes) & 1)) {
 				/* Only the first descriptor is valid */
 				index = 0;
 			} else if (index > gr_list->num_descriptors) {
@@ -3209,19 +3352,27 @@ static int create_ns(int argc, char **argv, struct command *cmd, struct plugin *
 			}
 			desc = &gr_list->entry[index];
 
-			if (desc->nszegran && desc->nszegran < align_nsze)
-				align_nsze = desc->nszegran;
-			if (desc->ncapgran && desc->ncapgran < align_ncap)
-				align_ncap = desc->ncapgran;
+			if (desc->nszegran) {
+				print_info("enforce nsze alignment to %"PRIx64
+					   " because of namespace granularity requirements\n",
+					   le64_to_cpu(desc->nszegran));
+				align_nsze = le64_to_cpu(desc->nszegran);
+			}
+			if (desc->ncapgran) {
+				print_info("enforce ncap alignment to %"PRIx64
+					   " because of namespace granularity requirements\n",
+					   le64_to_cpu(desc->ncapgran));
+				align_ncap = le64_to_cpu(desc->ncapgran);
+			}
 		}
 	}
 
 parse_lba:
-	err = parse_lba_num_si(dev, "nsze", cfg.nsze_si, cfg.flbas, &cfg.nsze, align_nsze);
+	err = parse_lba_num_si(hdl, "nsze", cfg.nsze_si, cfg.flbas, &cfg.nsze, align_nsze);
 	if (err)
 		return err;
 
-	err = parse_lba_num_si(dev, "ncap", cfg.ncap_si, cfg.flbas, &cfg.ncap, align_ncap);
+	err = parse_lba_num_si(hdl, "ncap", cfg.ncap_si, cfg.flbas, &cfg.ncap, align_ncap);
 	if (err)
 		return err;
 
@@ -3258,13 +3409,9 @@ parse_lba:
 	for (i = 0; i < num_phandle; i++)
 		data->phndl[i] = cpu_to_le16(phndl[i]);
 
-	err = nvme_cli_ns_mgmt_create(dev, data, &nsid, nvme_cfg.timeout, cfg.csi);
-	if (!err)
-		printf("%s: Success, created nsid:%d\n", cmd->name, nsid);
-	else if (err > 0)
-		nvme_show_status(err);
-	else
-		nvme_show_error("create namespace: %s", nvme_strerror(errno));
+	nvme_init_ns_mgmt_create(&cmd, cfg.csi, data);
+	err = nvme_submit_admin_passthru(hdl, &cmd, &nsid);
+	ns_mgmt_show_status(hdl, err, acmd->name, nsid);
 
 	return err;
 }
@@ -3272,42 +3419,33 @@ parse_lba:
 static bool nvme_match_device_filter(nvme_subsystem_t s,
 		nvme_ctrl_t c, nvme_ns_t ns, void *f_args)
 {
-	int ret, instance, nsid, s_num;
 	char *devname = f_args;
+	nvme_ns_t n;
 
-	if (!devname || !strlen(devname))
+	if (ns && !strcmp(devname, nvme_ns_get_name(ns)))
 		return true;
 
-	ret = sscanf(devname, "nvme%dn%d", &instance, &nsid);
-	if (ret != 2)
-		return true;
-
-	if (s) {
-		ret = sscanf(nvme_subsystem_get_name(s), "nvme-subsys%d",
-			     &s_num);
-		if (ret == 1 && s_num == instance)
-			return true;
-	}
 	if (c) {
 		s = nvme_ctrl_get_subsystem(c);
-
-		ret = sscanf(nvme_subsystem_get_name(s), "nvme-subsys%d",
-			     &s_num);
-		if (ret == 1 && s_num == instance)
-			return true;
+		nvme_ctrl_for_each_ns(c, n) {
+			if (!strcmp(devname, nvme_ns_get_name(n)))
+				return true;
+		}
 	}
-	if (ns) {
-		if (!strcmp(devname, nvme_ns_get_name(ns)))
-			return true;
+	if (s) {
+		nvme_subsystem_for_each_ns(s, n) {
+			if (!strcmp(devname, nvme_ns_get_name(n)))
+				return true;
+		}
 	}
 
 	return false;
 }
 
-static int list_subsys(int argc, char **argv, struct command *cmd,
+static int list_subsys(int argc, char **argv, struct command *acmd,
 		struct plugin *plugin)
 {
-	_cleanup_nvme_root_ nvme_root_t r = NULL;
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
 	nvme_print_flags_t flags;
 	const char *desc = "Retrieve information for subsystems";
 	nvme_scan_filter_t filter = NULL;
@@ -3334,14 +3472,13 @@ static int list_subsys(int argc, char **argv, struct command *cmd,
 	if (argconfig_parse_seen(opts, "verbose"))
 		flags |= VERBOSE;
 
-
-	r = nvme_create_root(stderr, log_level);
-	if (!r) {
+	ctx = nvme_create_global_ctx(stdout, log_level);
+	if (!ctx) {
 		if (devname)
 			nvme_show_error("Failed to scan nvme subsystem for %s", devname);
 		else
 			nvme_show_error("Failed to scan nvme subsystem");
-		return -errno;
+		return -ENOMEM;
 	}
 
 	if (devname) {
@@ -3354,22 +3491,22 @@ static int list_subsys(int argc, char **argv, struct command *cmd,
 		filter = nvme_match_device_filter;
 	}
 
-	err = nvme_scan_topology(r, filter, (void *)devname);
+	err = nvme_scan_topology(ctx, filter, (void *)devname);
 	if (err) {
-		nvme_show_error("Failed to scan topology: %s", nvme_strerror(errno));
+		nvme_show_error("Failed to scan topology: %s", nvme_strerror(err));
 		return -errno;
 	}
 
-	nvme_show_subsystem_list(r, nsid != NVME_NSID_ALL, flags);
+	nvme_show_subsystem_list(ctx, nsid != NVME_NSID_ALL, flags);
 
 	return 0;
 }
 
-static int list(int argc, char **argv, struct command *cmd, struct plugin *plugin)
+static int list(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
 	const char *desc = "Retrieve basic information for all NVMe namespaces";
 	nvme_print_flags_t flags;
-	_cleanup_nvme_root_ nvme_root_t r = NULL;
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
 	int err = 0;
 
 	NVME_ARGS(opts);
@@ -3387,23 +3524,23 @@ static int list(int argc, char **argv, struct command *cmd, struct plugin *plugi
 	if (argconfig_parse_seen(opts, "verbose"))
 		flags |= VERBOSE;
 
-	r = nvme_create_root(stderr, log_level);
-	if (!r) {
-		nvme_show_error("Failed to create topology root: %s", nvme_strerror(errno));
-		return -errno;
+	ctx = nvme_create_global_ctx(stdout, log_level);
+	if (!ctx) {
+		nvme_show_error("Failed to create global context");
+		return -ENOMEM;
 	}
-	err = nvme_scan_topology(r, NULL, NULL);
+	err = nvme_scan_topology(ctx, NULL, NULL);
 	if (err < 0) {
-		nvme_show_error("Failed to scan topology: %s", nvme_strerror(errno));
+		nvme_show_error("Failed to scan topology: %s", nvme_strerror(err));
 		return err;
 	}
 
-	nvme_show_list_items(r, flags);
+	nvme_show_list_items(ctx, flags);
 
 	return err;
 }
 
-int __id_ctrl(int argc, char **argv, struct command *cmd, struct plugin *plugin,
+int __id_ctrl(int argc, char **argv, struct command *acmd, struct plugin *plugin,
 		void (*vs)(__u8 *vs, struct json_object *root))
 {
 	const char *desc = "Send an Identify Controller command to "
@@ -3414,7 +3551,8 @@ int __id_ctrl(int argc, char **argv, struct command *cmd, struct plugin *plugin,
 	const char *vendor_specific = "dump binary vendor field";
 
 	_cleanup_free_ struct nvme_id_ctrl *ctrl = NULL;
-	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
 	nvme_print_flags_t flags;
 	int err;
 
@@ -3435,7 +3573,7 @@ int __id_ctrl(int argc, char **argv, struct command *cmd, struct plugin *plugin,
 		  OPT_FLAG("raw-binary",      'b', &cfg.raw_binary,      raw_identify),
 		  OPT_FLAG("human-readable",  'H', &cfg.human_readable,  human_readable_identify));
 
-	err = parse_and_open(&dev, argc, argv, desc, opts);
+	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err)
 		return err;
 
@@ -3458,23 +3596,23 @@ int __id_ctrl(int argc, char **argv, struct command *cmd, struct plugin *plugin,
 	if (!ctrl)
 		return -ENOMEM;
 
-	err = nvme_cli_identify_ctrl(dev, ctrl);
+	err = nvme_identify_ctrl(hdl, ctrl);
 	if (!err)
 		nvme_show_id_ctrl(ctrl, flags, vs);
 	else if (err > 0)
 		nvme_show_status(err);
 	else
-		nvme_show_error("identify controller: %s", nvme_strerror(errno));
+		nvme_show_error("identify controller: %s", nvme_strerror(err));
 
 	return err;
 }
 
-static int id_ctrl(int argc, char **argv, struct command *cmd, struct plugin *plugin)
+static int id_ctrl(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
-	return __id_ctrl(argc, argv, cmd, plugin, NULL);
+	return __id_ctrl(argc, argv, acmd, plugin, NULL);
 }
 
-static int nvm_id_ctrl(int argc, char **argv, struct command *cmd,
+static int nvm_id_ctrl(int argc, char **argv, struct command *acmd,
 	struct plugin *plugin)
 {
 	const char *desc = "Send an Identify Controller NVM Command Set "
@@ -3482,13 +3620,15 @@ static int nvm_id_ctrl(int argc, char **argv, struct command *cmd,
 		"the specified controller in various formats.";
 
 	_cleanup_free_ struct nvme_id_ctrl_nvm *ctrl_nvm = NULL;
-	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
+	struct nvme_passthru_cmd cmd;
 	nvme_print_flags_t flags;
 	int err = -1;
 
 	NVME_ARGS(opts);
 
-	err = parse_and_open(&dev, argc, argv, desc, opts);
+	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err)
 		return err;
 
@@ -3505,18 +3645,19 @@ static int nvm_id_ctrl(int argc, char **argv, struct command *cmd,
 	if (!ctrl_nvm)
 		return -ENOMEM;
 
-	err = nvme_nvm_identify_ctrl(dev_fd(dev), ctrl_nvm);
+	nvme_init_identify_csi_ctrl(&cmd, NVME_CSI_NVM, ctrl_nvm);
+	err = nvme_submit_admin_passthru(hdl, &cmd, NULL);
 	if (!err)
 		nvme_show_id_ctrl_nvm(ctrl_nvm, flags);
 	else if (err > 0)
 		nvme_show_status(err);
 	else
-		nvme_show_error("nvm identify controller: %s", nvme_strerror(errno));
+		nvme_show_error("nvm identify controller: %s", nvme_strerror(err));
 
 	return err;
 }
 
-static int nvm_id_ns(int argc, char **argv, struct command *cmd,
+static int nvm_id_ns(int argc, char **argv, struct command *acmd,
 	struct plugin *plugin)
 {
 	const char *desc = "Send an Identify Namespace NVM Command Set "
@@ -3525,7 +3666,8 @@ static int nvm_id_ns(int argc, char **argv, struct command *cmd,
 
 	_cleanup_free_ struct nvme_nvm_id_ns *id_ns = NULL;
 	_cleanup_free_ struct nvme_id_ns *ns = NULL;
-	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
 	nvme_print_flags_t flags;
 	int err = -1;
 
@@ -3543,7 +3685,7 @@ static int nvm_id_ns(int argc, char **argv, struct command *cmd,
 		  OPT_UINT("namespace-id", 'n', &cfg.namespace_id,    namespace_id_desired),
 		  OPT_BYTE("uuid-index",   'U', &cfg.uuid_index,      uuid_index));
 
-	err = parse_and_open(&dev, argc, argv, desc, opts);
+	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err)
 		return err;
 
@@ -3557,7 +3699,7 @@ static int nvm_id_ns(int argc, char **argv, struct command *cmd,
 		flags |= VERBOSE;
 
 	if (!cfg.namespace_id) {
-		err = nvme_get_nsid(dev_fd(dev), &cfg.namespace_id);
+		err = nvme_get_nsid(hdl, &cfg.namespace_id);
 		if (err < 0) {
 			nvme_show_perror("get-namespace-id");
 			return err;
@@ -3568,7 +3710,7 @@ static int nvm_id_ns(int argc, char **argv, struct command *cmd,
 	if (!ns)
 		return -ENOMEM;
 
-	err = nvme_cli_identify_ns(dev, cfg.namespace_id, ns);
+	err = nvme_identify_ns(hdl, cfg.namespace_id, ns);
 	if (err) {
 		nvme_show_status(err);
 		return err;
@@ -3578,9 +3720,8 @@ static int nvm_id_ns(int argc, char **argv, struct command *cmd,
 	if (!id_ns)
 		return -ENOMEM;
 
-	err = nvme_identify_ns_csi(dev_fd(dev), cfg.namespace_id,
-				   cfg.uuid_index,
-				   NVME_CSI_NVM, id_ns);
+	err = nvme_identify_csi_ns(hdl, cfg.namespace_id, NVME_CSI_NVM,
+				   cfg.uuid_index, id_ns);
 	if (!err)
 		nvme_show_nvm_id_ns(id_ns, cfg.namespace_id, ns, 0, false, flags);
 	else if (err > 0)
@@ -3591,7 +3732,7 @@ static int nvm_id_ns(int argc, char **argv, struct command *cmd,
 	return err;
 }
 
-static int nvm_id_ns_lba_format(int argc, char **argv, struct command *cmd, struct plugin *plugin)
+static int nvm_id_ns_lba_format(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
 	const char *desc = "Send an NVM Command Set specific Identify Namespace "
 		"command to the given device, returns capability field properties of "
@@ -3599,7 +3740,8 @@ static int nvm_id_ns_lba_format(int argc, char **argv, struct command *cmd, stru
 
 	_cleanup_free_ struct nvme_nvm_id_ns *nvm_ns = NULL;
 	_cleanup_free_ struct nvme_id_ns *ns = NULL;
-	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
 	nvme_print_flags_t flags;
 	int err = -1;
 
@@ -3617,7 +3759,7 @@ static int nvm_id_ns_lba_format(int argc, char **argv, struct command *cmd, stru
 		  OPT_UINT("lba-format-index", 'i', &cfg.lba_format_index, lba_format_index),
 		  OPT_BYTE("uuid-index",       'U', &cfg.uuid_index,       uuid_index));
 
-	err = parse_and_open(&dev, argc, argv, desc, opts);
+	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err)
 		return err;
 
@@ -3634,7 +3776,7 @@ static int nvm_id_ns_lba_format(int argc, char **argv, struct command *cmd, stru
 	if (!ns)
 		return -ENOMEM;
 
-	err = nvme_cli_identify_ns(dev, NVME_NSID_ALL, ns);
+	err = nvme_identify_ns(hdl, NVME_NSID_ALL, ns);
 	if (err) {
 		ns->nlbaf = NVME_FEAT_LBA_RANGE_MAX - 1;
 		ns->nulbaf = 0;
@@ -3644,8 +3786,9 @@ static int nvm_id_ns_lba_format(int argc, char **argv, struct command *cmd, stru
 	if (!nvm_ns)
 		return -ENOMEM;
 
-	err = nvme_identify_iocs_ns_csi_user_data_format(dev_fd(dev), cfg.lba_format_index,
-							 cfg.uuid_index, NVME_CSI_NVM, nvm_ns);
+	err = nvme_identify_csi_ns_user_data_format(hdl, NVME_CSI_NVM,
+						    cfg.lba_format_index,
+						    cfg.uuid_index, nvm_ns);
 	if (!err)
 		nvme_show_nvm_id_ns(nvm_ns, 0, ns, cfg.lba_format_index, true, flags);
 	else if (err > 0)
@@ -3656,14 +3799,15 @@ static int nvm_id_ns_lba_format(int argc, char **argv, struct command *cmd, stru
 	return err;
 }
 
-static int ns_descs(int argc, char **argv, struct command *cmd, struct plugin *plugin)
+static int ns_descs(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
 	const char *desc = "Send Namespace Identification Descriptors command to the "
 		"given device, returns the namespace identification descriptors "
 		"of the specific namespace in either human-readable or binary format.";
 	const char *raw = "show descriptors in binary format";
 
-	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
 	_cleanup_free_ void *nsdescs = NULL;
 	nvme_print_flags_t flags;
 	int err;
@@ -3682,7 +3826,7 @@ static int ns_descs(int argc, char **argv, struct command *cmd, struct plugin *p
 		  OPT_UINT("namespace-id",  'n', &cfg.namespace_id,  namespace_id_desired),
 		  OPT_FLAG("raw-binary",    'b', &cfg.raw_binary,    raw));
 
-	err = parse_and_open(&dev, argc, argv, desc, opts);
+	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err)
 		return err;
 
@@ -3699,9 +3843,9 @@ static int ns_descs(int argc, char **argv, struct command *cmd, struct plugin *p
 		flags |= VERBOSE;
 
 	if (!cfg.namespace_id) {
-		err = nvme_get_nsid(dev_fd(dev), &cfg.namespace_id);
+		err = nvme_get_nsid(hdl, &cfg.namespace_id);
 		if (err < 0) {
-			nvme_show_error("get-namespace-id: %s", nvme_strerror(errno));
+			nvme_show_error("get-namespace-id: %s", nvme_strerror(err));
 			return err;
 		}
 	}
@@ -3710,18 +3854,18 @@ static int ns_descs(int argc, char **argv, struct command *cmd, struct plugin *p
 	if (!nsdescs)
 		return -ENOMEM;
 
-	err = nvme_cli_identify_ns_descs(dev, cfg.namespace_id, nsdescs);
+	err = nvme_identify_ns_descs_list(hdl, cfg.namespace_id, nsdescs);
 	if (!err)
 		nvme_show_id_ns_descs(nsdescs, cfg.namespace_id, flags);
 	else if (err > 0)
 		nvme_show_status(err);
 	else
-		nvme_show_error("identify namespace: %s", nvme_strerror(errno));
+		nvme_show_error("identify namespace: %s", nvme_strerror(err));
 
 	return err;
 }
 
-static int id_ns(int argc, char **argv, struct command *cmd, struct plugin *plugin)
+static int id_ns(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
 	const char *desc = "Send an Identify Namespace command to the "
 		"given device, returns properties of the specified namespace "
@@ -3730,8 +3874,10 @@ static int id_ns(int argc, char **argv, struct command *cmd, struct plugin *plug
 	const char *force = "Return this namespace, even if not attached (1.2 devices only)";
 	const char *vendor_specific = "dump binary vendor fields";
 
-	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
 	_cleanup_free_ struct nvme_id_ns *ns = NULL;
+	struct nvme_passthru_cmd cmd;
 	nvme_print_flags_t flags;
 	int err;
 
@@ -3758,7 +3904,7 @@ static int id_ns(int argc, char **argv, struct command *cmd, struct plugin *plug
 		  OPT_FLAG("raw-binary",      'b', &cfg.raw_binary,      raw_identify),
 		  OPT_FLAG("human-readable",  'H', &cfg.human_readable,  human_readable_identify));
 
-	err = parse_and_open(&dev, argc, argv, desc, opts);
+	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err)
 		return err;
 
@@ -3778,9 +3924,9 @@ static int id_ns(int argc, char **argv, struct command *cmd, struct plugin *plug
 		flags |= VERBOSE;
 
 	if (!cfg.namespace_id) {
-		err = nvme_get_nsid(dev_fd(dev), &cfg.namespace_id);
+		err = nvme_get_nsid(hdl, &cfg.namespace_id);
 		if (err < 0) {
-			nvme_show_error("get-namespace-id: %s", nvme_strerror(errno));
+			nvme_show_error("get-namespace-id: %s", nvme_strerror(err));
 			return err;
 		}
 	}
@@ -3789,22 +3935,24 @@ static int id_ns(int argc, char **argv, struct command *cmd, struct plugin *plug
 	if (!ns)
 		return -ENOMEM;
 
-	if (cfg.force)
-		err = nvme_cli_identify_allocated_ns(dev, cfg.namespace_id, ns);
-	else
-		err = nvme_cli_identify_ns(dev, cfg.namespace_id, ns);
+	if (cfg.force) {
+		nvme_init_identify_allocated_ns(&cmd, cfg.namespace_id, ns);
+		err = nvme_submit_admin_passthru(hdl, &cmd, NULL);
+	} else {
+		err = nvme_identify_ns(hdl, cfg.namespace_id, ns);
+	}
 
 	if (!err)
 		nvme_show_id_ns(ns, cfg.namespace_id, 0, false, flags);
 	else if (err > 0)
 		nvme_show_status(err);
 	else
-		nvme_show_error("identify namespace: %s", nvme_strerror(errno));
+		nvme_show_error("identify namespace: %s", nvme_strerror(err));
 
 	return err;
 }
 
-static int cmd_set_independent_id_ns(int argc, char **argv, struct command *cmd,
+static int cmd_set_independent_id_ns(int argc, char **argv, struct command *acmd,
 				     struct plugin *plugin)
 {
 	const char *desc = "Send an I/O Command Set Independent Identify "
@@ -3812,7 +3960,9 @@ static int cmd_set_independent_id_ns(int argc, char **argv, struct command *cmd,
 		"specified namespace in human-readable or binary or json format.";
 
 	_cleanup_free_ struct nvme_id_independent_id_ns *ns = NULL;
-	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
+	struct nvme_passthru_cmd cmd;
 	nvme_print_flags_t flags;
 	int err = -1;
 
@@ -3833,7 +3983,7 @@ static int cmd_set_independent_id_ns(int argc, char **argv, struct command *cmd,
 		  OPT_FLAG("raw-binary",      'b', &cfg.raw_binary,      raw_identify),
 		  OPT_FLAG("human-readable",  'H', &cfg.human_readable,  human_readable_identify));
 
-	err = parse_and_open(&dev, argc, argv, desc, opts);
+	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err)
 		return err;
 
@@ -3850,7 +4000,7 @@ static int cmd_set_independent_id_ns(int argc, char **argv, struct command *cmd,
 		flags |= VERBOSE;
 
 	if (!cfg.namespace_id) {
-		err = cfg.namespace_id = nvme_get_nsid(dev_fd(dev), &cfg.namespace_id);
+		err = nvme_get_nsid(hdl, &cfg.namespace_id);
 		if (err < 0) {
 			nvme_show_perror("get-namespace-id");
 			return err;
@@ -3861,32 +4011,35 @@ static int cmd_set_independent_id_ns(int argc, char **argv, struct command *cmd,
 	if (!ns)
 		return -ENOMEM;
 
-	err = nvme_identify_independent_identify_ns(dev_fd(dev), cfg.namespace_id, ns);
+	nvme_init_identify_csi_independent_identify_id_ns(&cmd,
+							  cfg.namespace_id, ns);
+	err = nvme_submit_admin_passthru(hdl, &cmd, NULL);
 	if (!err)
 		nvme_show_cmd_set_independent_id_ns(ns, cfg.namespace_id, flags);
 	else if (err > 0)
 		nvme_show_status(err);
 	else
 		nvme_show_error("I/O command set independent identify namespace: %s",
-				nvme_strerror(errno));
+				nvme_strerror(err));
 
 	return err;
 }
 
-static int id_ns_granularity(int argc, char **argv, struct command *cmd, struct plugin *plugin)
+static int id_ns_granularity(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
 	const char *desc = "Send an Identify Namespace Granularity List command to the "
 		"given device, returns namespace granularity list "
 		"in either human-readable or binary format.";
 
 	_cleanup_free_ struct nvme_id_ns_granularity_list *granularity_list = NULL;
-	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
 	nvme_print_flags_t flags;
 	int err;
 
 	NVME_ARGS(opts);
 
-	err = parse_and_open(&dev, argc, argv, desc, opts);
+	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err)
 		return err;
 
@@ -3900,18 +4053,18 @@ static int id_ns_granularity(int argc, char **argv, struct command *cmd, struct 
 	if (!granularity_list)
 		return -ENOMEM;
 
-	err = nvme_identify_ns_granularity(dev_fd(dev), granularity_list);
+	err = nvme_identify_ns_granularity(hdl, granularity_list);
 	if (!err)
 		nvme_show_id_ns_granularity_list(granularity_list, flags);
 	else if (err > 0)
 		nvme_show_status(err);
 	else
-		nvme_show_error("identify namespace granularity: %s", nvme_strerror(errno));
+		nvme_show_error("identify namespace granularity: %s", nvme_strerror(err));
 
 	return err;
 }
 
-static int id_nvmset(int argc, char **argv, struct command *cmd, struct plugin *plugin)
+static int id_nvmset(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
 	const char *desc = "Send an Identify NVM Set List command to the "
 		"given device, returns entries for NVM Set identifiers greater "
@@ -3920,7 +4073,9 @@ static int id_nvmset(int argc, char **argv, struct command *cmd, struct plugin *
 	const char *nvmset_id = "NVM Set Identify value";
 
 	_cleanup_free_ struct nvme_id_nvmset_list *nvmset = NULL;
-	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
+	struct nvme_passthru_cmd cmd;
 	nvme_print_flags_t flags;
 	int err;
 
@@ -3935,7 +4090,7 @@ static int id_nvmset(int argc, char **argv, struct command *cmd, struct plugin *
 	NVME_ARGS(opts,
 		  OPT_SHRT("nvmset_id",    'i', &cfg.nvmset_id,     nvmset_id));
 
-	err = parse_and_open(&dev, argc, argv, desc, opts);
+	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err)
 		return err;
 
@@ -3949,18 +4104,20 @@ static int id_nvmset(int argc, char **argv, struct command *cmd, struct plugin *
 	if (!nvmset)
 		return -ENOMEM;
 
-	err = nvme_identify_nvmset_list(dev_fd(dev), cfg.nvmset_id, nvmset);
+	nvme_init_identify_nvmset_list(&cmd, NVME_NSID_NONE,
+				       cfg.nvmset_id, nvmset);
+	err = nvme_submit_admin_passthru(hdl, &cmd, NULL);
 	if (!err)
 		nvme_show_id_nvmset(nvmset, cfg.nvmset_id, flags);
 	else if (err > 0)
 		nvme_show_status(err);
 	else
-		nvme_show_error("identify nvm set list: %s", nvme_strerror(errno));
+		nvme_show_error("identify nvm set list: %s", nvme_strerror(err));
 
 	return err;
 }
 
-static int id_uuid(int argc, char **argv, struct command *cmd, struct plugin *plugin)
+static int id_uuid(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
 	const char *desc = "Send an Identify UUID List command to the "
 		"given device, returns list of supported Vendor Specific UUIDs "
@@ -3969,7 +4126,8 @@ static int id_uuid(int argc, char **argv, struct command *cmd, struct plugin *pl
 	const char *human_readable = "show uuid in readable format";
 
 	_cleanup_free_ struct nvme_id_uuid_list *uuid_list = NULL;
-	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
 	nvme_print_flags_t flags;
 	int err;
 
@@ -3987,7 +4145,7 @@ static int id_uuid(int argc, char **argv, struct command *cmd, struct plugin *pl
 		  OPT_FLAG("raw-binary",     'b', &cfg.raw_binary,     raw),
 		  OPT_FLAG("human-readable", 'H', &cfg.human_readable, human_readable));
 
-	err = parse_and_open(&dev, argc, argv, desc, opts);
+	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err)
 		return err;
 
@@ -4007,18 +4165,18 @@ static int id_uuid(int argc, char **argv, struct command *cmd, struct plugin *pl
 	if (!uuid_list)
 		return -ENOMEM;
 
-	err = nvme_identify_uuid(dev_fd(dev), uuid_list);
+	err = nvme_identify_uuid_list(hdl, uuid_list);
 	if (!err)
 		nvme_show_id_uuid_list(uuid_list, flags);
 	else if (err > 0)
 		nvme_show_status(err);
 	else
-		nvme_show_error("identify UUID list: %s", nvme_strerror(errno));
+		nvme_show_error("identify UUID list: %s", nvme_strerror(err));
 
 	return err;
 }
 
-static int id_iocs(int argc, char **argv, struct command *cmd, struct plugin *plugin)
+static int id_iocs(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
 	const char *desc = "Send an Identify Command Set Data command to "
 		"the given device, returns properties of the specified controller "
@@ -4026,7 +4184,10 @@ static int id_iocs(int argc, char **argv, struct command *cmd, struct plugin *pl
 	const char *controller_id = "identifier of desired controller";
 
 	_cleanup_free_ struct nvme_id_iocs *iocs = NULL;
-	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
+	struct nvme_passthru_cmd cmd;
+	nvme_print_flags_t flags;
 	int err;
 
 	struct config {
@@ -4040,28 +4201,38 @@ static int id_iocs(int argc, char **argv, struct command *cmd, struct plugin *pl
 	NVME_ARGS(opts,
 		  OPT_SHRT("controller-id", 'c', &cfg.cntid, controller_id));
 
-	err = parse_and_open(&dev, argc, argv, desc, opts);
+	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err)
 		return err;
+
+	err = validate_output_format(nvme_cfg.output_format, &flags);
+	if (err < 0) {
+		nvme_show_error("Invalid output format");
+		return err;
+	}
+
+	if (argconfig_parse_seen(opts, "verbose"))
+		flags |= VERBOSE;
 
 	iocs = nvme_alloc(sizeof(*iocs));
 	if (!iocs)
 		return -ENOMEM;
 
-	err = nvme_identify_iocs(dev_fd(dev), cfg.cntid, iocs);
+	nvme_init_identify_command_set_structure(&cmd, cfg.cntid, iocs);
+	err = nvme_submit_admin_passthru(hdl, &cmd, NULL);
 	if (!err) {
 		printf("NVMe Identify I/O Command Set:\n");
-		nvme_show_id_iocs(iocs, 0);
+		nvme_show_id_iocs(iocs, flags);
 	} else if (err > 0) {
 		nvme_show_status(err);
 	} else {
-		nvme_show_error("NVMe Identify I/O Command Set: %s", nvme_strerror(errno));
+		nvme_show_error("NVMe Identify I/O Command Set: %s", nvme_strerror(err));
 	}
 
 	return err;
 }
 
-static int id_domain(int argc, char **argv, struct command *cmd, struct plugin *plugin)
+static int id_domain(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
 	const char *desc = "Send an Identify Domain List command to the "
 		"given device, returns properties of the specified domain "
@@ -4069,7 +4240,9 @@ static int id_domain(int argc, char **argv, struct command *cmd, struct plugin *
 	const char *domain_id = "identifier of desired domain";
 
 	_cleanup_free_ struct nvme_id_domain_list *id_domain = NULL;
-	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
+	struct nvme_passthru_cmd cmd;
 	nvme_print_flags_t flags;
 	int err;
 
@@ -4084,7 +4257,7 @@ static int id_domain(int argc, char **argv, struct command *cmd, struct plugin *
 	NVME_ARGS(opts,
 		  OPT_SHRT("dom-id",         'd', &cfg.dom_id,         domain_id));
 
-	err = parse_and_open(&dev, argc, argv, desc, opts);
+	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err)
 		return err;
 
@@ -4098,7 +4271,8 @@ static int id_domain(int argc, char **argv, struct command *cmd, struct plugin *
 	if (!id_domain)
 		return -ENOMEM;
 
-	err = nvme_identify_domain_list(dev_fd(dev), cfg.dom_id, id_domain);
+	nvme_init_identify_domain_list(&cmd, cfg.dom_id, id_domain);
+	err = nvme_submit_admin_passthru(hdl, &cmd, NULL);
 	if (!err) {
 		printf("NVMe Identify command for Domain List is successful:\n");
 		printf("NVMe Identify Domain List:\n");
@@ -4106,38 +4280,46 @@ static int id_domain(int argc, char **argv, struct command *cmd, struct plugin *
 	} else if (err > 0) {
 		nvme_show_status(err);
 	} else {
-		nvme_show_error("NVMe Identify Domain List: %s", nvme_strerror(errno));
+		nvme_show_error("NVMe Identify Domain List: %s", nvme_strerror(err));
 	}
 
 	return err;
 }
 
-static int get_ns_id(int argc, char **argv, struct command *cmd, struct plugin *plugin)
+static int get_ns_id(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
 	const char *desc = "Get namespace ID of a the block device.";
 
-	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
 	unsigned int nsid;
 	int err;
+	nvme_print_flags_t flags;
 
 	NVME_ARGS(opts);
 
-	err = parse_and_open(&dev, argc, argv, desc, opts);
+	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err)
 		return err;
 
-	err = nvme_get_nsid(dev_fd(dev), &nsid);
+	err = validate_output_format(nvme_cfg.output_format, &flags);
 	if (err < 0) {
-		nvme_show_error("get namespace ID: %s", nvme_strerror(errno));
+		nvme_show_error("Invalid output format");
+		return err;
+	}
+
+	err = nvme_get_nsid(hdl, &nsid);
+	if (err < 0) {
+		nvme_show_error("get namespace ID: %s", nvme_strerror(err));
 		return -errno;
 	}
 
-	printf("%s: namespace-id:%d\n", dev->name, nsid);
+	printf("%s: namespace-id:%d\n", nvme_transport_handle_get_name(hdl), nsid);
 
 	return 0;
 }
 
-static int virtual_mgmt(int argc, char **argv, struct command *cmd, struct plugin *plugin)
+static int virtual_mgmt(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
 	const char *desc = "The Virtualization Management command is supported by primary controllers "
 		"that support the Virtualization Enhancements capability. This command is used for:\n"
@@ -4155,7 +4337,9 @@ static int virtual_mgmt(int argc, char **argv, struct command *cmd, struct plugi
 		"9h: Secondary Online";
 	const char *nr = "Number of Controller Resources(NR)";
 
-	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
+	struct nvme_passthru_cmd cmd;
 	__u32 result;
 	int err;
 
@@ -4179,32 +4363,23 @@ static int virtual_mgmt(int argc, char **argv, struct command *cmd, struct plugi
 		  OPT_BYTE("act",    'a', &cfg.act,    act),
 		  OPT_SHRT("nr",     'n', &cfg.nr,     nr));
 
-	err = parse_and_open(&dev, argc, argv, desc, opts);
+	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err)
 		return err;
 
-	struct nvme_virtual_mgmt_args args = {
-		.args_size	= sizeof(args),
-		.fd		= dev_fd(dev),
-		.act		= cfg.act,
-		.rt		= cfg.rt,
-		.cntlid		= cfg.cntlid,
-		.nr		= cfg.nr,
-		.timeout	= nvme_cfg.timeout,
-		.result		= &result,
-	};
-	err = nvme_virtual_mgmt(&args);
+	nvme_init_virtual_mgmt(&cmd, cfg.act, cfg.rt, cfg.cntlid, cfg.nr);
+	err = nvme_submit_admin_passthru(hdl, &cmd, &result);
 	if (!err)
 		printf("success, Number of Controller Resources Modified (NRM):%#x\n", result);
 	else if (err > 0)
 		nvme_show_status(err);
 	else
-		nvme_show_error("virt-mgmt: %s", nvme_strerror(errno));
+		nvme_show_error("virt-mgmt: %s", nvme_strerror(err));
 
 	return err;
 }
 
-static int primary_ctrl_caps(int argc, char **argv, struct command *cmd, struct plugin *plugin)
+static int primary_ctrl_caps(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
 	const char *cntlid = "Controller ID";
 	const char *desc = "Send an Identify Primary Controller Capabilities "
@@ -4212,7 +4387,9 @@ static int primary_ctrl_caps(int argc, char **argv, struct command *cmd, struct 
 		"decoded format (default), json or binary.";
 
 	_cleanup_free_ struct nvme_primary_ctrl_cap *caps = NULL;
-	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
+	struct nvme_passthru_cmd cmd;
 	nvme_print_flags_t flags;
 	int err;
 
@@ -4230,7 +4407,7 @@ static int primary_ctrl_caps(int argc, char **argv, struct command *cmd, struct 
 		  OPT_UINT("cntlid",         'c', &cfg.cntlid, cntlid),
 		  OPT_FLAG("human-readable", 'H', &cfg.human_readable, human_readable_info));
 
-	err = parse_and_open(&dev, argc, argv, desc, opts);
+	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err)
 		return err;
 
@@ -4247,19 +4424,20 @@ static int primary_ctrl_caps(int argc, char **argv, struct command *cmd, struct 
 	if (!caps)
 		return -ENOMEM;
 
-	err = nvme_cli_identify_primary_ctrl(dev, cfg.cntlid, caps);
+	nvme_init_identify_primary_ctrl_cap(&cmd, cfg.cntlid, caps);
+	err = nvme_submit_admin_passthru(hdl, &cmd, NULL);
 	if (!err)
 		nvme_show_primary_ctrl_cap(caps, flags);
 	else if (err > 0)
 		nvme_show_status(err);
 	else
 		nvme_show_error("identify primary controller capabilities: %s",
-				nvme_strerror(errno));
+				nvme_strerror(err));
 
 	return err;
 }
 
-static int list_secondary_ctrl(int argc, char **argv, struct command *cmd, struct plugin *plugin)
+static int list_secondary_ctrl(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
 	const char *desc =
 	    "Show secondary controller list associated with the primary controller of the given device.";
@@ -4267,7 +4445,9 @@ static int list_secondary_ctrl(int argc, char **argv, struct command *cmd, struc
 	const char *num_entries = "number of entries to retrieve";
 
 	_cleanup_free_ struct nvme_secondary_ctrl_list *sc_list = NULL;
-	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
+	struct nvme_passthru_cmd cmd;
 	nvme_print_flags_t flags;
 	int err;
 
@@ -4285,7 +4465,7 @@ static int list_secondary_ctrl(int argc, char **argv, struct command *cmd, struc
 		  OPT_SHRT("cntid",        'c', &cfg.cntid,         controller),
 		  OPT_UINT("num-entries",  'e', &cfg.num_entries,   num_entries));
 
-	err = parse_and_open(&dev, argc, argv, desc, opts);
+	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err)
 		return err;
 
@@ -4304,45 +4484,39 @@ static int list_secondary_ctrl(int argc, char **argv, struct command *cmd, struc
 	if (!sc_list)
 		return -ENOMEM;
 
-	err = nvme_cli_identify_secondary_ctrl_list(dev, cfg.cntid, sc_list);
+	nvme_init_identify_secondary_ctrl_list(&cmd, cfg.cntid, sc_list);
+	err = nvme_submit_admin_passthru(hdl, &cmd, NULL);
 	if (!err)
 		nvme_show_list_secondary_ctrl(sc_list, cfg.num_entries, flags);
 	else if (err > 0)
 		nvme_show_status(err);
 	else
-		nvme_show_error("id secondary controller list: %s", nvme_strerror(errno));
+		nvme_show_error("id secondary controller list: %s", nvme_strerror(err));
 
 	return err;
 }
 
-static void intr_self_test(int signum)
-{
-	printf("\nInterrupted device self-test operation by %s\n", strsignal(signum));
-
-	errno = EINTR;
-}
-
 static int sleep_self_test(unsigned int seconds)
 {
-	errno = 0;
+	nvme_sigint_received = false;
 
 	sleep(seconds);
 
-	if (errno)
-		return -errno;
+	if (nvme_sigint_received) {
+		printf("\nInterrupted device self-test operation by SIGINT\n");
+		return -SIGINT;
+	}
 
 	return 0;
 }
 
-static int wait_self_test(struct nvme_dev *dev)
+static int wait_self_test(struct nvme_transport_handle *hdl)
 {
 	static const char spin[] = {'-', '\\', '|', '/' };
 	_cleanup_free_ struct nvme_self_test_log *log = NULL;
 	_cleanup_free_ struct nvme_id_ctrl *ctrl = NULL;
 	int err, i = 0, p = 0, cnt = 0;
 	int wthr;
-
-	signal(SIGINT, intr_self_test);
 
 	ctrl = nvme_alloc(sizeof(*ctrl));
 	if (!ctrl)
@@ -4352,9 +4526,9 @@ static int wait_self_test(struct nvme_dev *dev)
 	if (!log)
 		return -ENOMEM;
 
-	err = nvme_cli_identify_ctrl(dev, ctrl);
+	err = nvme_identify_ctrl(hdl, ctrl);
 	if (err) {
-		nvme_show_error("identify-ctrl: %s", nvme_strerror(errno));
+		nvme_show_error("identify-ctrl: %s", nvme_strerror(err));
 		return err;
 	}
 
@@ -4368,7 +4542,7 @@ static int wait_self_test(struct nvme_dev *dev)
 		if (err)
 			return err;
 
-		err = nvme_cli_get_log_device_self_test(dev, log);
+		err = nvme_get_log_device_self_test(hdl, log);
 		if (err) {
 			printf("\n");
 			if (err < 0)
@@ -4403,22 +4577,22 @@ static int wait_self_test(struct nvme_dev *dev)
 	return 0;
 }
 
-static void abort_self_test(struct nvme_dev_self_test_args *args)
+static void abort_self_test(struct nvme_transport_handle *hdl, __u32 nsid)
 {
+	struct nvme_passthru_cmd cmd;
 	int err;
 
-	args->stc = NVME_DST_STC_ABORT;
-
-	err = nvme_dev_self_test(args);
+	nvme_init_dev_self_test(&cmd, nsid, NVME_DST_STC_ABORT);
+	err = nvme_submit_admin_passthru(hdl, &cmd, NULL);
 	if (!err)
 		printf("Aborting device self-test operation\n");
 	else if (err > 0)
 		nvme_show_status(err);
 	else
-		nvme_show_error("Device self-test: %s", nvme_strerror(errno));
+		nvme_show_error("Device self-test: %s", nvme_strerror(err));
 }
 
-static int device_self_test(int argc, char **argv, struct command *cmd, struct plugin *plugin)
+static int device_self_test(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
 	const char *desc = "Implementing the device self-test feature "
 		"which provides the necessary log to determine the state of the device";
@@ -4429,11 +4603,15 @@ static int device_self_test(int argc, char **argv, struct command *cmd, struct p
 		"0h Show current state of device self-test operation\n"
 		"1h Start a short device self-test operation\n"
 		"2h Start a extended device self-test operation\n"
+		"3h Start a Host-Initiated Refresh operation\n"
 		"eh Start a vendor specific device self-test operation\n"
 		"fh Abort the device self-test operation";
 	const char *wait = "Wait for the test to finish";
 
-	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
+	struct nvme_passthru_cmd cmd;
+	nvme_print_flags_t flags;
 	int err;
 
 	struct config {
@@ -4453,9 +4631,15 @@ static int device_self_test(int argc, char **argv, struct command *cmd, struct p
 		  OPT_BYTE("self-test-code", 's', &cfg.stc,          self_test_code),
 		  OPT_FLAG("wait",           'w', &cfg.wait,         wait));
 
-	err = parse_and_open(&dev, argc, argv, desc, opts);
+	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err)
 		return err;
+
+	err = validate_output_format(nvme_cfg.output_format, &flags);
+	if (err < 0) {
+		nvme_show_error("Invalid output format");
+		return err;
+	}
 
 	if (cfg.stc == NVME_ST_CODE_RESERVED) {
 		_cleanup_free_ struct nvme_self_test_log *log = NULL;
@@ -4464,7 +4648,7 @@ static int device_self_test(int argc, char **argv, struct command *cmd, struct p
 		if (!log)
 			return -ENOMEM;
 
-		err = nvme_cli_get_log_device_self_test(dev, log);
+		err = nvme_get_log_device_self_test(hdl, log);
 		if (err) {
 			printf("\n");
 			if (err < 0)
@@ -4477,7 +4661,7 @@ static int device_self_test(int argc, char **argv, struct command *cmd, struct p
 			printf("no self test running\n");
 		} else {
 			if (cfg.wait)
-				err = wait_self_test(dev);
+				err = wait_self_test(hdl);
 			else
 				printf("progress %d%%\n", log->completion);
 		}
@@ -4485,15 +4669,8 @@ static int device_self_test(int argc, char **argv, struct command *cmd, struct p
 		goto check_abort;
 	}
 
-	struct nvme_dev_self_test_args args = {
-		.args_size	= sizeof(args),
-		.fd		= dev_fd(dev),
-		.nsid		= cfg.namespace_id,
-		.stc		= cfg.stc,
-		.timeout	= nvme_cfg.timeout,
-		.result		= NULL,
-	};
-	err = nvme_dev_self_test(&args);
+	nvme_init_dev_self_test(&cmd, cfg.namespace_id, cfg.stc);
+	err = nvme_submit_admin_passthru(hdl, &cmd, NULL);
 	if (!err) {
 		if (cfg.stc == NVME_ST_CODE_ABORT)
 			printf("Aborting device self-test operation\n");
@@ -4501,23 +4678,25 @@ static int device_self_test(int argc, char **argv, struct command *cmd, struct p
 			printf("Extended Device self-test started\n");
 		else if (cfg.stc == NVME_ST_CODE_SHORT)
 			printf("Short Device self-test started\n");
+		else if (cfg.stc == NVME_ST_CODE_HOST_INIT)
+			printf("Host-Initiated Refresh started\n");
 
 		if (cfg.wait && cfg.stc != NVME_ST_CODE_ABORT)
-			err = wait_self_test(dev);
+			err = wait_self_test(hdl);
 	} else if (err > 0) {
 		nvme_show_status(err);
 	} else {
-		nvme_show_error("Device self-test: %s", nvme_strerror(errno));
+		nvme_show_error("Device self-test: %s", nvme_strerror(err));
 	}
 
 check_abort:
 	if (err == -EINTR)
-		abort_self_test(&args);
+		abort_self_test(hdl, cfg.namespace_id);
 
 	return err;
 }
 
-static int self_test_log(int argc, char **argv, struct command *cmd, struct plugin *plugin)
+static int self_test_log(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
 	const char *desc = "Retrieve the self-test log for the given device and given test "
 		"(or optionally a namespace) in either decoded format (default) or binary.";
@@ -4525,7 +4704,8 @@ static int self_test_log(int argc, char **argv, struct command *cmd, struct plug
 		"by default all the 20 entries will be retrieved";
 
 	_cleanup_free_ struct nvme_self_test_log *log = NULL;
-	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
 	nvme_print_flags_t flags;
 	int err;
 
@@ -4540,7 +4720,7 @@ static int self_test_log(int argc, char **argv, struct command *cmd, struct plug
 	NVME_ARGS(opts,
 		  OPT_BYTE("dst-entries",  'e', &cfg.dst_entries,   dst_entries));
 
-	err = parse_and_open(&dev, argc, argv, desc, opts);
+	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err)
 		return err;
 
@@ -4557,27 +4737,24 @@ static int self_test_log(int argc, char **argv, struct command *cmd, struct plug
 	if (!log)
 		return -ENOMEM;
 
-	err = nvme_cli_get_log_device_self_test(dev, log);
+	err = nvme_get_log_device_self_test(hdl, log);
 	if (!err)
-		nvme_show_self_test_log(log, cfg.dst_entries, 0, dev->name, flags);
+		nvme_show_self_test_log(log, cfg.dst_entries, 0, nvme_transport_handle_get_name(hdl), flags);
 	else if (err > 0)
 		nvme_show_status(err);
 	else
-		nvme_show_error("self test log: %s", nvme_strerror(errno));
+		nvme_show_error("self test log: %s", nvme_strerror(err));
 
 	return err;
 }
 
-static int get_feature_id(struct nvme_dev *dev, struct feat_cfg *cfg,
+static int get_feature_id(struct nvme_transport_handle *hdl, struct feat_cfg *cfg,
 			  void **buf, __u32 *result)
 {
 	if (!cfg->data_len)
 		nvme_get_feature_length(cfg->feature_id, cfg->cdw11,
+					NVME_DATA_TFR_CTRL_TO_HOST,	
 					&cfg->data_len);
-
-	/* check for Extended Host Identifier */
-	if (cfg->feature_id == NVME_FEAT_FID_HOST_ID && (cfg->cdw11 & 0x1))
-		cfg->data_len = 16;
 
 	if (cfg->feature_id == NVME_FEAT_FID_FDP_EVENTS) {
 		cfg->data_len = 0xff * sizeof(__u16);
@@ -4593,30 +4770,20 @@ static int get_feature_id(struct nvme_dev *dev, struct feat_cfg *cfg,
 			return -1;
 	}
 
-	struct nvme_get_features_args args = {
-		.args_size	= sizeof(args),
-		.fid		= cfg->feature_id,
-		.nsid		= cfg->namespace_id,
-		.sel		= cfg->sel,
-		.cdw11		= cfg->cdw11,
-		.uuidx		= cfg->uuid_index,
-		.data_len	= cfg->data_len,
-		.data		= *buf,
-		.timeout	= nvme_cfg.timeout,
-		.result		= result,
-	};
-	return nvme_cli_get_features(dev, &args);
+	return nvme_get_features(hdl, cfg->namespace_id, cfg->feature_id, cfg->sel,
+			cfg->cdw11, cfg->uuid_index, *buf, cfg->data_len, result);
 }
 
 static int filter_out_flags(int status)
 {
-	return status & (NVME_GET(NVME_SCT_MASK, SCT) |
-			 NVME_GET(NVME_SC_MASK, SC));
+	return status & (NVME_VAL(SCT) | NVME_VAL(SC));
 }
 
-static void get_feature_id_print(struct feat_cfg cfg, int err, __u32 result, void *buf)
+static void get_feature_id_print(struct feat_cfg cfg, int err, __u32 result,
+		void *buf, nvme_print_flags_t flags)
 {
 	int status = filter_out_flags(err);
+	int verbose = flags & VERBOSE;
 	enum nvme_status_type type = NVME_STATUS_TYPE_NVME;
 
 	if (!err) {
@@ -4624,7 +4791,7 @@ static void get_feature_id_print(struct feat_cfg cfg, int err, __u32 result, voi
 			nvme_feature_show(cfg.feature_id, cfg.sel, result);
 			if (NVME_CHECK(cfg.sel, GET_FEATURES_SEL, SUPPORTED))
 				nvme_show_select_result(cfg.feature_id, result);
-			else if (cfg.human_readable)
+			else if (verbose || !strcmp(nvme_cfg.output_format, "json"))
 				nvme_feature_show_fields(cfg.feature_id, result, buf);
 			else if (buf)
 				d(buf, cfg.data_len, 16, 1);
@@ -4636,11 +4803,24 @@ static void get_feature_id_print(struct feat_cfg cfg, int err, __u32 result, voi
 		    !nvme_status_equals(status, type, NVME_SC_INVALID_NS))
 			nvme_show_status(err);
 	} else {
-		nvme_show_error("get-feature: %s", nvme_strerror(errno));
+		nvme_show_error("get-feature: %s", nvme_strerror(err));
 	}
 }
 
-static int get_feature_id_changed(struct nvme_dev *dev, struct feat_cfg cfg)
+static bool is_get_feature_result_set(enum nvme_features_id feature_id)
+{
+	switch (feature_id) {
+	case NVME_FEAT_FID_PERF_CHARACTERISTICS:
+		return false;
+	default:
+		break;
+	}
+
+	return true;
+}
+
+static int get_feature_id_changed(struct nvme_transport_handle *hdl, struct feat_cfg cfg,
+		nvme_print_flags_t flags)
 {
 	int err;
 	int err_def = 0;
@@ -4652,21 +4832,25 @@ static int get_feature_id_changed(struct nvme_dev *dev, struct feat_cfg cfg)
 	if (cfg.changed)
 		cfg.sel = NVME_GET_FEATURES_SEL_CURRENT;
 
-	err = get_feature_id(dev, &cfg, &buf, &result);
+	err = get_feature_id(hdl, &cfg, &buf, &result);
 
 	if (!err && cfg.changed) {
 		cfg.sel = NVME_GET_FEATURES_SEL_DEFAULT;
-		err_def = get_feature_id(dev, &cfg, &buf_def, &result_def);
+		err_def = get_feature_id(hdl, &cfg, &buf_def, &result_def);
 	}
+
+	if (!err && !is_get_feature_result_set(cfg.feature_id))
+		result = cfg.cdw11;
 
 	if (err || !cfg.changed || err_def || result != result_def ||
 	    (buf && buf_def && !strcmp(buf, buf_def)))
-		get_feature_id_print(cfg, err, result, buf);
+		get_feature_id_print(cfg, err, result, buf, flags);
 
 	return err;
 }
 
-static int get_feature_ids(struct nvme_dev *dev, struct feat_cfg cfg)
+static int get_feature_ids(struct nvme_transport_handle *hdl, struct feat_cfg cfg,
+		nvme_print_flags_t flags)
 {
 	int err = 0;
 	int i;
@@ -4680,7 +4864,7 @@ static int get_feature_ids(struct nvme_dev *dev, struct feat_cfg cfg)
 
 	for (i = cfg.feature_id; i < feat_max; i++, feat_num++) {
 		cfg.feature_id = i;
-		err = get_feature_id_changed(dev, cfg);
+		err = get_feature_id_changed(hdl, cfg, flags);
 		if (!err)
 			continue;
 		status = filter_out_flags(err);
@@ -4698,7 +4882,7 @@ static int get_feature_ids(struct nvme_dev *dev, struct feat_cfg cfg)
 	return err;
 }
 
-static int get_feature(int argc, char **argv, struct command *cmd,
+static int get_feature(int argc, char **argv, struct command *acmd,
 		       struct plugin *plugin)
 {
 	const char *desc = "Read operating parameters of the "
@@ -4716,8 +4900,10 @@ static int get_feature(int argc, char **argv, struct command *cmd,
 	const char *cdw11 = "feature specific dword 11";
 	const char *human_readable = "show feature in readable format";
 	const char *changed = "show feature changed";
+	nvme_print_flags_t flags = NORMAL;
 
-	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
 	int err;
 
 	struct feat_cfg cfg = {
@@ -4732,7 +4918,7 @@ static int get_feature(int argc, char **argv, struct command *cmd,
 	};
 
 	NVME_ARGS(opts,
-		  OPT_BYTE("feature-id",     'f', &cfg.feature_id,     feature_id),
+		  OPT_BYTE("feature-id",     'f', &cfg.feature_id,     feature_id, feature_name),
 		  OPT_UINT("namespace-id",   'n', &cfg.namespace_id,   namespace_id_desired),
 		  OPT_BYTE("sel",            's', &cfg.sel,            sel),
 		  OPT_UINT("data-len",       'l', &cfg.data_len,       buf_len),
@@ -4742,15 +4928,21 @@ static int get_feature(int argc, char **argv, struct command *cmd,
 		  OPT_FLAG("human-readable", 'H', &cfg.human_readable, human_readable),
 		  OPT_FLAG("changed",        'C', &cfg.changed,        changed));
 
-	err = parse_and_open(&dev, argc, argv, desc, opts);
+	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err)
 		return err;
 
+	err = validate_output_format(nvme_cfg.output_format, &flags);
+	if (err < 0) {
+		nvme_show_error("Invalid output format");
+		return err;
+	}
+
 	if (!argconfig_parse_seen(opts, "namespace-id")) {
-		err = nvme_get_nsid(dev_fd(dev), &cfg.namespace_id);
+		err = nvme_get_nsid(hdl, &cfg.namespace_id);
 		if (err < 0) {
 			if (errno != ENOTTY) {
-				nvme_show_error("get-namespace-id: %s", nvme_strerror(errno));
+				nvme_show_error("get-namespace-id: %s", nvme_strerror(err));
 				return err;
 			}
 			cfg.namespace_id = NVME_NSID_ALL;
@@ -4767,9 +4959,12 @@ static int get_feature(int argc, char **argv, struct command *cmd,
 		return -1;
 	}
 
+	if (cfg.human_readable || argconfig_parse_seen(opts, "verbose"))
+		flags |= VERBOSE;
+
 	nvme_show_init();
 
-	err = get_feature_ids(dev, cfg);
+	err = get_feature_ids(hdl, cfg, flags);
 
 	nvme_show_finish();
 
@@ -4781,11 +4976,12 @@ static int get_feature(int argc, char **argv, struct command *cmd,
  * errors. Returns -1 on (fatal) error; signifying that the transfer should
  * be aborted.
  */
-static int fw_download_single(struct nvme_dev *dev, void *fw_buf,
+static int fw_download_single(struct nvme_transport_handle *hdl, void *fw_buf,
 			      unsigned int fw_len, uint32_t offset,
 			      uint32_t len, bool progress, bool ignore_ovr)
 {
 	const unsigned int max_retries = 3;
+	struct nvme_passthru_cmd cmd;
 	bool retryable, ovr;
 	int err, try;
 
@@ -4794,22 +4990,17 @@ static int fw_download_single(struct nvme_dev *dev, void *fw_buf,
 		       offset, fw_len, (int)(100 * offset / fw_len));
 	}
 
-	struct nvme_fw_download_args args = {
-		.args_size	= sizeof(args),
-		.offset		= offset,
-		.data_len	= len,
-		.data		= fw_buf,
-		.timeout	= nvme_cfg.timeout,
-		.result		= NULL,
-	};
-
 	for (try = 0; try < max_retries; try++) {
 		if (try > 0) {
 			fprintf(stderr, "retrying offset %x (%u/%u)\n",
 				offset, try, max_retries);
 		}
 
-		err = nvme_cli_fw_download(dev, &args);
+		err = nvme_init_fw_download(&cmd, fw_buf, len, offset);
+		if (err)
+			return err;
+
+		err = nvme_submit_admin_passthru(hdl, &cmd, NULL);
 		if (!err)
 			return 0;
 
@@ -4846,7 +5037,7 @@ static int fw_download_single(struct nvme_dev *dev, void *fw_buf,
 			offset, fw_len);
 
 		if (err < 0) {
-			fprintf(stderr, "fw-download: %s\n", nvme_strerror(errno));
+			fprintf(stderr, "fw-download: %s\n", nvme_strerror(err));
 		} else {
 			nvme_show_status(err);
 			if (ovr) {
@@ -4873,7 +5064,7 @@ static int fw_download_single(struct nvme_dev *dev, void *fw_buf,
 	return -1;
 }
 
-static int fw_download(int argc, char **argv, struct command *cmd, struct plugin *plugin)
+static int fw_download(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
 	const char *desc = "Copy all or part of a firmware image to "
 		"a controller for future update. Optionally, specify how "
@@ -4889,7 +5080,8 @@ static int fw_download(int argc, char **argv, struct command *cmd, struct plugin
 	const char *progress = "display firmware transfer progress";
 	const char *ignore_ovr = "ignore overwrite errors";
 
-	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
 	_cleanup_huge_ struct nvme_mem_huge mh = { 0, };
 	_cleanup_fd_ int fw_fd = -1;
 	unsigned int fw_size, pos;
@@ -4897,6 +5089,7 @@ static int fw_download(int argc, char **argv, struct command *cmd, struct plugin
 	struct stat sb;
 	void *fw_buf;
 	struct nvme_id_ctrl ctrl = { 0 };
+	nvme_print_flags_t flags;
 
 	struct config {
 		char	*fw;
@@ -4921,9 +5114,15 @@ static int fw_download(int argc, char **argv, struct command *cmd, struct plugin
 		  OPT_FLAG("progress",   'p', &cfg.progress,   progress),
 		  OPT_FLAG("ignore-ovr", 'i', &cfg.ignore_ovr, ignore_ovr));
 
-	err = parse_and_open(&dev, argc, argv, desc, opts);
+	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err)
 		return err;
+
+	err = validate_output_format(nvme_cfg.output_format, &flags);
+	if (err < 0) {
+		nvme_show_error("Invalid output format");
+		return err;
+	}
 
 	fw_fd = open(cfg.fw, O_RDONLY);
 	cfg.offset <<= 2;
@@ -4945,9 +5144,9 @@ static int fw_download(int argc, char **argv, struct command *cmd, struct plugin
 	}
 
 	if (cfg.xfer == 0) {
-		err = nvme_cli_identify_ctrl(dev, &ctrl);
+		err = nvme_identify_ctrl(hdl, &ctrl);
 		if (err) {
-			nvme_show_error("identify-ctrl: %s", nvme_strerror(errno));
+			nvme_show_error("identify-ctrl: %s", nvme_strerror(err));
 			return err;
 		}
 		if (ctrl.fwug == 0 || ctrl.fwug == 0xff)
@@ -4962,8 +5161,10 @@ static int fw_download(int argc, char **argv, struct command *cmd, struct plugin
 				fw_size, cfg.xfer);
 
 	fw_buf = nvme_alloc_huge(fw_size, &mh);
-	if (!fw_buf)
+	if (!fw_buf) {
+		nvme_show_error("failed to allocate huge memory");
 		return -ENOMEM;
+	}
 
 	if (read(fw_fd, fw_buf, fw_size) != ((ssize_t)(fw_size))) {
 		err = -errno;
@@ -4974,7 +5175,7 @@ static int fw_download(int argc, char **argv, struct command *cmd, struct plugin
 	for (pos = 0; pos < fw_size; pos += cfg.xfer) {
 		cfg.xfer = min(cfg.xfer, fw_size - pos);
 
-		err = fw_download_single(dev, fw_buf + pos, fw_size,
+		err = fw_download_single(hdl, fw_buf + pos, fw_size,
 					 cfg.offset + pos, cfg.xfer,
 					 cfg.progress, cfg.ignore_ovr);
 		if (err)
@@ -5005,7 +5206,7 @@ static char *nvme_fw_status_reset_type(__u16 status)
 	}
 }
 
-static bool fw_commit_support_mud(struct nvme_dev *dev)
+static bool fw_commit_support_mud(struct nvme_transport_handle *hdl)
 {
 	_cleanup_free_ struct nvme_id_ctrl *ctrl = NULL;
 	int err;
@@ -5014,19 +5215,19 @@ static bool fw_commit_support_mud(struct nvme_dev *dev)
 	if (!ctrl)
 		return false;
 
-	err = nvme_cli_identify_ctrl(dev, ctrl);
+	err = nvme_identify_ctrl(hdl, ctrl);
 
 	if (err)
-		nvme_show_error("identify-ctrl: %s", nvme_strerror(errno));
+		nvme_show_error("identify-ctrl: %s", nvme_strerror(err));
 	else if (ctrl->frmw >> 5 & 0x1)
 		return true;
 
 	return false;
 }
 
-static void fw_commit_print_mud(struct nvme_dev *dev, __u32 result)
+static void fw_commit_print_mud(struct nvme_transport_handle *hdl, __u32 result)
 {
-	if (!fw_commit_support_mud(dev))
+	if (!fw_commit_support_mud(hdl))
 		return;
 
 	printf("Multiple Update Detected (MUD) Value: %u\n", result);
@@ -5040,7 +5241,7 @@ static void fw_commit_print_mud(struct nvme_dev *dev, __u32 result)
 		       "sequence due to processing a command from a Management Endpoint\n");
 }
 
-static int fw_commit(int argc, char **argv, struct command *cmd, struct plugin *plugin)
+static int fw_commit(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
 	const char *desc = "Verify downloaded firmware image and "
 		"commit to specific firmware slot. Device is not automatically "
@@ -5051,9 +5252,12 @@ static int fw_commit(int argc, char **argv, struct command *cmd, struct plugin *
 	const char *action = "[0-7]: commit action";
 	const char *bpid = "[0,1]: boot partition identifier, if applicable (default: 0)";
 
-	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
+	struct nvme_passthru_cmd cmd;
 	__u32 result;
 	int err;
+	nvme_print_flags_t flags;
 
 	struct config {
 		__u8	slot;
@@ -5072,9 +5276,15 @@ static int fw_commit(int argc, char **argv, struct command *cmd, struct plugin *
 		  OPT_BYTE("action", 'a', &cfg.action, action),
 		  OPT_BYTE("bpid",   'b', &cfg.bpid,   bpid));
 
-	err = parse_and_open(&dev, argc, argv, desc, opts);
+	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err)
 		return err;
+
+	err = validate_output_format(nvme_cfg.output_format, &flags);
+	if (err < 0) {
+		nvme_show_error("Invalid output format");
+		return err;
+	}
 
 	if (cfg.slot > 7) {
 		nvme_show_error("invalid slot:%d", cfg.slot);
@@ -5089,19 +5299,11 @@ static int fw_commit(int argc, char **argv, struct command *cmd, struct plugin *
 		return -EINVAL;
 	}
 
-	struct nvme_fw_commit_args args = {
-		.args_size	= sizeof(args),
-		.slot		= cfg.slot,
-		.action		= cfg.action,
-		.bpid		= cfg.bpid,
-		.timeout	= nvme_cfg.timeout,
-		.result		= &result,
-	};
-	err = nvme_cli_fw_commit(dev, &args);
-
+	nvme_init_fw_commit(&cmd, cfg.slot, cfg.action, cfg.bpid);
+	err = nvme_submit_admin_passthru(hdl, &cmd, &result);
 	if (err < 0) {
-		nvme_show_error("fw-commit: %s", nvme_strerror(errno));
-	} else if (err != 0) {
+		nvme_show_error("fw-commit: %s", nvme_strerror(err));
+	} else if (err > 0) {
 		__u32 val = nvme_status_get_value(err);
 		int type = nvme_status_get_type(err);
 
@@ -5130,82 +5332,92 @@ static int fw_commit(int argc, char **argv, struct command *cmd, struct plugin *
 		if (cfg.action == 6 || cfg.action == 7)
 			printf(" bpid:%d", cfg.bpid);
 		printf("\n");
-		fw_commit_print_mud(dev, result);
+		fw_commit_print_mud(hdl, result);
 	}
 
 	return err;
 }
 
-static int subsystem_reset(int argc, char **argv, struct command *cmd, struct plugin *plugin)
+static int subsystem_reset(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
 	const char *desc = "Resets the NVMe subsystem";
 
-	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
 	int err;
 
 	NVME_ARGS(opts);
 
-	err = parse_and_open(&dev, argc, argv, desc, opts);
+	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err)
 		return err;
 
-	err = nvme_subsystem_reset(dev_fd(dev));
+	err = nvme_subsystem_reset(hdl);
 	if (err < 0) {
 		if (errno == ENOTTY)
 			nvme_show_error("Subsystem-reset: NVM Subsystem Reset not supported.");
 		else
-			nvme_show_error("Subsystem-reset: %s", nvme_strerror(errno));
+			nvme_show_error("Subsystem-reset: %s", nvme_strerror(err));
 	} else if (argconfig_parse_seen(opts, "verbose"))
-		printf("resetting subsystem through %s\n", dev->name);
+		printf("resetting subsystem through %s\n", nvme_transport_handle_get_name(hdl));
 
 	return err;
 }
 
-static int reset(int argc, char **argv, struct command *cmd, struct plugin *plugin)
+static int reset(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
 	const char *desc = "Resets the NVMe controller\n";
 
-	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
 	int err;
 
 	NVME_ARGS(opts);
 
-	err = parse_and_open(&dev, argc, argv, desc, opts);
+	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err)
 		return err;
 
-	err = nvme_ctrl_reset(dev_fd(dev));
+	err = nvme_ctrl_reset(hdl);
 	if (err < 0)
-		nvme_show_error("Reset: %s", nvme_strerror(errno));
+		nvme_show_error("Reset: %s", nvme_strerror(err));
 	else if (argconfig_parse_seen(opts, "verbose"))
-		printf("resetting controller %s\n", dev->name);
+		printf("resetting controller %s\n", nvme_transport_handle_get_name(hdl));
 
 	return err;
 }
 
-static int ns_rescan(int argc, char **argv, struct command *cmd, struct plugin *plugin)
+static int ns_rescan(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
 	const char *desc = "Rescans the NVMe namespaces\n";
 
-	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
 	int err;
+	nvme_print_flags_t flags;
 
 	NVME_ARGS(opts);
 
-	err = parse_and_open(&dev, argc, argv, desc, opts);
+	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err)
 		return err;
 
-	err = nvme_ns_rescan(dev_fd(dev));
+	err = validate_output_format(nvme_cfg.output_format, &flags);
+	if (err < 0) {
+		nvme_show_error("Invalid output format");
+		return err;
+	}
+
+	err = nvme_ns_rescan(hdl);
 	if (err < 0)
-		nvme_show_error("Namespace Rescan: %s\n", nvme_strerror(errno));
+		nvme_show_error("Namespace Rescan: %s\n", nvme_strerror(err));
 	else if (argconfig_parse_seen(opts, "verbose"))
-		printf("rescanning namespaces through %s\n", dev->name);
+		printf("rescanning namespaces through %s\n", nvme_transport_handle_get_name(hdl));
 
 	return err;
 }
 
-static int sanitize_cmd(int argc, char **argv, struct command *cmd, struct plugin *plugin)
+static int sanitize_cmd(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
 	const char *desc = "Send a sanitize command.";
 	const char *emvs_desc = "Enter media verification state.";
@@ -5217,7 +5429,10 @@ static int sanitize_cmd(int argc, char **argv, struct command *cmd, struct plugi
 				"3 = Start overwrite, 4 = Start crypto erase, 5 = Exit media verification";
 	const char *ovrpat_desc = "Overwrite pattern.";
 
-	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
+	struct nvme_passthru_cmd cmd;
+	nvme_print_flags_t flags;
 	int err;
 
 	struct config {
@@ -5258,9 +5473,15 @@ static int sanitize_cmd(int argc, char **argv, struct command *cmd, struct plugi
 		  OPT_UINT("ovrpat",     'p', &cfg.ovrpat,     ovrpat_desc),
 		  OPT_FLAG("emvs",       'e', &cfg.emvs,       emvs_desc));
 
-	err = parse_and_open(&dev, argc, argv, desc, opts);
+	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err)
 		return err;
+
+	err = validate_output_format(nvme_cfg.output_format, &flags);
+	if (err < 0) {
+		nvme_show_error("Invalid output format");
+		return err;
+	}
 
 	switch (cfg.sanact) {
 	case NVME_SANITIZE_SANACT_EXIT_FAILURE:
@@ -5296,39 +5517,24 @@ static int sanitize_cmd(int argc, char **argv, struct command *cmd, struct plugi
 		}
 	}
 
-	struct nvme_sanitize_nvm_args args = {
-		.args_size	= sizeof(args),
-		.sanact		= cfg.sanact,
-		.ause		= cfg.ause,
-		.owpass		= cfg.owpass,
-		.oipbp		= cfg.oipbp,
-		.nodas		= cfg.no_dealloc,
-		.ovrpat		= cfg.ovrpat,
-		.result		= NULL,
-		.emvs		= cfg.emvs,
-	};
-
-	err = nvme_cli_sanitize_nvm(dev, &args);
+	nvme_init_sanitize_nvm(&cmd, cfg.sanact, cfg.ause, cfg.owpass,
+			       cfg.oipbp, cfg.no_dealloc, cfg.emvs, cfg.ovrpat);
+	err = nvme_submit_admin_passthru(hdl, &cmd, NULL);
 	if (err < 0)
-		nvme_show_error("sanitize: %s", nvme_strerror(errno));
+		nvme_show_error("sanitize: %s", nvme_strerror(err));
 	else if (err > 0)
 		nvme_show_status(err);
 
 	return err;
 }
 
-static int nvme_get_single_property(int fd, struct get_reg_config *cfg, __u64 *value)
+static int nvme_get_single_property(struct nvme_transport_handle *hdl, struct get_reg_config *cfg, __u64 *value)
 {
+	struct nvme_passthru_cmd64 cmd;
 	int err;
-	struct nvme_get_property_args args = {
-		.args_size	= sizeof(args),
-		.fd		= fd,
-		.offset		= cfg->offset,
-		.value		= value,
-		.timeout	= nvme_cfg.timeout,
-	};
 
-	err = nvme_get_property(&args);
+	nvme_init_get_property(&cmd, cfg->offset);
+	err = nvme_submit_admin_passthru64(hdl, &cmd, value);
 	if (!err)
 		return 0;
 
@@ -5346,12 +5552,12 @@ static int nvme_get_single_property(int fd, struct get_reg_config *cfg, __u64 *v
 	if (cfg->fabrics && err > 0)
 		nvme_show_status(err);
 	else
-		nvme_show_error("get-property: %s", nvme_strerror(errno));
+		nvme_show_error("get-property: %s", nvme_strerror(err));
 
 	return err;
 }
 
-static int nvme_get_properties(int fd, void **pbar, struct get_reg_config *cfg)
+static int nvme_get_properties(struct nvme_transport_handle *hdl, void **pbar, struct get_reg_config *cfg)
 {
 	int err, size = getpagesize();
 	bool is_64bit = false;
@@ -5360,10 +5566,8 @@ static int nvme_get_properties(int fd, void **pbar, struct get_reg_config *cfg)
 	int offset;
 
 	bar = malloc(size);
-	if (!bar) {
-		nvme_show_error("malloc: %s", strerror(errno));
-		return -errno;
-	}
+	if (!bar)
+		return -ENOMEM;
 
 	memset(bar, 0xff, size);
 	for (offset = NVME_REG_CAP; offset <= NVME_REG_CMBSZ;
@@ -5372,7 +5576,7 @@ static int nvme_get_properties(int fd, void **pbar, struct get_reg_config *cfg)
 			continue;
 
 		cfg->offset = offset;
-		err = nvme_get_single_property(fd, cfg, &value);
+		err = nvme_get_single_property(hdl, cfg, &value);
 		if (err)
 			break;
 
@@ -5391,7 +5595,7 @@ static int nvme_get_properties(int fd, void **pbar, struct get_reg_config *cfg)
 	return err;
 }
 
-static void *mmap_registers(struct nvme_dev *dev, bool writable)
+static void *mmap_registers(struct nvme_transport_handle *hdl, bool writable)
 {
 	char path[512];
 	void *membase;
@@ -5401,12 +5605,12 @@ static void *mmap_registers(struct nvme_dev *dev, bool writable)
 	if (writable)
 		prot |= PROT_WRITE;
 
-	sprintf(path, "/sys/class/nvme/%s/device/resource0", dev->name);
+	sprintf(path, "/sys/class/nvme/%s/device/resource0", nvme_transport_handle_get_name(hdl));
 	fd = open(path, writable ? O_RDWR : O_RDONLY);
 	if (fd < 0) {
 		if (log_level >= LOG_INFO)
 			nvme_show_error("%s did not find a pci resource, open failed %s",
-					dev->name, strerror(errno));
+					nvme_transport_handle_get_name(hdl), strerror(errno));
 		return NULL;
 	}
 
@@ -5426,14 +5630,15 @@ static void *mmap_registers(struct nvme_dev *dev, bool writable)
 	return membase;
 }
 
-static int show_registers(int argc, char **argv, struct command *cmd, struct plugin *plugin)
+static int show_registers(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
 	const char *desc = "Reads and shows the defined NVMe controller registers\n"
 		"in binary or human-readable format";
 	const char *human_readable =
 	    "show info in readable format in case of output_format == normal";
 
-	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
 	nvme_print_flags_t flags;
 	void *bar;
 	int err;
@@ -5446,9 +5651,14 @@ static int show_registers(int argc, char **argv, struct command *cmd, struct plu
 	NVME_ARGS(opts,
 		  OPT_FLAG("human-readable", 'H', &cfg.human_readable, human_readable));
 
-	err = parse_and_open(&dev, argc, argv, desc, opts);
+	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err)
 		return err;
+
+	if (nvme_transport_handle_is_blkdev(hdl)) {
+		nvme_show_error("Only character device is allowed");
+		return -EINVAL;
+	}
 
 	err = validate_output_format(nvme_cfg.output_format, &flags);
 	if (err < 0) {
@@ -5459,10 +5669,10 @@ static int show_registers(int argc, char **argv, struct command *cmd, struct plu
 	if (cfg.human_readable || argconfig_parse_seen(opts, "verbose"))
 		flags |= VERBOSE;
 
-	bar = mmap_registers(dev, false);
+	bar = mmap_registers(hdl, false);
 	if (!bar) {
 		cfg.fabrics = true;
-		err = nvme_get_properties(dev_fd(dev), &bar, &cfg);
+		err = nvme_get_properties(hdl, &bar, &cfg);
 		if (err)
 			return err;
 	}
@@ -5547,38 +5757,31 @@ static bool is_reg_selected(struct get_reg_config *cfg, int offset)
 	return false;
 }
 
-static int get_register_properties(int fd, void **pbar, struct get_reg_config *cfg)
+static int get_register_properties(struct nvme_transport_handle *hdl, void **pbar, struct get_reg_config *cfg)
 {
+	struct nvme_passthru_cmd64 cmd;
 	int offset = NVME_REG_CRTO;
 	__u64 value;
 	int size;
 	int err;
 	void *bar;
-	struct nvme_get_property_args args = {
-		.args_size = sizeof(args),
-		.fd = fd,
-		.value = &value,
-		.timeout = nvme_cfg.timeout,
-	};
 
 	size = offset + get_reg_size(offset);
 	bar = malloc(size);
-	if (!bar) {
-		nvme_show_error("malloc: %s", strerror(errno));
-		return -1;
-	}
+	if (!bar)
+		return -ENOMEM;
 
 	for (offset = NVME_REG_CAP; offset <= NVME_REG_CRTO; offset += get_reg_size(offset)) {
 		if ((cfg->offset != offset && !is_reg_selected(cfg, offset)) ||
 		    !nvme_is_fabrics_reg(offset))
 			continue;
 
-		args.offset = offset;
-		err = nvme_get_property(&args);
+		nvme_init_get_property(&cmd, offset);
+		err = nvme_submit_admin_passthru64(hdl, &cmd, &value);
 		if (nvme_status_equals(err, NVME_STATUS_TYPE_NVME, NVME_SC_INVALID_FIELD)) {
 			value = -1;
 		} else if (err) {
-			nvme_show_error("get-property: %s", nvme_strerror(errno));
+			nvme_show_error("get-property: %s", nvme_strerror(err));
 			free(bar);
 			return err;
 		}
@@ -5653,7 +5856,7 @@ static bool get_register_offset(void *bar, bool fabrics, struct get_reg_config *
 	return offset_matched;
 }
 
-static int get_register(int argc, char **argv, struct command *cmd, struct plugin *plugin)
+static int get_register(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
 	const char *desc = "Reads and shows the defined NVMe controller register.\n"
 		"Register offset must be one of:\n"
@@ -5679,7 +5882,8 @@ static int get_register(int argc, char **argv, struct command *cmd, struct plugi
 	const char *pmrmscl = "PMRMSCL=0xe14 register offset";
 	const char *pmrmscu = "PMRMSCU=0xe18 register offset";
 
-	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
 	int err;
 	nvme_print_flags_t flags;
 	bool fabrics = false;
@@ -5722,9 +5926,14 @@ static int get_register(int argc, char **argv, struct command *cmd, struct plugi
 		  OPT_FLAG("pmrmscl",          0, &cfg.pmrmscl,        pmrmscl),
 		  OPT_FLAG("pmrmscu",          0, &cfg.pmrmscu,        pmrmscu));
 
-	err = parse_and_open(&dev, argc, argv, desc, opts);
+	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err)
 		return err;
+
+	if (nvme_transport_handle_is_blkdev(hdl)) {
+		nvme_show_error("Only character device is allowed");
+		return -EINVAL;
+	}
 
 	err = validate_output_format(nvme_cfg.output_format, &flags);
 	if (err < 0) {
@@ -5735,9 +5944,9 @@ static int get_register(int argc, char **argv, struct command *cmd, struct plugi
 	if (cfg.human_readable || argconfig_parse_seen(opts, "verbose"))
 		flags |= VERBOSE;
 
-	bar = mmap_registers(dev, false);
+	bar = mmap_registers(hdl, false);
 	if (!bar) {
-		err = get_register_properties(dev_fd(dev), &bar, &cfg);
+		err = get_register_properties(hdl, &bar, &cfg);
 		if (err)
 			return err;
 		fabrics = true;
@@ -5760,20 +5969,15 @@ static int get_register(int argc, char **argv, struct command *cmd, struct plugi
 	return err;
 }
 
-static int nvme_set_single_property(int fd, int offset, uint64_t value)
+static int nvme_set_single_property(struct nvme_transport_handle *hdl, int offset, uint64_t value)
 {
-	struct nvme_set_property_args args = {
-		.args_size	= sizeof(args),
-		.fd		= fd,
-		.offset		= offset,
-		.value		= value,
-		.timeout	= nvme_cfg.timeout,
-		.result		= NULL,
-	};
-	int err = nvme_set_property(&args);
+	struct nvme_passthru_cmd cmd;
+	int err;
 
+	nvme_init_set_property(&cmd, offset, value);
+	err = nvme_submit_admin_passthru(hdl, &cmd, NULL);
 	if (err < 0)
-		nvme_show_error("set-property: %s", nvme_strerror(errno));
+		nvme_show_error("set-property: %s", nvme_strerror(err));
 	else if (!err)
 		printf("set-property: %#02x (%s), value: %#"PRIx64"\n", offset,
 		       nvme_register_to_string(offset), value);
@@ -5783,7 +5987,7 @@ static int nvme_set_single_property(int fd, int offset, uint64_t value)
 	return err;
 }
 
-static int set_register_property(int fd, int offset, uint64_t value)
+static int set_register_property(struct nvme_transport_handle *hdl, int offset, uint64_t value)
 {
 	if (!nvme_is_fabrics_reg(offset)) {
 		printf("register: %#04x (%s) not fabrics\n", offset,
@@ -5791,13 +5995,13 @@ static int set_register_property(int fd, int offset, uint64_t value)
 		return -EINVAL;
 	}
 
-	return nvme_set_single_property(fd, offset, value);
+	return nvme_set_single_property(hdl, offset, value);
 }
 
-static int nvme_set_register(int fd, void *bar, int offset, uint64_t value, bool mmio32)
+static int nvme_set_register(struct nvme_transport_handle *hdl, void *bar, int offset, uint64_t value, bool mmio32)
 {
 	if (!bar)
-		return set_register_property(fd, offset, value);
+		return set_register_property(hdl, offset, value);
 
 	if (nvme_is_64bit_reg(offset))
 		mmio_write64(bar + offset, value, mmio32);
@@ -5876,7 +6080,7 @@ static inline int set_register_names_check(struct argconfig_commandline_options 
 	return 0;
 }
 
-static int set_register_offset(int fd, void *bar, struct argconfig_commandline_options *opts,
+static int set_register_offset(struct nvme_transport_handle *hdl, void *bar, struct argconfig_commandline_options *opts,
 			       struct set_reg_config *cfg)
 {
 	int err;
@@ -5892,98 +6096,98 @@ static int set_register_offset(int fd, void *bar, struct argconfig_commandline_o
 		return err;
 	}
 
-	err = nvme_set_register(fd, bar, cfg->offset, cfg->value, cfg->mmio32);
+	err = nvme_set_register(hdl, bar, cfg->offset, cfg->value, cfg->mmio32);
 	if (err)
 		return err;
 
 	return 0;
 }
 
-static int set_register_names(int fd, void *bar, struct argconfig_commandline_options *opts,
+static int set_register_names(struct nvme_transport_handle *hdl, void *bar, struct argconfig_commandline_options *opts,
 			      struct set_reg_config *cfg)
 {
 	int err;
 
 	if (argconfig_parse_seen(opts, "intms")) {
-		err = nvme_set_register(fd, bar, NVME_REG_INTMS, cfg->intms, cfg->mmio32);
+		err = nvme_set_register(hdl, bar, NVME_REG_INTMS, cfg->intms, cfg->mmio32);
 		if (err)
 			return err;
 	}
 
 	if (argconfig_parse_seen(opts, "intmc")) {
-		err = nvme_set_register(fd, bar, NVME_REG_INTMC, cfg->intmc, cfg->mmio32);
+		err = nvme_set_register(hdl, bar, NVME_REG_INTMC, cfg->intmc, cfg->mmio32);
 		if (err)
 			return err;
 	}
 
 	if (argconfig_parse_seen(opts, "cc")) {
-		err = nvme_set_register(fd, bar, NVME_REG_CC, cfg->cc, cfg->mmio32);
+		err = nvme_set_register(hdl, bar, NVME_REG_CC, cfg->cc, cfg->mmio32);
 		if (err)
 			return err;
 	}
 
 	if (argconfig_parse_seen(opts, "csts")) {
-		err = nvme_set_register(fd, bar, NVME_REG_CSTS, cfg->csts, cfg->mmio32);
+		err = nvme_set_register(hdl, bar, NVME_REG_CSTS, cfg->csts, cfg->mmio32);
 		if (err)
 			return err;
 	}
 
 	if (argconfig_parse_seen(opts, "nssr")) {
-		err = nvme_set_register(fd, bar, NVME_REG_NSSR, cfg->nssr, cfg->mmio32);
+		err = nvme_set_register(hdl, bar, NVME_REG_NSSR, cfg->nssr, cfg->mmio32);
 		if (err)
 			return err;
 	}
 
 	if (argconfig_parse_seen(opts, "aqa")) {
-		err = nvme_set_register(fd, bar, NVME_REG_AQA, cfg->aqa, cfg->mmio32);
+		err = nvme_set_register(hdl, bar, NVME_REG_AQA, cfg->aqa, cfg->mmio32);
 		if (err)
 			return err;
 	}
 
 	if (argconfig_parse_seen(opts, "asq")) {
-		err = nvme_set_register(fd, bar, NVME_REG_ASQ, cfg->asq, cfg->mmio32);
+		err = nvme_set_register(hdl, bar, NVME_REG_ASQ, cfg->asq, cfg->mmio32);
 		if (err)
 			return err;
 	}
 
 	if (argconfig_parse_seen(opts, "acq")) {
-		err = nvme_set_register(fd, bar, NVME_REG_ACQ, cfg->acq, cfg->mmio32);
+		err = nvme_set_register(hdl, bar, NVME_REG_ACQ, cfg->acq, cfg->mmio32);
 		if (err)
 			return err;
 	}
 
 	if (argconfig_parse_seen(opts, "bprsel")) {
-		err = nvme_set_register(fd, bar, NVME_REG_BPRSEL, cfg->bprsel, cfg->mmio32);
+		err = nvme_set_register(hdl, bar, NVME_REG_BPRSEL, cfg->bprsel, cfg->mmio32);
 		if (err)
 			return err;
 	}
 
 	if (argconfig_parse_seen(opts, "cmbmsc")) {
-		err = nvme_set_register(fd, bar, NVME_REG_CMBMSC, cfg->cmbmsc, cfg->mmio32);
+		err = nvme_set_register(hdl, bar, NVME_REG_CMBMSC, cfg->cmbmsc, cfg->mmio32);
 		if (err)
 			return err;
 	}
 
 	if (argconfig_parse_seen(opts, "nssd")) {
-		err = nvme_set_register(fd, bar, NVME_REG_NSSD, cfg->nssd, cfg->mmio32);
+		err = nvme_set_register(hdl, bar, NVME_REG_NSSD, cfg->nssd, cfg->mmio32);
 		if (err)
 			return err;
 	}
 
 	if (argconfig_parse_seen(opts, "pmrctl")) {
-		err = nvme_set_register(fd, bar, NVME_REG_PMRCTL, cfg->pmrctl, cfg->mmio32);
+		err = nvme_set_register(hdl, bar, NVME_REG_PMRCTL, cfg->pmrctl, cfg->mmio32);
 		if (err)
 			return err;
 	}
 
 	if (argconfig_parse_seen(opts, "pmrmscl")) {
-		err = nvme_set_register(fd, bar, NVME_REG_PMRMSCL, cfg->pmrmscl, cfg->mmio32);
+		err = nvme_set_register(hdl, bar, NVME_REG_PMRMSCL, cfg->pmrmscl, cfg->mmio32);
 		if (err)
 			return err;
 	}
 
 	if (argconfig_parse_seen(opts, "pmrmscu")) {
-		err = nvme_set_register(fd, bar, NVME_REG_PMRMSCU, cfg->pmrmscu, cfg->mmio32);
+		err = nvme_set_register(hdl, bar, NVME_REG_PMRMSCU, cfg->pmrmscu, cfg->mmio32);
 		if (err)
 			return err;
 	}
@@ -5991,15 +6195,15 @@ static int set_register_names(int fd, void *bar, struct argconfig_commandline_op
 	return 0;
 }
 
-static int set_register(int argc, char **argv, struct command *cmd, struct plugin *plugin)
+static int set_register(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
 	const char *desc = "Writes and shows the defined NVMe controller register";
 	const char *value = "the value of the register to be set";
 	const char *mmio32 = "Access 64-bit registers as 2 32-bit";
 
-	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
 	int err;
-
 	void *bar;
 
 	struct set_reg_config cfg = {
@@ -6026,17 +6230,22 @@ static int set_register(int argc, char **argv, struct command *cmd, struct plugi
 		  OPT_UINT("pmrmscl",   0, &cfg.pmrmscl, pmrmscl),
 		  OPT_UINT("pmrmscu",   0, &cfg.pmrmscu, pmrmscu));
 
-	err = parse_and_open(&dev, argc, argv, desc, opts);
+	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err)
 		return err;
 
-	bar = mmap_registers(dev, true);
+	if (nvme_transport_handle_is_blkdev(hdl)) {
+		nvme_show_error("Only character device is allowed");
+		return -EINVAL;
+	}
+
+	bar = mmap_registers(hdl, true);
 
 	if (argconfig_parse_seen(opts, "offset"))
-		err = set_register_offset(dev_fd(dev), bar, opts, &cfg);
+		err = set_register_offset(hdl, bar, opts, &cfg);
 
 	if (!err)
-		err = set_register_names(dev_fd(dev), bar, opts, &cfg);
+		err = set_register_names(hdl, bar, opts, &cfg);
 
 	if (bar)
 		munmap(bar, getpagesize());
@@ -6044,7 +6253,7 @@ static int set_register(int argc, char **argv, struct command *cmd, struct plugi
 	return err;
 }
 
-static int get_property(int argc, char **argv, struct command *cmd, struct plugin *plugin)
+static int get_property(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
 	const char *desc = "Reads and shows the defined NVMe controller property\n"
 		"for NVMe over Fabric. Property offset must be one of:\n"
@@ -6052,9 +6261,11 @@ static int get_property(int argc, char **argv, struct command *cmd, struct plugi
 	const char *offset = "offset of the requested property";
 	const char *human_readable = "show property in readable format";
 
-	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
 	__u64 value;
 	int err;
+	nvme_print_flags_t flags = NORMAL;
 
 	struct get_reg_config cfg = {
 		.offset		= -1,
@@ -6066,31 +6277,42 @@ static int get_property(int argc, char **argv, struct command *cmd, struct plugi
 		  OPT_UINT("offset",         'O', &cfg.offset,         offset),
 		  OPT_FLAG("human-readable", 'H', &cfg.human_readable, human_readable));
 
-	err = parse_and_open(&dev, argc, argv, desc, opts);
+	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err)
 		return err;
+
+	err = validate_output_format(nvme_cfg.output_format, &flags);
+	if (err < 0) {
+		nvme_show_error("Invalid output format");
+		return err;
+	}
 
 	if (cfg.offset == -1) {
 		nvme_show_error("offset required param");
 		return -EINVAL;
 	}
 
-	err = nvme_get_single_property(dev_fd(dev), &cfg, &value);
+	if (cfg.human_readable || argconfig_parse_seen(opts, "verbose"))
+		flags |= VERBOSE;
+
+	err = nvme_get_single_property(hdl, &cfg, &value);
 	if (!err)
-		nvme_show_single_property(cfg.offset, value, cfg.human_readable);
+		nvme_show_single_property(cfg.offset, value, flags);
 
 	return err;
 }
 
-static int set_property(int argc, char **argv, struct command *cmd, struct plugin *plugin)
+static int set_property(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
 	const char *desc =
 	    "Writes and shows the defined NVMe controller property for NVMe over Fabric";
 	const char *offset = "the offset of the property";
 	const char *value = "the value of the property to be set";
 
-	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
 	int err;
+	nvme_print_flags_t flags;
 
 	struct set_reg_config cfg = {
 		.offset	= -1,
@@ -6101,9 +6323,15 @@ static int set_property(int argc, char **argv, struct command *cmd, struct plugi
 		  OPT_UINT("offset", 'O', &cfg.offset, offset),
 		  OPT_UINT("value",  'V', &cfg.value,  value));
 
-	err = parse_and_open(&dev, argc, argv, desc, opts);
+	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err)
 		return err;
+
+	err = validate_output_format(nvme_cfg.output_format, &flags);
+	if (err < 0) {
+		nvme_show_error("Invalid output format");
+		return err;
+	}
 
 	if (cfg.offset == -1) {
 		nvme_show_error("offset required param");
@@ -6114,10 +6342,30 @@ static int set_property(int argc, char **argv, struct command *cmd, struct plugi
 		return -EINVAL;
 	}
 
-	return nvme_set_single_property(dev_fd(dev), cfg.offset, cfg.value);
+	return nvme_set_single_property(hdl, cfg.offset, cfg.value);
 }
 
-static int format_cmd(int argc, char **argv, struct command *cmd, struct plugin *plugin)
+static void show_relatives(const char *name, nvme_print_flags_t flags)
+{
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx;
+	int err;
+
+	ctx = nvme_create_global_ctx(stderr, log_level);
+	if (!ctx) {
+		nvme_show_error("Failed to create global context");
+		return;
+	}
+
+	err = nvme_scan_topology(ctx, NULL, NULL);
+	if (err < 0) {
+		nvme_show_error("Failed to scan topology: %s", nvme_strerror(-err));
+		return;
+	}
+
+	nvme_show_relatives(ctx, name, flags);
+}
+
+static int format_cmd(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
 	const char *desc = "Re-format a specified namespace on the\n"
 		"given device. Can erase all data in namespace (user\n"
@@ -6127,14 +6375,18 @@ static int format_cmd(int argc, char **argv, struct command *cmd, struct plugin 
 	const char *ses = "[0-2]: secure erase";
 	const char *pil = "[0-1]: protection info location last/first bytes of metadata";
 	const char *pi = "[0-3]: protection info off/Type 1/Type 2/Type 3";
-	const char *ms = "[0-1]: extended format off/on";
+	const char *mset = "[0-1]: extended format off/on";
 	const char *reset = "Automatically reset the controller after successful format";
 	const char *bs = "target block size";
 	const char *force = "The \"I know what I'm doing\" flag, skip confirmation before sending command";
 
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
 	_cleanup_free_ struct nvme_id_ctrl *ctrl = NULL;
 	_cleanup_free_ struct nvme_id_ns *ns = NULL;
-	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
+	nvme_print_flags_t flags = NORMAL;
+	struct nvme_passthru_cmd cmd;
+	__u32 timeout_ms = 600000;
 	__u8 prev_lbaf = 0;
 	int block_size;
 	int err, i;
@@ -6145,7 +6397,7 @@ static int format_cmd(int argc, char **argv, struct command *cmd, struct plugin 
 		__u8	ses;
 		__u8	pi;
 		__u8	pil;
-		__u8	ms;
+		__u8	mset;
 		bool	reset;
 		bool	force;
 		__u64	bs;
@@ -6157,13 +6409,14 @@ static int format_cmd(int argc, char **argv, struct command *cmd, struct plugin 
 		.ses		= 0,
 		.pi		= 0,
 		.pil		= 0,
-		.ms		= 0,
+		.mset		= 0,
 		.reset		= false,
 		.force		= false,
 		.bs		= 0,
 	};
 
-	nvme_cfg.timeout = 600000;
+	if (nvme_cfg.timeout != NVME_DEFAULT_IOCTL_TIMEOUT)
+		timeout_ms = nvme_cfg.timeout;
 
 	NVME_ARGS(opts,
 		  OPT_UINT("namespace-id", 'n', &cfg.namespace_id, namespace_id_desired),
@@ -6171,7 +6424,7 @@ static int format_cmd(int argc, char **argv, struct command *cmd, struct plugin 
 		  OPT_BYTE("ses",          's', &cfg.ses,          ses),
 		  OPT_BYTE("pi",           'i', &cfg.pi,           pi),
 		  OPT_BYTE("pil",          'p', &cfg.pil,          pil),
-		  OPT_BYTE("ms",           'm', &cfg.ms,           ms),
+		  OPT_BYTE("ms",           'm', &cfg.mset,         mset),
 		  OPT_FLAG("reset",        'r', &cfg.reset,        reset),
 		  OPT_FLAG("force",          0, &cfg.force,        force),
 		  OPT_SUFFIX("block-size", 'b', &cfg.bs,           bs));
@@ -6180,9 +6433,9 @@ static int format_cmd(int argc, char **argv, struct command *cmd, struct plugin 
 	if (err)
 		return err;
 
-	err = open_exclusive(&dev, argc, argv, cfg.force);
+	err = open_exclusive(&ctx, &hdl, argc, argv, cfg.force);
 	if (err) {
-		if (errno == EBUSY) {
+		if (-err == EBUSY) {
 			fprintf(stderr, "Failed to open %s.\n", basename(argv[optind]));
 			fprintf(stderr, "Namespace is currently busy.\n");
 			if (!cfg.force)
@@ -6190,6 +6443,12 @@ static int format_cmd(int argc, char **argv, struct command *cmd, struct plugin 
 		} else {
 			argconfig_print_help(desc, opts);
 		}
+		return err;
+	}
+
+	err = validate_output_format(nvme_cfg.output_format, &flags);
+	if (err < 0) {
+		nvme_show_error("Invalid output format");
 		return err;
 	}
 
@@ -6211,9 +6470,9 @@ static int format_cmd(int argc, char **argv, struct command *cmd, struct plugin 
 	if (!ctrl)
 		return -ENOMEM;
 
-	err = nvme_cli_identify_ctrl(dev, ctrl);
+	err = nvme_identify_ctrl(hdl, ctrl);
 	if (err) {
-		nvme_show_error("identify-ctrl: %s", nvme_strerror(errno));
+		nvme_show_error("identify-ctrl: %s", nvme_strerror(err));
 		return -errno;
 	}
 
@@ -6225,9 +6484,9 @@ static int format_cmd(int argc, char **argv, struct command *cmd, struct plugin 
 		 */
 		cfg.namespace_id = NVME_NSID_ALL;
 	} else if (!cfg.namespace_id) {
-		err = nvme_get_nsid(dev_fd(dev), &cfg.namespace_id);
+		err = nvme_get_nsid(hdl, &cfg.namespace_id);
 		if (err < 0) {
-			nvme_show_error("get-namespace-id: %s", nvme_strerror(errno));
+			nvme_show_error("get-namespace-id: %s", nvme_strerror(err));
 			return -errno;
 		}
 	}
@@ -6244,10 +6503,10 @@ static int format_cmd(int argc, char **argv, struct command *cmd, struct plugin 
 		if (!ns)
 			return -ENOMEM;
 
-		err = nvme_cli_identify_ns(dev, cfg.namespace_id, ns);
+		err = nvme_identify_ns(hdl, cfg.namespace_id, ns);
 		if (err) {
 			if (err < 0) {
-				nvme_show_error("identify-namespace: %s", nvme_strerror(errno));
+				nvme_show_error("identify-namespace: %s", nvme_strerror(err));
 			} else {
 				fprintf(stderr, "identify failed\n");
 				nvme_show_status(err);
@@ -6296,16 +6555,16 @@ static int format_cmd(int argc, char **argv, struct command *cmd, struct plugin 
 		nvme_show_error("invalid pil:%d", cfg.pil);
 		return -EINVAL;
 	}
-	if (cfg.ms > 1) {
-		nvme_show_error("invalid ms:%d", cfg.ms);
+	if (cfg.mset > 1) {
+		nvme_show_error("invalid mset:%d", cfg.mset);
 		return -EINVAL;
 	}
 
 	if (!cfg.force) {
 		fprintf(stderr, "You are about to format %s, namespace %#x%s.\n",
-			dev->name, cfg.namespace_id,
+			nvme_transport_handle_get_name(hdl), cfg.namespace_id,
 			cfg.namespace_id == NVME_NSID_ALL ? "(ALL namespaces)" : "");
-		nvme_show_relatives(dev->name);
+		show_relatives(nvme_transport_handle_get_name(hdl), flags);
 		fprintf(stderr,
 			"WARNING: Format may irrevocably delete this device's data.\n"
 			"You have 10 seconds to press Ctrl-C to cancel this operation.\n\n"
@@ -6314,28 +6573,19 @@ static int format_cmd(int argc, char **argv, struct command *cmd, struct plugin 
 		fprintf(stderr, "Sending format operation ...\n");
 	}
 
-	struct nvme_format_nvm_args args = {
-		.args_size	= sizeof(args),
-		.nsid		= cfg.namespace_id,
-		.lbafu		= (cfg.lbaf >> 4) & 0x3,
-		.lbaf		= cfg.lbaf & 0xf,
-		.mset		= cfg.ms,
-		.pi		= cfg.pi,
-		.pil		= cfg.pil,
-		.ses		= cfg.ses,
-		.timeout	= nvme_cfg.timeout,
-		.result		= NULL,
-	};
-	err = nvme_cli_format_nvm(dev, &args);
+	nvme_init_format_nvm(&cmd, cfg.namespace_id, cfg.lbaf, cfg.mset,
+		cfg.pi, cfg.pil, cfg.ses);
+	cmd.timeout_ms = timeout_ms;
+	err = nvme_submit_admin_passthru(hdl, &cmd, NULL);
 	if (err < 0) {
-		nvme_show_error("format: %s", nvme_strerror(errno));
+		nvme_show_error("format: %s", nvme_strerror(err));
 	} else if (err != 0) {
 		nvme_show_status(err);
 	} else {
 		printf("Success formatting namespace:%x\n", cfg.namespace_id);
-		if (dev->type == NVME_DEV_DIRECT && cfg.lbaf != prev_lbaf) {
-			if (is_chardev(dev)) {
-				if (ioctl(dev_fd(dev), NVME_IOCTL_RESCAN) < 0) {
+		if (nvme_transport_handle_is_direct(hdl) && cfg.lbaf != prev_lbaf) {
+			if (nvme_transport_handle_is_chardev(hdl)) {
+				if (ioctl(nvme_transport_handle_get_fd(hdl), NVME_IOCTL_RESCAN) < 0) {
 					nvme_show_error("failed to rescan namespaces");
 					return -errno;
 				}
@@ -6349,20 +6599,21 @@ static int format_cmd(int argc, char **argv, struct command *cmd, struct plugin 
 				 * to the given one because blkdev will not
 				 * update by itself without re-opening fd.
 				 */
-				if (ioctl(dev_fd(dev), BLKBSZSET, &block_size) < 0) {
+				if (ioctl(nvme_transport_handle_get_fd(hdl), BLKBSZSET, &block_size) < 0) {
 					nvme_show_error("failed to set block size to %d",
 							block_size);
 					return -errno;
 				}
 
-				if (ioctl(dev_fd(dev), BLKRRPART) < 0) {
+				if (ioctl(nvme_transport_handle_get_fd(hdl), BLKRRPART) < 0) {
 					nvme_show_error("failed to re-read partition table");
 					return -errno;
 				}
 			}
 		}
-		if (dev->type == NVME_DEV_DIRECT && cfg.reset && is_chardev(dev))
-			nvme_ctrl_reset(dev_fd(dev));
+		if (nvme_transport_handle_is_direct(hdl) && cfg.reset &&
+		    nvme_transport_handle_is_chardev(hdl))
+			nvme_ctrl_reset(hdl);
 	}
 
 	return err;
@@ -6371,7 +6622,7 @@ static int format_cmd(int argc, char **argv, struct command *cmd, struct plugin 
 #define STRTOUL_AUTO_BASE              (0)
 #define NVME_FEAT_TIMESTAMP_DATA_SIZE  (6)
 
-static int set_feature(int argc, char **argv, struct command *cmd, struct plugin *plugin)
+static int set_feature(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
 	const char *desc = "Modify the saveable or changeable "
 		"current operating parameters of the controller. "
@@ -6382,78 +6633,86 @@ static int set_feature(int argc, char **argv, struct command *cmd, struct plugin
 		"for each Feature are vendor-specific and may not be modified."
 		"Use get-feature to determine which Features are supported by"
 		"the controller and are saveable/changeable.";
-	const char *feature_id = "feature identifier (required)";
+	const char *fid = "feature identifier (required)";
 	const char *data = "optional file for feature data (default stdin)";
 	const char *value = "new value of feature (required)";
 	const char *cdw12 = "feature cdw12, if used";
-	const char *save = "specifies that the controller shall save the attribute";
+	const char *sv = "specifies that the controller shall save the attribute";
 
-	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
 	_cleanup_free_ void *buf = NULL;
 	_cleanup_fd_ int ffd = STDIN_FILENO;
 	int err;
 	__u32 result;
+	nvme_print_flags_t flags;
 
 	struct config {
-		__u32	namespace_id;
-		__u8	feature_id;
+		__u32	nsid;
+		__u8	fid;
 		__u64	value;
 		__u32	cdw12;
-		__u8	uuid_index;
+		__u8	uidx;
 		__u32	data_len;
 		char	*file;
-		bool	save;
+		bool	sv;
 	};
 
 	struct config cfg = {
-		.namespace_id	= 0,
-		.feature_id	= 0,
+		.nsid		= 0,
+		.fid		= 0,
 		.value		= 0,
-		.uuid_index	= 0,
+		.uidx		= 0,
 		.data_len	= 0,
 		.file		= "",
-		.save		= false,
+		.sv			= false,
 	};
 
 	NVME_ARGS(opts,
-		  OPT_UINT("namespace-id", 'n', &cfg.namespace_id, namespace_desired),
-		  OPT_BYTE("feature-id",   'f', &cfg.feature_id,   feature_id),
-		  OPT_SUFFIX("value",      'V', &cfg.value,        value),
-		  OPT_UINT("cdw12",        'c', &cfg.cdw12,        cdw12),
-		  OPT_BYTE("uuid-index",   'U', &cfg.uuid_index,   uuid_index_specify),
-		  OPT_UINT("data-len",     'l', &cfg.data_len,     buf_len),
-		  OPT_FILE("data",         'd', &cfg.file,         data),
-		  OPT_FLAG("save",         's', &cfg.save,         save));
+		  OPT_UINT("namespace-id", 'n', &cfg.nsid,     namespace_desired),
+		  OPT_BYTE("feature-id",   'f', &cfg.fid,      fid, feature_name),
+		  OPT_SUFFIX("value",      'V', &cfg.value,    value),
+		  OPT_UINT("cdw12",        'c', &cfg.cdw12,    cdw12),
+		  OPT_BYTE("uuid-index",   'U', &cfg.uidx,     uuid_index_specify),
+		  OPT_UINT("data-len",     'l', &cfg.data_len, buf_len),
+		  OPT_FILE("data",         'd', &cfg.file,     data),
+		  OPT_FLAG("save",         's', &cfg.sv,       sv));
 
-	err = parse_and_open(&dev, argc, argv, desc, opts);
+	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err)
 		return err;
 
+	err = validate_output_format(nvme_cfg.output_format, &flags);
+	if (err < 0) {
+		nvme_show_error("Invalid output format");
+		return err;
+	}
+
 	if (!argconfig_parse_seen(opts, "namespace-id")) {
-		err = nvme_get_nsid(dev_fd(dev), &cfg.namespace_id);
+		err = nvme_get_nsid(hdl, &cfg.nsid);
 		if (err < 0) {
 			if (errno != ENOTTY) {
-				nvme_show_error("get-namespace-id: %s", nvme_strerror(errno));
+				nvme_show_error("get-namespace-id: %s", nvme_strerror(err));
 				return -errno;
 			}
-			cfg.namespace_id = NVME_NSID_ALL;
+			cfg.nsid = NVME_NSID_ALL;
 		}
 	}
 
-	if (!cfg.feature_id) {
+	if (!cfg.fid) {
 		nvme_show_error("feature-id required param");
 		return -EINVAL;
 	}
 
-	if (cfg.uuid_index > 127) {
-		nvme_show_error("invalid uuid index param: %u", cfg.uuid_index);
+	if (cfg.uidx > 127) {
+		nvme_show_error("invalid uuid index param: %u", cfg.uidx);
 		return -1;
 	}
 
 	if (!cfg.data_len)
-		nvme_cli_get_feature_length2(cfg.feature_id, cfg.value,
-					     NVME_DATA_TFR_HOST_TO_CTRL,
-					     &cfg.data_len);
+		nvme_get_feature_length(cfg.fid, cfg.value,
+					 NVME_DATA_TFR_HOST_TO_CTRL,
+					 &cfg.data_len);
 
 	if (cfg.data_len) {
 		buf = nvme_alloc(cfg.data_len);
@@ -6468,7 +6727,7 @@ static int set_feature(int argc, char **argv, struct command *cmd, struct plugin
 		 * should use the buffer method if the value exceeds this
 		 * length.
 		 */
-		if (cfg.feature_id == NVME_FEAT_FID_TIMESTAMP &&
+		if (cfg.fid == NVME_FEAT_FID_TIMESTAMP &&
 		    argconfig_parse_seen(opts, "value")) {
 			memcpy(buf, &cfg.value, NVME_FEAT_TIMESTAMP_DATA_SIZE);
 		} else {
@@ -6490,34 +6749,20 @@ static int set_feature(int argc, char **argv, struct command *cmd, struct plugin
 		}
 	}
 
-	struct nvme_set_features_args args = {
-		.args_size	= sizeof(args),
-		.fd		= dev_fd(dev),
-		.fid		= cfg.feature_id,
-		.nsid		= cfg.namespace_id,
-		.cdw11		= cfg.value,
-		.cdw12		= cfg.cdw12,
-		.save		= cfg.save,
-		.uuidx		= cfg.uuid_index,
-		.cdw15		= 0,
-		.data_len	= cfg.data_len,
-		.data		= buf,
-		.timeout	= nvme_cfg.timeout,
-		.result		= &result,
-	};
-	err = nvme_set_features(&args);
+	err = nvme_set_features(hdl, cfg.nsid, cfg.fid, cfg.sv, cfg.value, cfg.cdw12,
+			0, cfg.uidx, 0, buf, cfg.data_len, &result);
 	if (err < 0) {
-		nvme_show_error("set-feature: %s", nvme_strerror(errno));
+		nvme_show_error("set-feature: %s", nvme_strerror(err));
 	} else if (!err) {
 		printf("set-feature:%#0*x (%s), value:%#0*"PRIx64", cdw12:%#0*x, save:%#x\n",
-		       cfg.feature_id ? 4 : 2, cfg.feature_id,
-		       nvme_feature_to_string(cfg.feature_id),
+		       cfg.fid ? 4 : 2, cfg.fid,
+		       nvme_feature_to_string(cfg.fid),
 		       cfg.value ? 10 : 8, (uint64_t)cfg.value,
-		       cfg.cdw12 ? 10 : 8, cfg.cdw12, cfg.save);
-		if (cfg.feature_id == NVME_FEAT_FID_LBA_STS_INTERVAL)
+		       cfg.cdw12 ? 10 : 8, cfg.cdw12, cfg.sv);
+		if (cfg.fid == NVME_FEAT_FID_LBA_STS_INTERVAL)
 			nvme_show_lba_status_info(result);
 		if (buf) {
-			if (cfg.feature_id == NVME_FEAT_FID_LBA_RANGE)
+			if (cfg.fid == NVME_FEAT_FID_LBA_RANGE)
 				nvme_show_lba_range((struct nvme_lba_range_type *)buf, result, 0);
 			else
 				d(buf, cfg.data_len, 16, 1);
@@ -6529,7 +6774,7 @@ static int set_feature(int argc, char **argv, struct command *cmd, struct plugin
 	return err;
 }
 
-static int sec_send(int argc, char **argv, struct command *cmd, struct plugin *plugin)
+static int sec_send(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
 	struct stat sb;
 	const char *desc = "Transfer security protocol data to\n"
@@ -6539,11 +6784,14 @@ static int sec_send(int argc, char **argv, struct command *cmd, struct plugin *p
 	const char *file = "transfer payload";
 	const char *tl = "transfer length (cf. SPC-4)";
 
-	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
+	struct nvme_passthru_cmd cmd;
 	_cleanup_free_ void *sec_buf = NULL;
 	_cleanup_fd_ int sec_fd = -1;
 	unsigned int sec_size;
 	int err;
+	nvme_print_flags_t flags;
 
 	struct config {
 		__u32	namespace_id;
@@ -6571,9 +6819,15 @@ static int sec_send(int argc, char **argv, struct command *cmd, struct plugin *p
 		  OPT_SHRT("spsp",         's', &cfg.spsp,         spsp),
 		  OPT_UINT("tl",           't', &cfg.tl,           tl));
 
-	err = parse_and_open(&dev, argc, argv, desc, opts);
+	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err)
 		return err;
+
+	err = validate_output_format(nvme_cfg.output_format, &flags);
+	if (err < 0) {
+		nvme_show_error("Invalid output format");
+		return err;
+	}
 
 	if (cfg.tl == 0) {
 		nvme_show_error("--tl unspecified or zero");
@@ -6613,25 +6867,12 @@ static int sec_send(int argc, char **argv, struct command *cmd, struct plugin *p
 		return -errno;
 	}
 
-	struct nvme_security_send_args args = {
-		.args_size	= sizeof(args),
-		.nsid		= cfg.namespace_id,
-		.nssf		= cfg.nssf,
-		.spsp0		= cfg.spsp & 0xff,
-		.spsp1		= cfg.spsp >> 8,
-		.secp		= cfg.secp,
-		.tl		= cfg.tl,
-		.data_len	= cfg.tl,
-		.data		= sec_buf,
-		.timeout	= nvme_cfg.timeout,
-		.result		= NULL,
-	};
-
-	err = nvme_cli_security_send(dev, &args);
-
+	nvme_init_security_send(&cmd, cfg.namespace_id, cfg.nssf, cfg.spsp,
+				cfg.secp, cfg.tl, sec_buf, cfg.tl);
+	err = nvme_submit_admin_passthru(hdl, &cmd, NULL);
 	if (err < 0)
-		nvme_show_error("security-send: %s", nvme_strerror(errno));
-	else if (err != 0)
+		nvme_show_error("security-send: %s", nvme_strerror(err));
+	else if (err > 0)
 		nvme_show_status(err);
 	else
 		printf("NVME Security Send Command Success\n");
@@ -6639,15 +6880,17 @@ static int sec_send(int argc, char **argv, struct command *cmd, struct plugin *p
 	return err;
 }
 
-static int dir_send(int argc, char **argv, struct command *cmd, struct plugin *plugin)
+static int dir_send(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
 	const char *desc = "Set directive parameters of the specified directive type.";
 	const char *endir = "directive enable";
 	const char *ttype = "target directive type to be enabled/disabled";
 	const char *input = "write/send file (default stdin)";
 
-	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
 	_cleanup_free_ void *buf = NULL;
+	struct nvme_passthru_cmd cmd;
 	__u32 result;
 	__u32 dw12 = 0;
 	_cleanup_fd_ int ffd = STDIN_FILENO;
@@ -6687,11 +6930,11 @@ static int dir_send(int argc, char **argv, struct command *cmd, struct plugin *p
 		  OPT_SHRT("dir-spec",       'S', &cfg.dspec,          dspec_w_dtype),
 		  OPT_BYTE("dir-oper",       'O', &cfg.doper,          doper),
 		  OPT_SHRT("endir",          'e', &cfg.endir,          endir),
-		  OPT_FLAG("human-readable", 'H', &cfg.human_readable, human_readable_directive),
+		  OPT_FLAG("human-readable", 'H', &cfg.human_readable, deprecated),
 		  OPT_FLAG("raw-binary",     'b', &cfg.raw_binary,     raw_directive),
 		  OPT_FILE("input-file",     'i', &cfg.file,           input));
 
-	err = parse_and_open(&dev, argc, argv, desc, opts);
+	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err)
 		return err;
 
@@ -6748,22 +6991,12 @@ static int dir_send(int argc, char **argv, struct command *cmd, struct plugin *p
 		}
 	}
 
-	struct nvme_directive_send_args args = {
-		.args_size	= sizeof(args),
-		.fd		= dev_fd(dev),
-		.nsid		= cfg.namespace_id,
-		.dspec		= cfg.dspec,
-		.doper		= cfg.doper,
-		.dtype		= cfg.dtype,
-		.cdw12		= dw12,
-		.data_len	= cfg.data_len,
-		.data		= buf,
-		.timeout	= nvme_cfg.timeout,
-		.result		= &result,
-	};
-	err = nvme_directive_send(&args);
+	nvme_init_directive_send(&cmd, cfg.namespace_id, cfg.doper, cfg.dtype,
+		cfg.dspec, buf, cfg.data_len);
+	cmd.cdw12 = dw12;
+	err = nvme_submit_admin_passthru(hdl, &cmd, &result);
 	if (err < 0) {
-		nvme_show_error("dir-send: %s", nvme_strerror(errno));
+		nvme_show_error("dir-send: %s", nvme_strerror(err));
 		return err;
 	}
 	if (!err) {
@@ -6782,12 +7015,14 @@ static int dir_send(int argc, char **argv, struct command *cmd, struct plugin *p
 	return err;
 }
 
-static int write_uncor(int argc, char **argv, struct command *cmd, struct plugin *plugin)
+static int write_uncor(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
 	const char *desc =
 	    "The Write Uncorrectable command is used to set a range of logical blocks to invalid.";
 
-	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
+	struct nvme_passthru_cmd cmd;
 	int err;
 
 	struct config {
@@ -6813,14 +7048,14 @@ static int write_uncor(int argc, char **argv, struct command *cmd, struct plugin
 		  OPT_BYTE("dir-type",      'T', &cfg.dtype,        dtype),
 		  OPT_SHRT("dir-spec",      'S', &cfg.dspec,        dspec_w_dtype));
 
-	err = parse_and_open(&dev, argc, argv, desc, opts);
+	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err)
 		return err;
 
 	if (!cfg.namespace_id) {
-		err = nvme_get_nsid(dev_fd(dev), &cfg.namespace_id);
+		err = nvme_get_nsid(hdl, &cfg.namespace_id);
 		if (err < 0) {
-			nvme_show_error("get-namespace-id: %s", nvme_strerror(errno));
+			nvme_show_error("get-namespace-id: %s", nvme_strerror(err));
 			return err;
 		}
 	}
@@ -6830,20 +7065,11 @@ static int write_uncor(int argc, char **argv, struct command *cmd, struct plugin
 		return -EINVAL;
 	}
 
-	struct nvme_io_args args = {
-		.args_size	= sizeof(args),
-		.fd		= dev_fd(dev),
-		.nsid		= cfg.namespace_id,
-		.slba		= cfg.start_block,
-		.nlb		= cfg.block_count,
-		.control	= cfg.dtype << 4,
-		.dspec		= cfg.dspec,
-		.timeout	= nvme_cfg.timeout,
-		.result		= NULL,
-	};
-	err = nvme_write_uncorrectable(&args);
+	nvme_init_write_uncorrectable(&cmd, cfg.namespace_id, cfg.start_block,
+		cfg.block_count, cfg.dtype << 4, cfg.dspec);
+	err = nvme_submit_admin_passthru(hdl, &cmd, NULL);
 	if (err < 0)
-		nvme_show_error("write uncorrectable: %s", nvme_strerror(errno));
+		nvme_show_error("write uncorrectable: %s", nvme_strerror(err));
 	else if (err != 0)
 		nvme_show_status(err);
 	else
@@ -6899,11 +7125,13 @@ static void get_pif_sts(struct nvme_id_ns *ns, struct nvme_nvm_id_ns *nvm_ns, __
 		*pif = (elbaf & NVME_NVM_ELBAF_QPIF_MASK) >> 9;
 }
 
-static int write_zeroes(int argc, char **argv, struct command *cmd, struct plugin *plugin)
+static int write_zeroes(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
 	_cleanup_free_ struct nvme_nvm_id_ns *nvm_ns = NULL;
 	_cleanup_free_ struct nvme_id_ns *ns = NULL;
-	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
+	struct nvme_passthru_cmd cmd;
 	__u8 sts = 0, pif = 0;
 	__u16 control = 0;
 	__u32 result = 0;
@@ -6971,7 +7199,7 @@ static int write_zeroes(int argc, char **argv, struct command *cmd, struct plugi
 		  OPT_SHRT("dir-spec",          'D', &cfg.dspec,             dspec_w_dtype),
 		  OPT_FLAG("namespace-zeroes",  'Z', &cfg.nsz,               nsz));
 
-	err = parse_and_open(&dev, argc, argv, desc, opts);
+	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err)
 		return err;
 
@@ -6996,9 +7224,9 @@ static int write_zeroes(int argc, char **argv, struct command *cmd, struct plugi
 		control |= NVME_IO_NSZ;
 	control |= (cfg.dtype << 4);
 	if (!cfg.namespace_id) {
-		err = nvme_get_nsid(dev_fd(dev), &cfg.namespace_id);
+		err = nvme_get_nsid(hdl, &cfg.namespace_id);
 		if (err < 0) {
-			nvme_show_error("get-namespace-id: %s", nvme_strerror(errno));
+			nvme_show_error("get-namespace-id: %s", nvme_strerror(err));
 			return err;
 		}
 	}
@@ -7007,9 +7235,9 @@ static int write_zeroes(int argc, char **argv, struct command *cmd, struct plugi
 	if (!ns)
 		return -ENOMEM;
 
-	err = nvme_cli_identify_ns(dev, cfg.namespace_id, ns);
+	err = nvme_identify_ns(hdl, cfg.namespace_id, ns);
 	if (err < 0) {
-		nvme_show_error("identify namespace: %s", nvme_strerror(errno));
+		nvme_show_error("identify namespace: %s", nvme_strerror(err));
 		return err;
 	} else if (err) {
 		nvme_show_status(err);
@@ -7020,7 +7248,8 @@ static int write_zeroes(int argc, char **argv, struct command *cmd, struct plugi
 	if (!nvm_ns)
 		return -ENOMEM;
 
-	err = nvme_identify_ns_csi(dev_fd(dev), cfg.namespace_id, 0, NVME_CSI_NVM, nvm_ns);
+	err = nvme_identify_csi_ns(hdl, cfg.namespace_id, NVME_CSI_NVM, 0,
+				   nvm_ns);
 	if (!err) {
 		get_pif_sts(ns, nvm_ns, &pif, &sts);
 	}
@@ -7028,26 +7257,15 @@ static int write_zeroes(int argc, char **argv, struct command *cmd, struct plugi
 	if (invalid_tags(cfg.storage_tag, cfg.ref_tag, sts, pif))
 		return -EINVAL;
 
-	struct nvme_io_args args = {
-		.args_size	= sizeof(args),
-		.fd		= dev_fd(dev),
-		.nsid		= cfg.namespace_id,
-		.slba		= cfg.start_block,
-		.nlb		= cfg.block_count,
-		.control	= control,
-		.reftag_u64	= cfg.ref_tag,
-		.apptag		= cfg.app_tag,
-		.appmask	= cfg.app_tag_mask,
-		.sts		= sts,
-		.pif		= pif,
-		.storage_tag	= cfg.storage_tag,
-		.dspec		= cfg.dspec,
-		.timeout	= nvme_cfg.timeout,
-		.result		= &result,
-	};
-	err = nvme_write_zeros(&args);
+	nvme_init_write_zeros(&cmd, cfg.namespace_id, cfg.start_block,
+		cfg.block_count, control, cfg.dspec, 0, 0);
+	nvme_init_var_size_tags((struct nvme_passthru_cmd64 *)&cmd, pif, sts,
+		cfg.ref_tag, cfg.storage_tag);
+	nvme_init_app_tag((struct nvme_passthru_cmd64 *)&cmd, cfg.app_tag,
+		cfg.app_tag_mask);
+	err = nvme_submit_admin_passthru(hdl, &cmd, &result);
 	if (err < 0)
-		nvme_show_error("write-zeroes: %s", nvme_strerror(errno));
+		nvme_show_error("write-zeroes: %s", nvme_strerror(err));
 	else if (err != 0)
 		nvme_show_status(err);
 	else {
@@ -7063,7 +7281,7 @@ static int write_zeroes(int argc, char **argv, struct command *cmd, struct plugi
 	return err;
 }
 
-static int dsm(int argc, char **argv, struct command *cmd, struct plugin *plugin)
+static int dsm(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
 	const char *desc = "The Dataset Management command is used by the host to\n"
 		"indicate attributes for ranges of logical blocks. This includes attributes\n"
@@ -7077,13 +7295,16 @@ static int dsm(int argc, char **argv, struct command *cmd, struct plugin *plugin
 	const char *idr = "Attribute Integral Dataset for Read";
 	const char *cdw11 = "All the command DWORD 11 attributes. Use instead of specifying individual attributes";
 
-	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
 	_cleanup_free_ struct nvme_dsm_range *dsm = NULL;
+	struct nvme_passthru_cmd cmd;
 	uint16_t nr, nc, nb, ns;
 	__u32 ctx_attrs[256] = {0,};
 	__u32 nlbs[256] = {0,};
 	__u64 slbas[256] = {0,};
 	int err;
+	nvme_print_flags_t flags;
 
 	struct config {
 		__u32	namespace_id;
@@ -7117,9 +7338,15 @@ static int dsm(int argc, char **argv, struct command *cmd, struct plugin *plugin
 		  OPT_FLAG("idr",          'r', &cfg.idr,          idr),
 		  OPT_UINT("cdw11",        'c', &cfg.cdw11,        cdw11));
 
-	err = parse_and_open(&dev, argc, argv, desc, opts);
+	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err)
 		return err;
+
+	err = validate_output_format(nvme_cfg.output_format, &flags);
+	if (err < 0) {
+		nvme_show_error("Invalid output format");
+		return err;
+	}
 
 	nc = argconfig_parse_comma_sep_array_u32(cfg.ctx_attrs, ctx_attrs, ARRAY_SIZE(ctx_attrs));
 	nb = argconfig_parse_comma_sep_array_u32(cfg.blocks, nlbs, ARRAY_SIZE(nlbs));
@@ -7131,9 +7358,9 @@ static int dsm(int argc, char **argv, struct command *cmd, struct plugin *plugin
 	}
 
 	if (!cfg.namespace_id) {
-		err = nvme_get_nsid(dev_fd(dev), &cfg.namespace_id);
+		err = nvme_get_nsid(hdl, &cfg.namespace_id);
 		if (err < 0) {
-			nvme_show_error("get-namespace-id: %s", nvme_strerror(errno));
+			nvme_show_error("get-namespace-id: %s", nvme_strerror(err));
 			return err;
 		}
 	}
@@ -7144,20 +7371,11 @@ static int dsm(int argc, char **argv, struct command *cmd, struct plugin *plugin
 	if (!dsm)
 		return -ENOMEM;
 
-	nvme_init_dsm_range(dsm, ctx_attrs, nlbs, slbas, nr);
-	struct nvme_dsm_args args = {
-		.args_size	= sizeof(args),
-		.fd		= dev_fd(dev),
-		.nsid		= cfg.namespace_id,
-		.attrs		= cfg.cdw11,
-		.nr_ranges	= nr,
-		.dsm		= dsm,
-		.timeout	= nvme_cfg.timeout,
-		.result		= NULL,
-	};
-	err = nvme_dsm(&args);
+	nvme_init_dsm(&cmd, cfg.namespace_id, nr, cfg.idr, cfg.idw, cfg.ad, dsm,
+		      sizeof(*dsm) * 256);
+	err = nvme_submit_admin_passthru(hdl, &cmd, NULL);
 	if (err < 0)
-		nvme_show_error("data-set management: %s", nvme_strerror(errno));
+		nvme_show_error("data-set management: %s", nvme_strerror(err));
 	else if (err != 0)
 		nvme_show_status(err);
 	else
@@ -7166,7 +7384,7 @@ static int dsm(int argc, char **argv, struct command *cmd, struct plugin *plugin
 	return err;
 }
 
-static int copy_cmd(int argc, char **argv, struct command *cmd, struct plugin *plugin)
+static int copy_cmd(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
 	const char *desc = "The Copy command is used by the host to copy data\n"
 		"from one or more source logical block ranges to a\n"
@@ -7190,8 +7408,10 @@ static int copy_cmd(int argc, char **argv, struct command *cmd, struct plugin *p
 	const char *d_dspec = "directive specific (write part)";
 	const char *d_format = "source range entry format";
 
-	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
 	__u16 nr, nb, ns, nrts, natms, nats, nids;
+	struct nvme_passthru_cmd cmd;
 	__u16 nlbs[256] = { 0 };
 	__u64 slbas[256] = { 0 };
 	__u32 snsids[256] = { 0 };
@@ -7206,12 +7426,12 @@ static int copy_cmd(int argc, char **argv, struct command *cmd, struct plugin *p
 	__u32 elbatms[256] = { 0 };
 	__u32 elbats[256] = { 0 };
 
-	union {
+	_cleanup_free_ union {
 		struct nvme_copy_range f0[256];
 		struct nvme_copy_range_f1 f1[256];
 		struct nvme_copy_range_f2 f2[256];
 		struct nvme_copy_range_f3 f3[256];
-	} *copy;
+	} *copy = NULL;
 
 	struct config {
 		__u32	namespace_id;
@@ -7278,28 +7498,39 @@ static int copy_cmd(int argc, char **argv, struct command *cmd, struct plugin *p
 		  OPT_SHRT("dir-spec",               'S', &cfg.dspec,		d_dspec),
 		  OPT_BYTE("format",                 'F', &cfg.format,		d_format));
 
-	err = parse_and_open(&dev, argc, argv, desc, opts);
+	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err)
 		return err;
 
-	nb = argconfig_parse_comma_sep_array_u16(cfg.nlbs, nlbs, ARRAY_SIZE(nlbs));
-	ns = argconfig_parse_comma_sep_array_u64(cfg.slbas, slbas, ARRAY_SIZE(slbas));
-	nids = argconfig_parse_comma_sep_array_u32(cfg.snsids, snsids, ARRAY_SIZE(snsids));
-	argconfig_parse_comma_sep_array_u16(cfg.sopts, sopts, ARRAY_SIZE(sopts));
+	nb = argconfig_parse_comma_sep_array_u16(cfg.nlbs, nlbs,
+						 ARRAY_SIZE(nlbs));
+	ns = argconfig_parse_comma_sep_array_u64(cfg.slbas, slbas,
+						 ARRAY_SIZE(slbas));
+	nids = argconfig_parse_comma_sep_array_u32(cfg.snsids, snsids,
+						 ARRAY_SIZE(snsids));
+	argconfig_parse_comma_sep_array_u16(cfg.sopts, sopts,
+						 ARRAY_SIZE(sopts));
 
-	if (cfg.format == 0 || cfg.format == 2) {
-		nrts = argconfig_parse_comma_sep_array_u32(cfg.eilbrts, eilbrts.short_pi,
-							   ARRAY_SIZE(eilbrts.short_pi));
-	} else if (cfg.format == 1 || cfg.format == 3) {
-		nrts = argconfig_parse_comma_sep_array_u64(cfg.eilbrts, eilbrts.long_pi,
-							   ARRAY_SIZE(eilbrts.long_pi));
-	} else {
+	switch (cfg.format) {
+	case 0:
+	case 2:
+		nrts = argconfig_parse_comma_sep_array_u32(cfg.eilbrts,
+				eilbrts.short_pi, ARRAY_SIZE(eilbrts.short_pi));
+		break;
+	case 1:
+	case 3:
+		nrts = argconfig_parse_comma_sep_array_u64(cfg.eilbrts,
+				eilbrts.long_pi, ARRAY_SIZE(eilbrts.long_pi));
+		break;
+	default:
 		nvme_show_error("invalid format");
 		return -EINVAL;
 	}
 
-	natms = argconfig_parse_comma_sep_array_u32(cfg.elbatms, elbatms, ARRAY_SIZE(elbatms));
-	nats = argconfig_parse_comma_sep_array_u32(cfg.elbats, elbats, ARRAY_SIZE(elbats));
+	natms = argconfig_parse_comma_sep_array_u32(cfg.elbatms, elbatms,
+						    ARRAY_SIZE(elbatms));
+	nats = argconfig_parse_comma_sep_array_u32(cfg.elbats, elbats,
+						   ARRAY_SIZE(elbats));
 
 	nr = max(nb, max(ns, max(nrts, max(natms, nats))));
 	if (cfg.format == 2 || cfg.format == 3) {
@@ -7317,9 +7548,9 @@ static int copy_cmd(int argc, char **argv, struct command *cmd, struct plugin *p
 	}
 
 	if (!cfg.namespace_id) {
-		err = nvme_get_nsid(dev_fd(dev), &cfg.namespace_id);
+		err = nvme_get_nsid(hdl, &cfg.namespace_id);
 		if (err < 0) {
-			nvme_show_error("get-namespace-id: %s", nvme_strerror(errno));
+			nvme_show_error("get-namespace-id: %s", nvme_strerror(err));
 			return err;
 		}
 	}
@@ -7328,49 +7559,44 @@ static int copy_cmd(int argc, char **argv, struct command *cmd, struct plugin *p
 	if (!copy)
 		return -ENOMEM;
 
-	if (cfg.format == 0)
-		nvme_init_copy_range(copy->f0, nlbs, slbas, eilbrts.short_pi, elbatms, elbats, nr);
-	else if (cfg.format == 1)
-		nvme_init_copy_range_f1(copy->f1, nlbs, slbas, eilbrts.long_pi, elbatms, elbats, nr);
-	else if (cfg.format == 2)
-		nvme_init_copy_range_f2(copy->f2, snsids, nlbs, slbas, sopts, eilbrts.short_pi, elbatms,
-					elbats, nr);
-	else if (cfg.format == 3)
-		nvme_init_copy_range_f3(copy->f3, snsids, nlbs, slbas, sopts, eilbrts.long_pi, elbatms,
-					elbats, nr);
+	switch (cfg.format) {
+	case 1:
+		nvme_init_copy_range_f1(copy->f1, nlbs, slbas, eilbrts.long_pi,
+					elbatms, elbats, nr);
+		break;
+	case 2:
+		nvme_init_copy_range_f2(copy->f2, snsids, nlbs, slbas, sopts,
+					eilbrts.short_pi, elbatms, elbats, nr);
+		break;
+	case 3:
+		nvme_init_copy_range_f3(copy->f3, snsids, nlbs, slbas, sopts,
+					eilbrts.long_pi, elbatms, elbats, nr);
+		break;
+	default:
+		nvme_init_copy_range(copy->f0, nlbs, slbas, eilbrts.short_pi,
+				     elbatms, elbats, nr);
+		break;
+	}
 
-	struct nvme_copy_args args = {
-		.args_size	= sizeof(args),
-		.fd		= dev_fd(dev),
-		.nsid		= cfg.namespace_id,
-		.copy		= copy->f0,
-		.sdlba		= cfg.sdlba,
-		.nr		= nr,
-		.prinfor	= cfg.prinfor,
-		.prinfow	= cfg.prinfow,
-		.dtype		= cfg.dtype,
-		.dspec		= cfg.dspec,
-		.format		= cfg.format,
-		.lr		= cfg.lr,
-		.fua		= cfg.fua,
-		.ilbrt_u64	= cfg.ilbrt,
-		.lbatm		= cfg.lbatm,
-		.lbat		= cfg.lbat,
-		.timeout	= nvme_cfg.timeout,
-		.result		= NULL,
-	};
-	err = nvme_copy(&args);
+	nvme_init_copy(&cmd, cfg.namespace_id, cfg.sdlba, nr, cfg.format,
+		       cfg.prinfor, cfg.prinfow, 0, cfg.dtype, false, false,
+		       cfg.fua, cfg.lr, 0, cfg.dspec, copy->f0);
+	nvme_init_var_size_tags((struct nvme_passthru_cmd64 *)&cmd,
+		NVME_NVM_PIF_32B_GUARD, 0, cfg.ilbrt, 0);
+	nvme_init_app_tag((struct nvme_passthru_cmd64 *)&cmd, cfg.lbat,
+		cfg.lbatm);
+	err = nvme_submit_admin_passthru(hdl, &cmd, NULL);
 	if (err < 0)
-		nvme_show_error("NVMe Copy: %s", nvme_strerror(errno));
+		nvme_show_error("NVMe Copy: %s", nvme_strerror(err));
 	else if (err != 0)
 		nvme_show_status(err);
 	else
-		printf("NVMe Copy: success\n");
+		nvme_show_key_value("NVMe Copy", "success");
 
 	return err;
 }
 
-static int flush_cmd(int argc, char **argv, struct command *cmd, struct plugin *plugin)
+static int flush_cmd(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
 	const char *desc = "Commit data and metadata associated with\n"
 		"given namespaces to nonvolatile media. Applies to all commands\n"
@@ -7378,7 +7604,8 @@ static int flush_cmd(int argc, char **argv, struct command *cmd, struct plugin *
 		"flushed by the controller, from any namespace, depending on controller and\n"
 		"associated namespace status.";
 
-	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
 	int err;
 
 	struct config {
@@ -7392,21 +7619,21 @@ static int flush_cmd(int argc, char **argv, struct command *cmd, struct plugin *
 	NVME_ARGS(opts,
 		  OPT_UINT("namespace-id", 'n', &cfg.namespace_id, namespace_id_desired));
 
-	err = parse_and_open(&dev, argc, argv, desc, opts);
+	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err)
 		return err;
 
 	if (!cfg.namespace_id) {
-		err = nvme_get_nsid(dev_fd(dev), &cfg.namespace_id);
+		err = nvme_get_nsid(hdl, &cfg.namespace_id);
 		if (err < 0) {
-			nvme_show_error("get-namespace-id: %s", nvme_strerror(errno));
+			nvme_show_error("get-namespace-id: %s", nvme_strerror(err));
 			return err;
 		}
 	}
 
-	err = nvme_flush(dev_fd(dev), cfg.namespace_id);
+	err = nvme_flush(hdl, cfg.namespace_id);
 	if (err < 0)
-		nvme_show_error("flush: %s", nvme_strerror(errno));
+		nvme_show_error("flush: %s", nvme_strerror(err));
 	else if (err != 0)
 		nvme_show_status(err);
 	else
@@ -7415,7 +7642,7 @@ static int flush_cmd(int argc, char **argv, struct command *cmd, struct plugin *
 	return err;
 }
 
-static int resv_acquire(int argc, char **argv, struct command *cmd, struct plugin *plugin)
+static int resv_acquire(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
 	const char *desc = "Obtain a reservation on a given\n"
 		"namespace. Only one reservation is allowed at a time on a\n"
@@ -7425,7 +7652,11 @@ static int resv_acquire(int argc, char **argv, struct command *cmd, struct plugi
 	const char *prkey = "pre-empt reservation key";
 	const char *racqa = "reservation acquire action";
 
-	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
+	struct nvme_passthru_cmd cmd;
+	nvme_print_flags_t flags;
+	__le64 payload[2];
 	int err;
 
 	struct config {
@@ -7454,14 +7685,20 @@ static int resv_acquire(int argc, char **argv, struct command *cmd, struct plugi
 		  OPT_BYTE("racqa",        'a', &cfg.racqa,        racqa),
 		  OPT_FLAG("iekey",        'i', &cfg.iekey,        iekey));
 
-	err = parse_and_open(&dev, argc, argv, desc, opts);
+	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err)
 		return err;
 
+	err = validate_output_format(nvme_cfg.output_format, &flags);
+	if (err < 0) {
+		nvme_show_error("Invalid output format");
+		return err;
+	}
+
 	if (!cfg.namespace_id) {
-		err = nvme_get_nsid(dev_fd(dev), &cfg.namespace_id);
+		err = nvme_get_nsid(hdl, &cfg.namespace_id);
 		if (err < 0) {
-			nvme_show_error("get-namespace-id: %s", nvme_strerror(errno));
+			nvme_show_error("get-namespace-id: %s", nvme_strerror(err));
 			return err;
 		}
 	}
@@ -7470,22 +7707,12 @@ static int resv_acquire(int argc, char **argv, struct command *cmd, struct plugi
 		return -EINVAL;
 	}
 
-	struct nvme_resv_acquire_args args = {
-		.args_size	= sizeof(args),
-		.fd		= dev_fd(dev),
-		.nsid		= cfg.namespace_id,
-		.rtype		= cfg.rtype,
-		.racqa		= cfg.racqa,
-		.iekey		= !!cfg.iekey,
-		.crkey		= cfg.crkey,
-		.nrkey		= cfg.prkey,
-		.timeout	= nvme_cfg.timeout,
-		.result		= NULL,
-	};
-	err = nvme_resv_acquire(&args);
+	nvme_init_resv_acquire(&cmd, cfg.namespace_id, cfg.racqa, cfg.iekey,
+			       false, cfg.rtype, cfg.crkey, cfg.prkey, payload);
+	err = nvme_submit_admin_passthru(hdl, &cmd, NULL);
 	if (err < 0)
-		nvme_show_error("reservation acquire: %s", nvme_strerror(errno));
-	else if (err != 0)
+		nvme_show_error("reservation acquire: %s", nvme_strerror(err));
+	else if (err > 0)
 		nvme_show_status(err);
 	else
 		printf("NVME Reservation Acquire success\n");
@@ -7493,7 +7720,7 @@ static int resv_acquire(int argc, char **argv, struct command *cmd, struct plugi
 	return err;
 }
 
-static int resv_register(int argc, char **argv, struct command *cmd, struct plugin *plugin)
+static int resv_register(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
 	const char *desc = "Register, de-register, or\n"
 		"replace a controller's reservation on a given namespace.\n"
@@ -7502,7 +7729,11 @@ static int resv_register(int argc, char **argv, struct command *cmd, struct plug
 	const char *rrega = "reservation registration action";
 	const char *cptpl = "change persistence through power loss setting";
 
-	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
+	struct nvme_passthru_cmd cmd;
+	nvme_print_flags_t flags;
+	__le64 payload[2];
 	int err;
 
 	struct config {
@@ -7530,14 +7761,20 @@ static int resv_register(int argc, char **argv, struct command *cmd, struct plug
 		  OPT_BYTE("cptpl",        'p', &cfg.cptpl,        cptpl),
 		  OPT_FLAG("iekey",        'i', &cfg.iekey,        iekey));
 
-	err = parse_and_open(&dev, argc, argv, desc, opts);
+	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err)
 		return err;
 
+	err = validate_output_format(nvme_cfg.output_format, &flags);
+	if (err < 0) {
+		nvme_show_error("Invalid output format");
+		return err;
+	}
+
 	if (!cfg.namespace_id) {
-		err = nvme_get_nsid(dev_fd(dev), &cfg.namespace_id);
+		err = nvme_get_nsid(hdl, &cfg.namespace_id);
 		if (err < 0) {
-			nvme_show_error("get-namespace-id: %s", nvme_strerror(errno));
+			nvme_show_error("get-namespace-id: %s", nvme_strerror(err));
 			return err;
 		}
 	}
@@ -7551,22 +7788,13 @@ static int resv_register(int argc, char **argv, struct command *cmd, struct plug
 		return -EINVAL;
 	}
 
-	struct nvme_resv_register_args args = {
-		.args_size	= sizeof(args),
-		.fd		= dev_fd(dev),
-		.nsid		= cfg.namespace_id,
-		.rrega		= cfg.rrega,
-		.cptpl		= cfg.cptpl,
-		.iekey		= !!cfg.iekey,
-		.crkey		= cfg.crkey,
-		.nrkey		= cfg.nrkey,
-		.timeout	= nvme_cfg.timeout,
-		.result		= NULL,
-	};
-	err = nvme_resv_register(&args);
+	nvme_init_resv_register(&cmd, cfg.namespace_id, cfg.rrega, cfg.iekey,
+				false, cfg.cptpl, cfg.crkey, cfg.nrkey,
+				payload);
+	err = nvme_submit_admin_passthru(hdl, &cmd, NULL);
 	if (err < 0)
-		nvme_show_error("reservation register: %s", nvme_strerror(errno));
-	else if (err != 0)
+		nvme_show_error("reservation register: %s", nvme_strerror(err));
+	else if (err > 0)
 		nvme_show_status(err);
 	else
 		printf("NVME Reservation  success\n");
@@ -7574,7 +7802,7 @@ static int resv_register(int argc, char **argv, struct command *cmd, struct plug
 	return err;
 }
 
-static int resv_release(int argc, char **argv, struct command *cmd, struct plugin *plugin)
+static int resv_release(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
 	const char *desc = "Releases reservation held on a\n"
 		"namespace by the given controller. If rtype != current reservation\n"
@@ -7586,11 +7814,15 @@ static int resv_release(int argc, char **argv, struct command *cmd, struct plugi
 		"the issuing controller are notified.";
 	const char *rrela = "reservation release action";
 
-	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
+	struct nvme_passthru_cmd cmd;
+	nvme_print_flags_t flags;
+	__le64 payload[1];
 	int err;
 
 	struct config {
-		__u32	namespace_id;
+		__u32	nsid;
 		__u64	crkey;
 		__u8	rtype;
 		__u8	rrela;
@@ -7598,7 +7830,7 @@ static int resv_release(int argc, char **argv, struct command *cmd, struct plugi
 	};
 
 	struct config cfg = {
-		.namespace_id	= 0,
+		.nsid		= 0,
 		.crkey		= 0,
 		.rtype		= 0,
 		.rrela		= 0,
@@ -7606,20 +7838,26 @@ static int resv_release(int argc, char **argv, struct command *cmd, struct plugi
 	};
 
 	NVME_ARGS(opts,
-		  OPT_UINT("namespace-id", 'n', &cfg.namespace_id, namespace_desired),
-		  OPT_SUFFIX("crkey",      'c', &cfg.crkey,        crkey),
-		  OPT_BYTE("rtype",        't', &cfg.rtype,        rtype),
-		  OPT_BYTE("rrela",        'a', &cfg.rrela,        rrela),
-		  OPT_FLAG("iekey",        'i', &cfg.iekey,        iekey));
+		  OPT_UINT("namespace-id", 'n', &cfg.nsid,		namespace_desired),
+		  OPT_SUFFIX("crkey",      'c', &cfg.crkey,     crkey),
+		  OPT_BYTE("rtype",        't', &cfg.rtype,     rtype),
+		  OPT_BYTE("rrela",        'a', &cfg.rrela,     rrela),
+		  OPT_FLAG("iekey",        'i', &cfg.iekey,     iekey));
 
-	err = parse_and_open(&dev, argc, argv, desc, opts);
+	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err)
 		return err;
 
-	if (!cfg.namespace_id) {
-		err = nvme_get_nsid(dev_fd(dev), &cfg.namespace_id);
+	err = validate_output_format(nvme_cfg.output_format, &flags);
+	if (err < 0) {
+		nvme_show_error("Invalid output format");
+		return err;
+	}
+
+	if (!cfg.nsid) {
+		err = nvme_get_nsid(hdl, &cfg.nsid);
 		if (err < 0) {
-			nvme_show_error("get-namespace-id: %s", nvme_strerror(errno));
+			nvme_show_error("get-namespace-id: %s", nvme_strerror(err));
 			return err;
 		}
 	}
@@ -7628,20 +7866,11 @@ static int resv_release(int argc, char **argv, struct command *cmd, struct plugi
 		return -EINVAL;
 	}
 
-	struct nvme_resv_release_args args = {
-		.args_size	= sizeof(args),
-		.fd		= dev_fd(dev),
-		.nsid		= cfg.namespace_id,
-		.rtype		= cfg.rtype,
-		.rrela		= cfg.rrela,
-		.iekey		= !!cfg.iekey,
-		.crkey		= cfg.crkey,
-		.timeout	= nvme_cfg.timeout,
-		.result		= NULL,
-	};
-	err = nvme_resv_release(&args);
+	nvme_init_resv_release(&cmd, cfg.nsid, cfg.rrela, cfg.iekey, false,
+		cfg.rtype, cfg.crkey, payload);
+	err = nvme_submit_io_passthru(hdl, &cmd, NULL);
 	if (err < 0)
-		nvme_show_error("reservation release: %s", nvme_strerror(errno));
+		nvme_show_error("reservation release: %s", nvme_strerror(err));
 	else if (err != 0)
 		nvme_show_status(err);
 	else
@@ -7650,7 +7879,7 @@ static int resv_release(int argc, char **argv, struct command *cmd, struct plugi
 	return err;
 }
 
-static int resv_report(int argc, char **argv, struct command *cmd, struct plugin *plugin)
+static int resv_report(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
 	const char *desc = "Returns Reservation Status data\n"
 		"structure describing any existing reservations on and the\n"
@@ -7659,32 +7888,35 @@ static int resv_report(int argc, char **argv, struct command *cmd, struct plugin
 	const char *numd = "number of dwords to transfer";
 	const char *eds = "request extended data structure";
 
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
 	_cleanup_free_ struct nvme_resv_status *status = NULL;
-	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
+	_cleanup_free_ struct nvme_id_ctrl *ctrl = NULL;
+	struct nvme_passthru_cmd cmd;
 	nvme_print_flags_t flags;
 	int err, size;
 
 	struct config {
-		__u32	namespace_id;
+		__u32	nsid;
 		__u32	numd;
 		__u8	eds;
 		bool	raw_binary;
 	};
 
 	struct config cfg = {
-		.namespace_id	= 0,
+		.nsid		= 0,
 		.numd		= 0,
 		.eds		= false,
 		.raw_binary	= false,
 	};
 
 	NVME_ARGS(opts,
-		  OPT_UINT("namespace-id",  'n', &cfg.namespace_id,   namespace_id_desired),
-		  OPT_UINT("numd",          'd', &cfg.numd,           numd),
-		  OPT_FLAG("eds",           'e', &cfg.eds,            eds),
-		  OPT_FLAG("raw-binary",    'b', &cfg.raw_binary,     raw_dump));
+		  OPT_UINT("namespace-id",  'n', &cfg.nsid,		  namespace_id_desired),
+		  OPT_UINT("numd",          'd', &cfg.numd,       numd),
+		  OPT_FLAG("eds",           'e', &cfg.eds,        eds),
+		  OPT_FLAG("raw-binary",    'b', &cfg.raw_binary, raw_dump));
 
-	err = parse_and_open(&dev, argc, argv, desc, opts);
+	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err)
 		return err;
 
@@ -7697,10 +7929,10 @@ static int resv_report(int argc, char **argv, struct command *cmd, struct plugin
 	if (cfg.raw_binary)
 		flags = BINARY;
 
-	if (!cfg.namespace_id) {
-		err = nvme_get_nsid(dev_fd(dev), &cfg.namespace_id);
+	if (!cfg.nsid) {
+		err = nvme_get_nsid(hdl, &cfg.nsid);
 		if (err < 0) {
-			nvme_show_error("get-namespace-id: %s", nvme_strerror(errno));
+			nvme_show_error("get-namespace-id: %s", nvme_strerror(err));
 			return err;
 		}
 	}
@@ -7712,27 +7944,31 @@ static int resv_report(int argc, char **argv, struct command *cmd, struct plugin
 
 	size = (cfg.numd + 1) << 2;
 
+	ctrl = nvme_alloc(sizeof(*ctrl));
+	if (!ctrl)
+		return -ENOMEM;
+
+	err = nvme_identify_ctrl(hdl, ctrl);
+	if (err) {
+		nvme_show_error("identify-ctrl: %s", nvme_strerror(err));
+		return -errno;
+	}
+
+	if (ctrl->ctratt & NVME_CTRL_CTRATT_128_ID)
+		cfg.eds = true;
+
 	status = nvme_alloc(size);
 	if (!status)
 		return -ENOMEM;
 
-	struct nvme_resv_report_args args = {
-		.args_size	= sizeof(args),
-		.fd		= dev_fd(dev),
-		.nsid		= cfg.namespace_id,
-		.eds		= cfg.eds,
-		.len		= size,
-		.report		= status,
-		.timeout	= nvme_cfg.timeout,
-		.result		= NULL,
-	};
-	err = nvme_resv_report(&args);
+	nvme_init_resv_report(&cmd, cfg.nsid, cfg.eds, false, status, size);
+	err = nvme_submit_io_passthru(hdl, &cmd, NULL);
 	if (!err)
 		nvme_show_resv_report(status, size, cfg.eds, flags);
 	else if (err > 0)
 		nvme_show_status(err);
 	else
-		nvme_show_error("reservation report: %s", nvme_strerror(errno));
+		nvme_show_error("reservation report: %s", nvme_strerror(err));
 
 	return err;
 }
@@ -7747,25 +7983,29 @@ unsigned long long elapsed_utime(struct timeval start_time,
 
 static int submit_io(int opcode, char *command, const char *desc, int argc, char **argv)
 {
-	struct timeval start_time, end_time;
-	void *buffer;
-	_cleanup_free_ void *mbuffer = NULL;
-	int err = 0;
-	_cleanup_fd_ int dfd = -1, mfd = -1;
-	int flags, pi_size;
-	int mode = 0644;
-	__u16 control = 0, nblocks = 0;
-	__u32 dsmgmt = 0;
-	unsigned int logical_block_size = 0;
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
 	unsigned long long buffer_size = 0, mbuffer_size = 0;
-	_cleanup_huge_ struct nvme_mem_huge mh = { 0, };
-	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
 	_cleanup_free_ struct nvme_nvm_id_ns *nvm_ns = NULL;
+	_cleanup_huge_ struct nvme_mem_huge mh = { 0, };
 	_cleanup_free_ struct nvme_id_ns *ns = NULL;
+	unsigned int logical_block_size = 0;
+	struct timeval start_time, end_time;
+	_cleanup_free_ void *mbuffer = NULL;
+	_cleanup_fd_ int dfd = -1, mfd = -1;
 	__u8 lba_index, sts = 0, pif = 0;
+	__u16 control = 0, nblocks = 0;
+	struct nvme_passthru_cmd cmd;
+	int flags, pi_size;
+	__u32 dsmgmt = 0;
+	int mode = 0644;
+	void *buffer;
+	int err = 0;
 	__u16 ms;
 
 	const char *start_block_addr = "64-bit addr of first block to access";
+	const char *block_size = "if specified, logical block size in bytes;\n"
+		"discovered by identify namespace otherwise";
 	const char *data_size = "size of data in bytes";
 	const char *metadata_size = "size of metadata in bytes";
 	const char *data = "data file";
@@ -7783,6 +8023,7 @@ static int submit_io(int opcode, char *command, const char *desc, int argc, char
 		__u32	namespace_id;
 		__u64	start_block;
 		__u16	block_count;
+		__u16	block_size;
 		__u64	data_size;
 		__u64	metadata_size;
 		__u64	ref_tag;
@@ -7799,7 +8040,6 @@ static int submit_io(int opcode, char *command, const char *desc, int argc, char
 		__u16	dspec;
 		__u8	dsmgmt;
 		bool	show;
-		bool	dry_run;
 		bool	latency;
 		bool	force;
 	};
@@ -7808,6 +8048,7 @@ static int submit_io(int opcode, char *command, const char *desc, int argc, char
 		.namespace_id		= 0,
 		.start_block		= 0,
 		.block_count		= 0,
+		.block_size		= 0,
 		.data_size		= 0,
 		.metadata_size		= 0,
 		.ref_tag		= 0,
@@ -7824,7 +8065,6 @@ static int submit_io(int opcode, char *command, const char *desc, int argc, char
 		.dspec			= 0,
 		.dsmgmt			= 0,
 		.show			= false,
-		.dry_run		= false,
 		.latency		= false,
 		.force			= false,
 	};
@@ -7833,6 +8073,7 @@ static int submit_io(int opcode, char *command, const char *desc, int argc, char
 		  OPT_UINT("namespace-id",      'n', &cfg.namespace_id,      namespace_id_desired),
 		  OPT_SUFFIX("start-block",     's', &cfg.start_block,       start_block_addr),
 		  OPT_SHRT("block-count",       'c', &cfg.block_count,       block_count),
+		  OPT_SHRT("block-size",        'b', &cfg.block_size,        block_size),
 		  OPT_SUFFIX("data-size",       'z', &cfg.data_size,         data_size),
 		  OPT_SUFFIX("metadata-size",   'y', &cfg.metadata_size,     metadata_size),
 		  OPT_SUFFIX("ref-tag",         'r', &cfg.ref_tag,           ref_tag),
@@ -7849,21 +8090,21 @@ static int submit_io(int opcode, char *command, const char *desc, int argc, char
 		  OPT_SHRT("dir-spec",          'S', &cfg.dspec,             dspec),
 		  OPT_BYTE("dsm",               'D', &cfg.dsmgmt,            dsm),
 		  OPT_FLAG("show-command",      'V', &cfg.show,              show),
-		  OPT_FLAG("dry-run",           'w', &cfg.dry_run,           dry),
+		  OPT_FLAG("dry-run",           'w', &nvme_cfg.dry_run,      dry_run),
 		  OPT_FLAG("latency",           't', &cfg.latency,           latency),
 		  OPT_FLAG("force",               0, &cfg.force,             force));
 
 	if (opcode != nvme_cmd_write) {
-		err = parse_and_open(&dev, argc, argv, desc, opts);
+		err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 		if (err)
 			return err;
 	} else {
 		err = parse_args(argc, argv, desc, opts);
 		if (err)
 			return err;
-		err = open_exclusive(&dev, argc, argv, cfg.force);
+		err = open_exclusive(&ctx, &hdl, argc, argv, cfg.force);
 		if (err) {
-			if (errno == EBUSY) {
+			if (err == -EBUSY) {
 				fprintf(stderr, "Failed to open %s.\n", basename(argv[optind]));
 				fprintf(stderr, "Namespace is currently busy.\n");
 				if (!cfg.force)
@@ -7877,9 +8118,9 @@ static int submit_io(int opcode, char *command, const char *desc, int argc, char
 	}
 
 	if (!cfg.namespace_id) {
-		err = nvme_get_nsid(dev_fd(dev), &cfg.namespace_id);
+		err = nvme_get_nsid(hdl, &cfg.namespace_id);
 		if (err < 0) {
-			nvme_show_error("get-namespace-id: %s", nvme_strerror(errno));
+			nvme_show_error("get-namespace-id: %s", nvme_strerror(err));
 			return err;
 		}
 	}
@@ -7933,40 +8174,49 @@ static int submit_io(int opcode, char *command, const char *desc, int argc, char
 		return -EINVAL;
 	}
 
-	ns = nvme_alloc(sizeof(*ns));
-	if (!ns)
-		return -ENOMEM;
+	if (cfg.block_size) {
+		logical_block_size = cfg.block_size;
+		ms = cfg.metadata_size;
+	} else {
+		ns = nvme_alloc(sizeof(*ns));
+		if (!ns)
+			return -ENOMEM;
 
-	err = nvme_cli_identify_ns(dev, cfg.namespace_id, ns);
-	if (err > 0) {
-		nvme_show_status(err);
-		return err;
-	} else if (err < 0) {
-		nvme_show_error("identify namespace: %s", nvme_strerror(errno));
-		return err;
-	}
+		err = nvme_identify_ns(hdl, cfg.namespace_id, ns);
+		if (err > 0) {
+			nvme_show_status(err);
+			return err;
+		} else if (err < 0) {
+			nvme_show_error("identify namespace: %s", nvme_strerror(err));
+			return err;
+		}
 
-	nvme_id_ns_flbas_to_lbaf_inuse(ns->flbas, &lba_index);
-	logical_block_size = 1 << ns->lbaf[lba_index].ds;
-	ms = le16_to_cpu(ns->lbaf[lba_index].ms);
+		nvme_id_ns_flbas_to_lbaf_inuse(ns->flbas, &lba_index);
+		logical_block_size = 1 << ns->lbaf[lba_index].ds;
+		ms = le16_to_cpu(ns->lbaf[lba_index].ms);
 
-	nvm_ns = nvme_alloc(sizeof(*nvm_ns));
-	if (!nvm_ns)
-		return -ENOMEM;
+		nvm_ns = nvme_alloc(sizeof(*nvm_ns));
+		if (!nvm_ns)
+			return -ENOMEM;
 
-	err = nvme_identify_ns_csi(dev_fd(dev), cfg.namespace_id, 0, NVME_CSI_NVM, nvm_ns);
-	if (!err)
-		get_pif_sts(ns, nvm_ns, &pif, &sts);
+		err = nvme_identify_csi_ns(hdl, cfg.namespace_id, NVME_CSI_NVM, 0,
+				   nvm_ns);
+		if (!err)
+			get_pif_sts(ns, nvm_ns, &pif, &sts);
 
-	pi_size = (pif == NVME_NVM_PIF_16B_GUARD) ? 8 : 16;
-	if (NVME_FLBAS_META_EXT(ns->flbas)) {
-		/*
-		 * No meta data is transferred for PRACT=1 and MD=PI size:
-		 *   5.2.2.1 Protection Information and Write Commands
-		 *   5.2.2.2 Protection Information and Read Commands
-		 */
-		if (!((cfg.prinfo & 0x8) != 0 && ms == pi_size))
-			logical_block_size += ms;
+		pi_size = (pif == NVME_NVM_PIF_16B_GUARD) ? 8 : 16;
+		if (NVME_FLBAS_META_EXT(ns->flbas)) {
+			/*
+			 * No meta data is transferred for PRACT=1 and MD=PI size:
+			 *   5.2.2.1 Protection Information and Write Commands
+			 *   5.2.2.2 Protection Information and Read Commands
+			 */
+			if (!((cfg.prinfo & 0x8) != 0 && ms == pi_size))
+				logical_block_size += ms;
+		}
+
+		if (invalid_tags(cfg.storage_tag, cfg.ref_tag, sts, pif))
+			return -EINVAL;
 	}
 
 	buffer_size = ((long long)cfg.block_count + 1) * logical_block_size;
@@ -7987,8 +8237,10 @@ static int submit_io(int opcode, char *command, const char *desc, int argc, char
 	}
 
 	buffer = nvme_alloc_huge(buffer_size, &mh);
-	if (!buffer)
+	if (!buffer) {
+		nvme_show_error("failed to allocate huge memory");
 		return -ENOMEM;
+	}
 
 	if (cfg.metadata_size) {
 		mbuffer_size = ((unsigned long long)cfg.block_count + 1) * ms;
@@ -8003,9 +8255,6 @@ static int submit_io(int opcode, char *command, const char *desc, int argc, char
 			return -ENOMEM;
 		memset(mbuffer, 0, mbuffer_size);
 	}
-
-	if (invalid_tags(cfg.storage_tag, cfg.ref_tag, sts, pif))
-		return -EINVAL;
 
 	if (opcode & 1) {
 		err = read(dfd, (void *)buffer, cfg.data_size);
@@ -8025,7 +8274,7 @@ static int submit_io(int opcode, char *command, const char *desc, int argc, char
 		}
 	}
 
-	if (cfg.show || cfg.dry_run) {
+	if (cfg.show || nvme_cfg.dry_run) {
 		printf("opcode       : %02x\n", opcode);
 		printf("nsid         : %02x\n", cfg.namespace_id);
 		printf("flags        : %02x\n", 0);
@@ -8043,38 +8292,34 @@ static int submit_io(int opcode, char *command, const char *desc, int argc, char
 		printf("pif             : %02x\n", pif);
 		printf("sts             : %02x\n", sts);
 	}
-	if (cfg.dry_run)
+	if (nvme_cfg.dry_run)
 		return 0;
 
-	struct nvme_io_args args = {
-		.args_size	= sizeof(args),
-		.fd		= dev_fd(dev),
-		.nsid		= cfg.namespace_id,
-		.slba		= cfg.start_block,
-		.nlb		= nblocks,
-		.control	= control,
-		.dsm		= cfg.dsmgmt,
-		.sts		= sts,
-		.pif		= pif,
-		.dspec		= cfg.dspec,
-		.reftag_u64	= cfg.ref_tag,
-		.apptag		= cfg.app_tag,
-		.appmask	= cfg.app_tag_mask,
-		.storage_tag	= cfg.storage_tag,
-		.data_len	= buffer_size,
-		.data		= buffer,
-		.metadata_len	= mbuffer_size,
-		.metadata	= mbuffer,
-		.timeout	= nvme_cfg.timeout,
-		.result		= NULL,
-	};
+	nvme_init_io(&cmd, opcode, cfg.namespace_id, cfg.start_block, buffer,
+		     buffer_size, mbuffer, mbuffer_size);
+	cmd.cdw12 = NVME_FIELD_ENCODE(nblocks,
+			NVME_IOCS_COMMON_CDW12_NLB_SHIFT,
+			NVME_IOCS_COMMON_CDW12_NLB_MASK) |
+		    NVME_FIELD_ENCODE(control,
+			NVME_IOCS_COMMON_CDW12_CONTROL_SHIFT,
+			NVME_IOCS_COMMON_CDW12_CONTROL_MASK);
+	cmd.cdw13 = NVME_FIELD_ENCODE(cfg.dspec,
+			NVME_IOCS_COMMON_CDW13_DSPEC_SHIFT,
+			NVME_IOCS_COMMON_CDW13_DSPEC_MASK) |
+		    NVME_FIELD_ENCODE(cfg.dsmgmt,
+			NVME_IOCS_COMMON_CDW13_DSM_SHIFT,
+			NVME_IOCS_COMMON_CDW13_DSM_MASK);
+	nvme_init_var_size_tags((struct nvme_passthru_cmd64 *)&cmd, pif, sts,
+		cfg.ref_tag, cfg.storage_tag);
+	nvme_init_app_tag((struct nvme_passthru_cmd64 *)&cmd, cfg.app_tag,
+		cfg.app_tag_mask);
 	gettimeofday(&start_time, NULL);
-	err = nvme_io(&args, opcode);
+	err = nvme_submit_admin_passthru(hdl, &cmd, NULL);
 	gettimeofday(&end_time, NULL);
 	if (cfg.latency)
 		printf(" latency: %s: %llu us\n", command, elapsed_utime(start_time, end_time));
 	if (err < 0) {
-		nvme_show_error("submit-io: %s", nvme_strerror(errno));
+		nvme_show_error("submit-io: %s", nvme_strerror(err));
 	} else if (err) {
 		nvme_show_status(err);
 	} else {
@@ -8096,7 +8341,7 @@ static int submit_io(int opcode, char *command, const char *desc, int argc, char
 	return err;
 }
 
-static int compare(int argc, char **argv, struct command *cmd, struct plugin *plugin)
+static int compare(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
 	const char *desc = "Compare specified logical blocks on\n"
 		"device with specified data buffer; return failure if buffer\n"
@@ -8105,7 +8350,7 @@ static int compare(int argc, char **argv, struct command *cmd, struct plugin *pl
 	return submit_io(nvme_cmd_compare, "compare", desc, argc, argv);
 }
 
-static int read_cmd(int argc, char **argv, struct command *cmd, struct plugin *plugin)
+static int read_cmd(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
 	const char *desc = "Copy specified logical blocks on the given\n"
 		"device to specified data buffer (default buffer is stdout).";
@@ -8113,7 +8358,7 @@ static int read_cmd(int argc, char **argv, struct command *cmd, struct plugin *p
 	return submit_io(nvme_cmd_read, "read", desc, argc, argv);
 }
 
-static int write_cmd(int argc, char **argv, struct command *cmd, struct plugin *plugin)
+static int write_cmd(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
 	const char *desc = "Copy from provided data buffer (default\n"
 		"buffer is stdin) to specified logical blocks on the given device.";
@@ -8121,11 +8366,13 @@ static int write_cmd(int argc, char **argv, struct command *cmd, struct plugin *
 	return submit_io(nvme_cmd_write, "write", desc, argc, argv);
 }
 
-static int verify_cmd(int argc, char **argv, struct command *cmd, struct plugin *plugin)
+static int verify_cmd(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
 	_cleanup_free_ struct nvme_nvm_id_ns *nvm_ns = NULL;
 	_cleanup_free_ struct nvme_id_ns *ns = NULL;
-	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
+	struct nvme_passthru_cmd cmd;
 	__u8 sts = 0, pif = 0;
 	__u16 control = 0;
 	int err;
@@ -8177,7 +8424,8 @@ static int verify_cmd(int argc, char **argv, struct command *cmd, struct plugin 
 		  OPT_SUFFIX("storage-tag",     'S', &cfg.storage_tag,       storage_tag),
 		  OPT_FLAG("storage-tag-check", 'C', &cfg.storage_tag_check, storage_tag_check));
 
-	err = parse_and_open(&dev, argc, argv, desc, opts);
+
+	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err)
 		return err;
 
@@ -8193,9 +8441,9 @@ static int verify_cmd(int argc, char **argv, struct command *cmd, struct plugin 
 		control |= NVME_IO_STC;
 
 	if (!cfg.namespace_id) {
-		err = nvme_get_nsid(dev_fd(dev), &cfg.namespace_id);
+		err = nvme_get_nsid(hdl, &cfg.namespace_id);
 		if (err < 0) {
-			nvme_show_error("get-namespace-id: %s", nvme_strerror(errno));
+			nvme_show_error("get-namespace-id: %s", nvme_strerror(err));
 			return err;
 		}
 	}
@@ -8204,9 +8452,9 @@ static int verify_cmd(int argc, char **argv, struct command *cmd, struct plugin 
 	if (!ns)
 		return -ENOMEM;
 
-	err = nvme_cli_identify_ns(dev, cfg.namespace_id, ns);
+	err = nvme_identify_ns(hdl, cfg.namespace_id, ns);
 	if (err < 0) {
-		nvme_show_error("identify namespace: %s", nvme_strerror(errno));
+		nvme_show_error("identify namespace: %s", nvme_strerror(err));
 		return err;
 	} else if (err) {
 		nvme_show_status(err);
@@ -8217,8 +8465,8 @@ static int verify_cmd(int argc, char **argv, struct command *cmd, struct plugin 
 	if (!nvm_ns)
 		return -ENOMEM;
 
-	err = nvme_identify_ns_csi(dev_fd(dev), cfg.namespace_id, 0,
-				   NVME_CSI_NVM, nvm_ns);
+	err = nvme_identify_csi_ns(hdl, cfg.namespace_id, NVME_CSI_NVM, 0,
+				   nvm_ns);
 	if (!err) {
 		get_pif_sts(ns, nvm_ns, &pif, &sts);
 	}
@@ -8226,25 +8474,15 @@ static int verify_cmd(int argc, char **argv, struct command *cmd, struct plugin 
 	if (invalid_tags(cfg.storage_tag, cfg.ref_tag, sts, pif))
 		return -EINVAL;
 
-	struct nvme_io_args args = {
-		.args_size	= sizeof(args),
-		.fd		= dev_fd(dev),
-		.nsid		= cfg.namespace_id,
-		.slba		= cfg.start_block,
-		.nlb		= cfg.block_count,
-		.control	= control,
-		.reftag_u64	= cfg.ref_tag,
-		.apptag		= cfg.app_tag,
-		.appmask	= cfg.app_tag_mask,
-		.sts		= sts,
-		.pif		= pif,
-		.storage_tag	= cfg.storage_tag,
-		.timeout	= nvme_cfg.timeout,
-		.result		= NULL,
-	};
-	err = nvme_verify(&args);
+	nvme_init_verify(&cmd, cfg.namespace_id, cfg.start_block,
+		cfg.block_count, control, 0, NULL, 0, NULL, 0);
+	nvme_init_var_size_tags((struct nvme_passthru_cmd64 *)&cmd, pif, sts,
+		cfg.ref_tag, cfg.storage_tag);
+	nvme_init_app_tag((struct nvme_passthru_cmd64 *)&cmd, cfg.app_tag,
+		cfg.app_tag_mask);
+	err = nvme_submit_admin_passthru(hdl, &cmd, NULL);
 	if (err < 0)
-		nvme_show_error("verify: %s", nvme_strerror(errno));
+		nvme_show_error("verify: %s", nvme_strerror(err));
 	else if (err != 0)
 		nvme_show_status(err);
 	else
@@ -8253,7 +8491,7 @@ static int verify_cmd(int argc, char **argv, struct command *cmd, struct plugin 
 	return err;
 }
 
-static int sec_recv(int argc, char **argv, struct command *cmd, struct plugin *plugin)
+static int sec_recv(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
 	const char *desc = "Obtain results of one or more\n"
 		"previously submitted security-sends. Results, and association\n"
@@ -8264,8 +8502,11 @@ static int sec_recv(int argc, char **argv, struct command *cmd, struct plugin *p
 	const char *size = "size of buffer (prints to stdout on success)";
 	const char *al = "allocation length (cf. SPC-4)";
 
-	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
 	_cleanup_free_ void *sec_buf = NULL;
+	struct nvme_passthru_cmd cmd;
+	nvme_print_flags_t flags;
 	int err;
 
 	struct config {
@@ -8297,9 +8538,15 @@ static int sec_recv(int argc, char **argv, struct command *cmd, struct plugin *p
 		  OPT_UINT("al",           't', &cfg.al,           al),
 		  OPT_FLAG("raw-binary",   'b', &cfg.raw_binary,   raw_dump));
 
-	err = parse_and_open(&dev, argc, argv, desc, opts);
+	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err)
 		return err;
+
+	err = validate_output_format(nvme_cfg.output_format, &flags);
+	if (err < 0) {
+		nvme_show_error("Invalid output format");
+		return err;
+	}
 
 	if (cfg.size) {
 		sec_buf = nvme_alloc(cfg.size);
@@ -8307,24 +8554,12 @@ static int sec_recv(int argc, char **argv, struct command *cmd, struct plugin *p
 			return -ENOMEM;
 	}
 
-	struct nvme_security_receive_args args = {
-		.args_size	= sizeof(args),
-		.nsid		= cfg.namespace_id,
-		.nssf		= cfg.nssf,
-		.spsp0		= cfg.spsp & 0xff,
-		.spsp1		= cfg.spsp >> 8,
-		.secp		= cfg.secp,
-		.al		= cfg.al,
-		.data_len	= cfg.size,
-		.data		= sec_buf,
-		.timeout	= nvme_cfg.timeout,
-		.result		= NULL,
-	};
-
-	err = nvme_cli_security_receive(dev, &args);
+	nvme_init_security_receive(&cmd, cfg.namespace_id, cfg.nssf, cfg.spsp,
+				   cfg.secp, cfg.al, sec_buf, cfg.size);
+	err = nvme_submit_admin_passthru(hdl, &cmd, NULL);
 	if (err < 0) {
-		nvme_show_error("security receive: %s", nvme_strerror(errno));
-	} else if (err != 0) {
+		nvme_show_error("security receive: %s", nvme_strerror(err));
+	} else if (err > 0) {
 		nvme_show_status(err);
 	} else {
 		printf("NVME Security Receive Command Success\n");
@@ -8337,7 +8572,7 @@ static int sec_recv(int argc, char **argv, struct command *cmd, struct plugin *p
 	return err;
 }
 
-static int get_lba_status(int argc, char **argv, struct command *cmd,
+static int get_lba_status(int argc, char **argv, struct command *acmd,
 		struct plugin *plugin)
 {
 	const char *desc = "Information about potentially unrecoverable LBAs.";
@@ -8350,7 +8585,9 @@ static int get_lba_status(int argc, char **argv, struct command *cmd,
 	const char *rl =
 	    "Range Length(RL) specifies the length of the range of contiguous LBAs beginning at SLBA";
 
-	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
+	struct nvme_passthru_cmd cmd;
 	_cleanup_free_ void *buf = NULL;
 	nvme_print_flags_t flags;
 	unsigned long buf_len;
@@ -8379,7 +8616,7 @@ static int get_lba_status(int argc, char **argv, struct command *cmd,
 		  OPT_BYTE("action",       'a', &cfg.atype,         atype),
 		  OPT_SHRT("range-len",    'l', &cfg.rl,            rl));
 
-	err = parse_and_open(&dev, argc, argv, desc, opts);
+	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err)
 		return err;
 
@@ -8399,30 +8636,20 @@ static int get_lba_status(int argc, char **argv, struct command *cmd,
 	if (!buf)
 		return -ENOMEM;
 
-	struct nvme_get_lba_status_args args = {
-		.args_size	= sizeof(args),
-		.fd		= dev_fd(dev),
-		.nsid		= cfg.namespace_id,
-		.slba		= cfg.slba,
-		.mndw		= cfg.mndw,
-		.rl		= cfg.rl,
-		.atype		= cfg.atype,
-		.lbas		= buf,
-		.timeout	= nvme_cfg.timeout,
-		.result		= NULL,
-	};
-	err = nvme_get_lba_status(&args);
+	nvme_init_get_lba_status(&cmd, cfg.namespace_id, cfg.slba, cfg.mndw,
+				 cfg.atype, cfg.rl, buf);
+	err = nvme_submit_admin_passthru(hdl, &cmd, NULL);
 	if (!err)
 		nvme_show_lba_status(buf, buf_len, flags);
 	else if (err > 0)
 		nvme_show_status(err);
 	else
-		nvme_show_error("get lba status: %s", nvme_strerror(errno));
+		nvme_show_error("get lba status: %s", nvme_strerror(err));
 
 	return err;
 }
 
-static int capacity_mgmt(int argc, char **argv, struct command *cmd, struct plugin *plugin)
+static int capacity_mgmt(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
 	const char *desc = "Host software uses the Capacity Management command to\n"
 		"configure Endurance Groups and NVM Sets in an NVM subsystem by either\n"
@@ -8435,9 +8662,12 @@ static int capacity_mgmt(int argc, char **argv, struct command *cmd, struct plug
 	const char *cap_upper =
 	    "Most significant 32 bits of the capacity in bytes of the Endurance Group or NVM Set to be created";
 
-	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
+	struct nvme_passthru_cmd cmd;
 	int err = -1;
 	__u32 result;
+	nvme_print_flags_t flags;
 
 	struct config {
 		__u8	operation;
@@ -8459,26 +8689,25 @@ static int capacity_mgmt(int argc, char **argv, struct command *cmd, struct plug
 		  OPT_UINT("cap-lower",   'l', &cfg.dw11,         cap_lower),
 		  OPT_UINT("cap-upper",   'u', &cfg.dw12,         cap_upper));
 
-	err = parse_and_open(&dev, argc, argv, desc, opts);
+
+	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err)
 		return err;
+
+	err = validate_output_format(nvme_cfg.output_format, &flags);
+	if (err < 0) {
+		nvme_show_error("Invalid output format");
+		return err;
+	}
 
 	if (cfg.operation > 0xf) {
 		nvme_show_error("invalid operation field: %u", cfg.operation);
 		return -1;
 	}
 
-	struct nvme_capacity_mgmt_args args = {
-		.args_size	= sizeof(args),
-		.fd		= dev_fd(dev),
-		.op		= cfg.operation,
-		.element_id	= cfg.element_id,
-		.cdw11		= cfg.dw11,
-		.cdw12		= cfg.dw12,
-		.timeout	= nvme_cfg.timeout,
-		.result		= &result,
-	};
-	err = nvme_capacity_mgmt(&args);
+	nvme_init_capacity_mgmt(&cmd, cfg.operation, cfg.element_id,
+		(__u64)cfg.dw12 << 32 | cfg.dw11);
+	err = nvme_submit_admin_passthru(hdl, &cmd, &result);
 	if (!err) {
 		printf("Capacity Management Command is Success\n");
 		if (cfg.operation == 1)
@@ -8488,20 +8717,22 @@ static int capacity_mgmt(int argc, char **argv, struct command *cmd, struct plug
 	} else if (err > 0) {
 		nvme_show_status(err);
 	} else if (err < 0) {
-		nvme_show_error("capacity management: %s", nvme_strerror(errno));
+		nvme_show_error("capacity management: %s", nvme_strerror(err));
 	}
 
 	return err;
 }
 
-static int dir_receive(int argc, char **argv, struct command *cmd, struct plugin *plugin)
+static int dir_receive(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
 	const char *desc = "Read directive parameters of the specified directive type.";
 	const char *nsr = "namespace stream requested";
 
 	nvme_print_flags_t flags = NORMAL;
-	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
 	_cleanup_free_ void *buf = NULL;
+	struct nvme_passthru_cmd cmd;
 	__u32 result;
 	__u32 dw12 = 0;
 	int err;
@@ -8538,7 +8769,7 @@ static int dir_receive(int argc, char **argv, struct command *cmd, struct plugin
 		  OPT_SHRT("req-resource",   'r', &cfg.nsr,            nsr),
 		  OPT_FLAG("human-readable", 'H', &cfg.human_readable, human_readable_directive));
 
-	err = parse_and_open(&dev, argc, argv, desc, opts);
+	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err)
 		return err;
 
@@ -8588,39 +8819,29 @@ static int dir_receive(int argc, char **argv, struct command *cmd, struct plugin
 			return -ENOMEM;
 	}
 
-	struct nvme_directive_recv_args args = {
-		.args_size	= sizeof(args),
-		.fd		= dev_fd(dev),
-		.nsid		= cfg.namespace_id,
-		.dspec		= cfg.dspec,
-		.doper		= cfg.doper,
-		.dtype		= cfg.dtype,
-		.cdw12		= dw12,
-		.data_len	= cfg.data_len,
-		.data		= buf,
-		.timeout	= nvme_cfg.timeout,
-		.result		= &result,
-	};
-	err = nvme_directive_recv(&args);
+	nvme_init_directive_recv(&cmd, cfg.namespace_id, cfg.doper, cfg.dtype,
+		cfg.dspec, buf, cfg.data_len);
+	cmd.cdw12 = dw12;
+	err = nvme_submit_admin_passthru(hdl, &cmd, &result);
 	if (!err)
 		nvme_directive_show(cfg.dtype, cfg.doper, cfg.dspec, cfg.namespace_id,
 				    result, buf, cfg.data_len, flags);
 	else if (err > 0)
 		nvme_show_status(err);
 	else if (err < 0)
-		nvme_show_error("dir-receive: %s", nvme_strerror(errno));
+		nvme_show_error("dir-receive: %s", nvme_strerror(err));
 
 	return err;
 }
 
 /* rpmb_cmd_option is defined in nvme-rpmb.c */
 extern int rpmb_cmd_option(int, char **, struct command *, struct plugin *);
-static int rpmb_cmd(int argc, char **argv, struct command *cmd, struct plugin *plugin)
+static int rpmb_cmd(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
-	return rpmb_cmd_option(argc, argv, cmd, plugin);
+	return rpmb_cmd_option(argc, argv, acmd, plugin);
 }
 
-static int lockdown_cmd(int argc, char **argv, struct command *cmd, struct plugin *plugin)
+static int lockdown_cmd(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
 	const char *desc = "The Lockdown command is used to control the\n"
 		"Command and Feature Lockdown capability which configures the\n"
@@ -8641,7 +8862,9 @@ static int lockdown_cmd(int argc, char **argv, struct command *cmd, struct plugi
 		"List that is used by the command.If this field is cleared to 0h,\n"
 		"then no UUID index is specified";
 
-	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
+	struct nvme_passthru_cmd cmd;
 	int err = -1;
 
 	struct config {
@@ -8667,7 +8890,7 @@ static int lockdown_cmd(int argc, char **argv, struct command *cmd, struct plugi
 		  OPT_BYTE("scp",	's', &cfg.scp,      scp_desc),
 		  OPT_BYTE("uuid",	'U', &cfg.uuid,     uuid_desc));
 
-	err = parse_and_open(&dev, argc, argv, desc, opts);
+	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err)
 		return err;
 
@@ -8689,20 +8912,11 @@ static int lockdown_cmd(int argc, char **argv, struct command *cmd, struct plugi
 		return -1;
 	}
 
-	struct nvme_lockdown_args args = {
-		.args_size	= sizeof(args),
-		.fd		= dev_fd(dev),
-		.scp		= cfg.scp,
-		.prhbt		= cfg.prhbt,
-		.ifc		= cfg.ifc,
-		.ofi		= cfg.ofi,
-		.uuidx		= cfg.uuid,
-		.timeout	= nvme_cfg.timeout,
-		.result		= NULL,
-	};
-	err = nvme_lockdown(&args);
+	nvme_init_lockdown(&cmd, cfg.scp, cfg.prhbt, cfg.ifc, cfg.ofi,
+			   cfg.uuid);
+	err = nvme_submit_admin_passthru(hdl, &cmd, NULL);
 	if (err < 0)
-		nvme_show_error("lockdown: %s", nvme_strerror(errno));
+		nvme_show_error("lockdown: %s", nvme_strerror(err));
 	else if (err > 0)
 		nvme_show_status(err);
 	else
@@ -8737,7 +8951,7 @@ static void passthru_print_read_output(struct passthru_config cfg, void *data, i
 }
 
 static int passthru(int argc, char **argv, bool admin,
-		const char *desc, struct command *cmd)
+		const char *desc, struct command *acmd)
 {
 	const char *opcode = "opcode (required)";
 	const char *cflags = "command flags";
@@ -8760,7 +8974,8 @@ static int passthru(int argc, char **argv, bool admin,
 	const char *prefill = "prefill buffers with known byte-value, default 0";
 
 	_cleanup_huge_ struct nvme_mem_huge mh = { 0, };
-	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
 	_cleanup_fd_ int dfd = -1, mfd = -1;
 	int flags;
 	int mode = 0644;
@@ -8770,6 +8985,7 @@ static int passthru(int argc, char **argv, bool admin,
 	__u32 result;
 	const char *cmd_name = NULL;
 	struct timeval start_time, end_time;
+	nvme_print_flags_t flags_t;
 
 	struct passthru_config cfg = {
 		.opcode		= 0,
@@ -8791,7 +9007,6 @@ static int passthru(int argc, char **argv, bool admin,
 		.metadata	= "",
 		.raw_binary	= false,
 		.show_command	= false,
-		.dry_run	= false,
 		.read		= false,
 		.write		= false,
 		.latency	= false,
@@ -8817,14 +9032,25 @@ static int passthru(int argc, char **argv, bool admin,
 		  OPT_FILE("metadata",     'M', &cfg.metadata,     metadata),
 		  OPT_FLAG("raw-binary",   'b', &cfg.raw_binary,   raw_dump),
 		  OPT_FLAG("show-command", 's', &cfg.show_command, show),
-		  OPT_FLAG("dry-run",      'd', &cfg.dry_run,      dry),
+		  OPT_FLAG("dry-run",      'd', &nvme_cfg.dry_run, dry_run),
 		  OPT_FLAG("read",         'r', &cfg.read,         re),
 		  OPT_FLAG("write",        'w', &cfg.write,        wr),
 		  OPT_FLAG("latency",      'T', &cfg.latency,      latency));
 
-	err = parse_and_open(&dev, argc, argv, desc, opts);
+	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err)
 		return err;
+
+	err = validate_output_format(nvme_cfg.output_format, &flags_t);
+	if (err < 0) {
+		nvme_show_error("Invalid output format");
+		return err;
+	}
+
+	if (!argconfig_parse_seen(opts, "opcode")) {
+		nvme_show_error("%s: opcode parameter required", acmd->name);
+		return -EINVAL;
+	}
 
 	if (cfg.opcode & 0x01) {
 		cfg.write = true;
@@ -8872,8 +9098,10 @@ static int passthru(int argc, char **argv, bool admin,
 
 	if (cfg.data_len) {
 		data = nvme_alloc_huge(cfg.data_len, &mh);
-		if (!data)
+		if (!data) {
+			nvme_show_error("failed to allocate huge memory");
 			return -ENOMEM;
+		}
 
 		memset(data, cfg.prefill, cfg.data_len);
 		if (!cfg.read && !cfg.write) {
@@ -8888,7 +9116,7 @@ static int passthru(int argc, char **argv, bool admin,
 		}
 	}
 
-	if (cfg.show_command || cfg.dry_run) {
+	if (cfg.show_command || nvme_cfg.dry_run) {
 		printf("opcode       : %02x\n", cfg.opcode);
 		printf("flags        : %02x\n", cfg.flags);
 		printf("rsvd1        : %04x\n", cfg.rsvd);
@@ -8907,23 +9135,23 @@ static int passthru(int argc, char **argv, bool admin,
 		printf("cdw15        : %08x\n", cfg.cdw15);
 		printf("timeout_ms   : %08x\n", nvme_cfg.timeout);
 	}
-	if (cfg.dry_run)
+	if (nvme_cfg.dry_run)
 		return 0;
 
 	gettimeofday(&start_time, NULL);
 
 	if (admin)
-		err = nvme_cli_admin_passthru(dev, cfg.opcode, cfg.flags,
-					      cfg.rsvd,
-					      cfg.namespace_id, cfg.cdw2,
-					      cfg.cdw3, cfg.cdw10,
-					      cfg.cdw11, cfg.cdw12, cfg.cdw13,
-					      cfg.cdw14,
-					      cfg.cdw15, cfg.data_len, data,
-					      cfg.metadata_len,
-					      mdata, nvme_cfg.timeout, &result);
+		err = nvme_admin_passthru(hdl, cfg.opcode, cfg.flags,
+					  cfg.rsvd,
+					  cfg.namespace_id, cfg.cdw2,
+					  cfg.cdw3, cfg.cdw10,
+					  cfg.cdw11, cfg.cdw12, cfg.cdw13,
+					  cfg.cdw14,
+					  cfg.cdw15, cfg.data_len, data,
+					  cfg.metadata_len,
+					  mdata, nvme_cfg.timeout, &result);
 	else
-		err = nvme_io_passthru(dev_fd(dev), cfg.opcode, cfg.flags,
+		err = nvme_io_passthru(hdl, cfg.opcode, cfg.flags,
 				       cfg.rsvd,
 				       cfg.namespace_id, cfg.cdw2, cfg.cdw3,
 				       cfg.cdw10,
@@ -8941,7 +9169,7 @@ static int passthru(int argc, char **argv, bool admin,
 		       elapsed_utime(start_time, end_time));
 
 	if (err < 0) {
-		nvme_show_error("%s: %s", __func__, nvme_strerror(errno));
+		nvme_show_error("%s: %s", __func__, nvme_strerror(err));
 	} else if (err) {
 		nvme_show_status(err);
 	} else  {
@@ -8954,30 +9182,30 @@ static int passthru(int argc, char **argv, bool admin,
 	return err;
 }
 
-static int io_passthru(int argc, char **argv, struct command *cmd, struct plugin *plugin)
+static int io_passthru(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
 	const char *desc =
 	    "Send a user-defined IO command to the specified device via IOCTL passthrough, return results.";
 
-	return passthru(argc, argv, false, desc, cmd);
+	return passthru(argc, argv, false, desc, acmd);
 }
 
-static int admin_passthru(int argc, char **argv, struct command *cmd, struct plugin *plugin)
+static int admin_passthru(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
 	const char *desc =
 	    "Send a user-defined Admin command to the specified device via IOCTL passthrough, return results.";
 
-	return passthru(argc, argv, true, desc, cmd);
+	return passthru(argc, argv, true, desc, acmd);
 }
 
-static int gen_hostnqn_cmd(int argc, char **argv, struct command *command, struct plugin *plugin)
+static int gen_hostnqn_cmd(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
 	char *hostnqn;
 
 	hostnqn = nvmf_hostnqn_generate();
 	if (!hostnqn) {
 		nvme_show_error("\"%s\" not supported. Install lib uuid and rebuild.",
-				command->name);
+				acmd->name);
 		return -ENOTSUP;
 	}
 	printf("%s\n", hostnqn);
@@ -8985,7 +9213,7 @@ static int gen_hostnqn_cmd(int argc, char **argv, struct command *command, struc
 	return 0;
 }
 
-static int show_hostnqn_cmd(int argc, char **argv, struct command *command, struct plugin *plugin)
+static int show_hostnqn_cmd(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
 	char *hostnqn;
 
@@ -9005,7 +9233,7 @@ static int show_hostnqn_cmd(int argc, char **argv, struct command *command, stru
 }
 
 
-static int gen_dhchap_key(int argc, char **argv, struct command *command, struct plugin *plugin)
+static int gen_dhchap_key(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
 	const char *desc =
 	    "Generate a DH-HMAC-CHAP host key usable for NVMe In-Band Authentication.";
@@ -9119,8 +9347,9 @@ static int gen_dhchap_key(int argc, char **argv, struct command *command, struct
 		}
 	}
 
-	if (nvme_gen_dhchap_key(cfg.nqn, cfg.hmac, cfg.key_len, raw_secret, key) < 0)
-		return -errno;
+	err = nvme_gen_dhchap_key(cfg.nqn, cfg.hmac, cfg.key_len, raw_secret, key);
+	if (err)
+		return err;
 
 	crc = crc32(crc, key, cfg.key_len);
 	key[cfg.key_len++] = crc & 0xff;
@@ -9135,7 +9364,7 @@ static int gen_dhchap_key(int argc, char **argv, struct command *command, struct
 	return 0;
 }
 
-static int check_dhchap_key(int argc, char **argv, struct command *command, struct plugin *plugin)
+static int check_dhchap_key(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
 	const char *desc =
 	    "Check a DH-HMAC-CHAP host key for usability for NVMe In-Band Authentication.";
@@ -9235,18 +9464,17 @@ static int append_keyfile(const char *keyring, long id, const char *keyfile)
 	long kr_id;
 	char type;
 
-	kr_id = nvme_lookup_keyring(keyring);
-	if (kr_id <= 0) {
+	err = nvme_lookup_keyring(keyring, &kr_id);
+	if (err) {
 		nvme_show_error("Failed to lookup keyring '%s', %s",
-				keyring, strerror(errno));
-		return -errno;
+				keyring, strerror(-err));
+		return err;
 	}
 
 	identity = nvme_describe_key_serial(id);
 	if (!identity) {
-		nvme_show_error("Failed to get identity info, %s",
-			strerror(errno));
-		return -errno;
+		nvme_show_error("Failed to get identity info");
+		return -EINVAL;
 	}
 
 	if (sscanf(identity, "NVMe%01d%c%02d %*s", &ver, &type, &hmac) != 3) {
@@ -9254,19 +9482,19 @@ static int append_keyfile(const char *keyring, long id, const char *keyfile)
 		return -EINVAL;
 	}
 
-	key_data = nvme_read_key(kr_id, id, &key_len);
-	if (!key_data) {
+	err = nvme_read_key(kr_id, id, &key_len, &key_data);
+	if (err) {
 		nvme_show_error("Failed to read back derive TLS PSK, %s",
-			strerror(errno));
-		return -errno;
+			strerror(-err));
+		return err;
 	}
 
-	exported_key = nvme_export_tls_key_versioned(ver, hmac,
-						     key_data, key_len);
-	if (!exported_key) {
+	err = nvme_export_tls_key_versioned(ver, hmac, key_data,
+					    key_len, &exported_key);
+	if (err) {
 		nvme_show_error("Failed to export key, %s",
-			strerror(errno));
-		return -errno;
+			strerror(-err));
+		return err;
 	}
 
 	old_umask = umask(0);
@@ -9295,7 +9523,7 @@ out:
 	return err;
 }
 
-static int gen_tls_key(int argc, char **argv, struct command *command, struct plugin *plugin)
+static int gen_tls_key(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
 	const char *desc = "Generate a TLS key in NVMe PSK Interchange format.";
 	const char *secret =
@@ -9308,6 +9536,7 @@ static int gen_tls_key(int argc, char **argv, struct command *command, struct pl
 	const char *keytype = "Key type of the retained key.";
 	const char *insert = "Insert retained key into the keyring.";
 	const char *keyfile = "Update key file with the derive TLS PSK.";
+	const char *compat = "Use non-RFC 8446 compliant algorithm for deriving TLS PSK for older implementations";
 
 	_cleanup_free_ unsigned char *raw_secret = NULL;
 	_cleanup_free_ char *encoded_key = NULL;
@@ -9326,6 +9555,7 @@ static int gen_tls_key(int argc, char **argv, struct command *command, struct pl
 		unsigned char	hmac;
 		unsigned char	version;
 		bool		insert;
+		bool		compat;
 	};
 
 	struct config cfg = {
@@ -9338,6 +9568,7 @@ static int gen_tls_key(int argc, char **argv, struct command *command, struct pl
 		.hmac		= 1,
 		.version	= 0,
 		.insert		= false,
+		.compat		= false,
 	};
 
 	NVME_ARGS(opts,
@@ -9349,7 +9580,8 @@ static int gen_tls_key(int argc, char **argv, struct command *command, struct pl
 		  OPT_STR("keyfile",	'f', &cfg.keyfile,	keyfile),
 		  OPT_BYTE("hmac",	'm', &cfg.hmac,		hmac),
 		  OPT_BYTE("identity",	'I', &cfg.version,	version),
-		  OPT_FLAG("insert",	'i', &cfg.insert,	insert));
+		  OPT_FLAG("insert",	'i', &cfg.insert,	insert),
+		  OPT_FLAG("compat",	'C', &cfg.compat,	compat));
 
 	err = parse_args(argc, argv, desc, opts);
 	if (err)
@@ -9406,17 +9638,27 @@ static int gen_tls_key(int argc, char **argv, struct command *command, struct pl
 		}
 	}
 
-	encoded_key = nvme_export_tls_key(raw_secret, key_len);
+	err = nvme_export_tls_key(raw_secret, key_len, &encoded_key);
+	if (err) {
+		nvme_show_error("Failed to export key, %s", strerror(-err));
+		return err;
+	}
 	printf("%s\n", encoded_key);
 
 	if (cfg.insert) {
-		tls_key = nvme_insert_tls_key_versioned(cfg.keyring,
+		if (cfg.compat)
+			err = nvme_insert_tls_key_compat(cfg.keyring,
 					cfg.keytype, cfg.hostnqn,
 					cfg.subsysnqn, cfg.version,
-					cfg.hmac, raw_secret, key_len);
-		if (tls_key <= 0) {
-			nvme_show_error("Failed to insert key, error %d", errno);
-			return -errno;
+					cfg.hmac, raw_secret, key_len, &tls_key);
+		else
+			err = nvme_insert_tls_key_versioned(cfg.keyring,
+					cfg.keytype, cfg.hostnqn,
+					cfg.subsysnqn, cfg.version,
+					cfg.hmac, raw_secret, key_len, &tls_key);
+		if (err) {
+			nvme_show_error("Failed to insert key, error %d", err);
+			return err;
 		}
 
 		printf("Inserted TLS key %08x\n", (unsigned int)tls_key);
@@ -9431,7 +9673,7 @@ static int gen_tls_key(int argc, char **argv, struct command *command, struct pl
 	return 0;
 }
 
-static int check_tls_key(int argc, char **argv, struct command *command, struct plugin *plugin)
+static int check_tls_key(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
 	const char *desc = "Check a TLS key for NVMe PSK Interchange format.\n";
 	const char *keydata = "TLS key (in PSK Interchange format) to be validated.";
@@ -9442,6 +9684,7 @@ static int check_tls_key(int argc, char **argv, struct command *command, struct 
 	const char *keytype = "Key type of the retained key.";
 	const char *insert = "Insert retained key into the keyring.";
 	const char *keyfile = "Update key file with the derive TLS PSK.";
+	const char *compat = "Use non-RFC 8446 compliant algorithm for checking TLS PSK for older implementations.";
 
 	_cleanup_free_ unsigned char *decoded_key = NULL;
 	_cleanup_free_ char *hnqn = NULL;
@@ -9457,6 +9700,7 @@ static int check_tls_key(int argc, char **argv, struct command *command, struct 
 		char		*keyfile;
 		unsigned char	identity;
 		bool		insert;
+		bool		compat;
 	};
 
 	struct config cfg = {
@@ -9468,6 +9712,7 @@ static int check_tls_key(int argc, char **argv, struct command *command, struct 
 		.keyfile	= NULL,
 		.identity	= 0,
 		.insert		= false,
+		.compat		= false,
 	};
 
 	NVME_ARGS(opts,
@@ -9478,7 +9723,8 @@ static int check_tls_key(int argc, char **argv, struct command *command, struct 
 		  OPT_STR("keydata",	'd', &cfg.keydata,	keydata),
 		  OPT_STR("keyfile",	'f', &cfg.keyfile,	keyfile),
 		  OPT_BYTE("identity",	'I', &cfg.identity,	identity),
-		  OPT_FLAG("insert",	'i', &cfg.insert,	insert));
+		  OPT_FLAG("insert",	'i', &cfg.insert,	insert),
+		  OPT_FLAG("compat",	'C', &cfg.compat,	compat));
 
 	err = parse_args(argc, argv, desc, opts);
 	if (err)
@@ -9494,10 +9740,10 @@ static int check_tls_key(int argc, char **argv, struct command *command, struct 
 		return -EINVAL;
 	}
 
-	decoded_key = nvme_import_tls_key(cfg.keydata, &decoded_len, &hmac);
-	if (!decoded_key) {
-		nvme_show_error("Key decoding failed, error %d\n", errno);
-		return -errno;
+	err = nvme_import_tls_key(cfg.keydata, &decoded_len, &hmac, &decoded_key);
+	if (err) {
+		nvme_show_error("Key decoding failed, error %d\n", err);
+		return err;
 	}
 
 	if (cfg.subsysnqn) {
@@ -9514,13 +9760,21 @@ static int check_tls_key(int argc, char **argv, struct command *command, struct 
 	}
 
 	if (cfg.insert) {
-		tls_key = nvme_insert_tls_key_versioned(cfg.keyring,
+		if (cfg.compat)
+			err = nvme_insert_tls_key_compat(cfg.keyring,
 					cfg.keytype, cfg.hostnqn,
 					cfg.subsysnqn, cfg.identity,
-					hmac, decoded_key, decoded_len);
-		if (tls_key <= 0) {
-			nvme_show_error("Failed to insert key, error %d", errno);
-			return -errno;
+					hmac, decoded_key, decoded_len,
+					&tls_key);
+		else
+			err = nvme_insert_tls_key_versioned(cfg.keyring,
+					cfg.keytype, cfg.hostnqn,
+					cfg.subsysnqn, cfg.identity,
+					hmac, decoded_key, decoded_len,
+					&tls_key);
+		if (err) {
+			nvme_show_error("Failed to insert key, error %d", err);
+			return err;
 		}
 		printf("Inserted TLS key %08x\n", (unsigned int)tls_key);
 
@@ -9532,13 +9786,20 @@ static int check_tls_key(int argc, char **argv, struct command *command, struct 
 	} else {
 		_cleanup_free_ char *tls_id = NULL;
 
-		tls_id = nvme_generate_tls_key_identity(cfg.hostnqn,
+		if (cfg.compat)
+			err = nvme_generate_tls_key_identity_compat(cfg.hostnqn,
 					cfg.subsysnqn, cfg.identity,
-					hmac, decoded_key, decoded_len);
-		if (!tls_id) {
+					hmac, decoded_key, decoded_len,
+					&tls_id);
+		else
+			err = nvme_generate_tls_key_identity(cfg.hostnqn,
+					cfg.subsysnqn, cfg.identity,
+					hmac, decoded_key, decoded_len,
+					&tls_id);
+		if (err) {
 			nvme_show_error("Failed to generate identity, error %d",
-					errno);
-			return -errno;
+					err);
+			return err;
 		}
 		printf("%s\n", tls_id);
 	}
@@ -9549,39 +9810,41 @@ static void __scan_tls_key(long keyring_id, long key_id,
 			   char *desc, int desc_len, void *data)
 {
 	FILE *fd = data;
-	_cleanup_free_ const unsigned char *key_data = NULL;
+	_cleanup_free_ unsigned char *key_data = NULL;
 	_cleanup_free_ char *encoded_key = NULL;
 	int key_len;
 	int ver, hmac;
 	char type;
+	int err;
 
-	key_data = nvme_read_key(keyring_id, key_id, &key_len);
-	if (!key_data)
+	err = nvme_read_key(keyring_id, key_id, &key_len, &key_data);
+	if (err)
 		return;
 
 	if (sscanf(desc, "NVMe%01d%c%02d %*s", &ver, &type, &hmac) != 3)
 		return;
 
-	encoded_key = nvme_export_tls_key_versioned(ver, hmac,
-						    key_data, key_len);
-	if (!encoded_key)
+	err = nvme_export_tls_key_versioned(ver, hmac, key_data, key_len,
+					    &encoded_key);
+	if (err)
 		return;
 	fprintf(fd, "%s %s\n", desc, encoded_key);
 }
 
 static int import_key(const char *keyring, FILE *fd)
 {
-	long keyring_id;
+	long keyring_id, key;
 	char tls_str[512];
 	char *tls_key;
 	unsigned char *psk;
 	unsigned int hmac;
 	int linenum = -1, key_len;
+	int err;
 
-	keyring_id = nvme_lookup_keyring(keyring);
-	if (!keyring_id) {
+	err = nvme_lookup_keyring(keyring, &keyring_id);
+	if (err) {
 		nvme_show_error("Invalid keyring '%s'", keyring);
-		return -ENOKEY;
+		return err;
 	}
 
 	while (fgets(tls_str, 512, fd)) {
@@ -9595,14 +9858,16 @@ static int import_key(const char *keyring, FILE *fd)
 		*tls_key = '\0';
 		tls_key++;
 		tls_key[strcspn(tls_key, "\n")] = 0;
-		psk = nvme_import_tls_key(tls_key, &key_len, &hmac);
-		if (!psk) {
+		err = nvme_import_tls_key(tls_key, &key_len, &hmac, &psk);
+		if (err) {
 			nvme_show_error("Failed to import key in line %d",
 					linenum);
 			continue;
 		}
-		nvme_update_key(keyring_id, "psk", tls_str,
-				psk, key_len);
+		err = nvme_update_key(keyring_id, "psk", tls_str,
+				psk, key_len, &key);
+		if (err)
+			continue;
 		free(psk);
 	}
 
@@ -9610,7 +9875,7 @@ static int import_key(const char *keyring, FILE *fd)
 }
 
 
-static int tls_key(int argc, char **argv, struct command *command, struct plugin *plugin)
+static int tls_key(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
 	const char *desc = "Manipulation of TLS keys.\n";
 	const char *keyring = "Keyring for the retained key.";
@@ -9689,7 +9954,7 @@ static int tls_key(int argc, char **argv, struct command *command, struct plugin
 		err = nvme_scan_tls_keys(cfg.keyring, __scan_tls_key, fd);
 		if (err < 0) {
 			nvme_show_error("Export of TLS keys failed with '%s'",
-				nvme_strerror(errno));
+				nvme_strerror(err));
 			return err;
 		}
 
@@ -9701,7 +9966,7 @@ static int tls_key(int argc, char **argv, struct command *command, struct plugin
 		err = import_key(cfg.keyring, fd);
 		if (err) {
 			nvme_show_error("Import of TLS keys failed with '%s'",
-					nvme_strerror(errno));
+					nvme_strerror(err));
 			return err;
 		}
 
@@ -9711,7 +9976,7 @@ static int tls_key(int argc, char **argv, struct command *command, struct plugin
 		err = nvme_revoke_tls_key(cfg.keyring, cfg.keytype, cfg.revoke);
 		if (err) {
 			nvme_show_error("Failed to revoke key '%s'",
-					nvme_strerror(errno));
+					nvme_strerror(err));
 			return err;
 		}
 
@@ -9727,12 +9992,15 @@ static int tls_key(int argc, char **argv, struct command *command, struct plugin
 	return err;
 }
 
-static int show_topology_cmd(int argc, char **argv, struct command *command, struct plugin *plugin)
+static int show_topology_cmd(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
 	const char *desc = "Show the topology\n";
-	const char *ranking = "Ranking order: namespace|ctrl";
+	const char *output_format = "Output format: normal|json|binary|tabular";
+	const char *ranking = "Ranking order: namespace|ctrl|multipath";
 	nvme_print_flags_t flags;
-	_cleanup_nvme_root_ nvme_root_t r = NULL;
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
+	char *devname = NULL;
+	nvme_scan_filter_t filter = NULL;
 	enum nvme_cli_topo_ranking rank;
 	int err;
 
@@ -9764,57 +10032,75 @@ static int show_topology_cmd(int argc, char **argv, struct command *command, str
 		rank = NVME_CLI_TOPO_NAMESPACE;
 	} else if (!strcmp(cfg.ranking, "ctrl")) {
 		rank = NVME_CLI_TOPO_CTRL;
+	} else if (!strcmp(cfg.ranking, "multipath")) {
+		rank = NVME_CLI_TOPO_MULTIPATH;
 	} else {
 		nvme_show_error("Invalid ranking argument: %s", cfg.ranking);
 		return -EINVAL;
 	}
 
-	r = nvme_create_root(stderr, log_level);
-	if (!r) {
-		nvme_show_error("Failed to create topology root: %s", nvme_strerror(errno));
-		return -errno;
+	ctx = nvme_create_global_ctx(stderr, log_level);
+	if (!ctx) {
+		nvme_show_error("Failed to create global context");
+		return -ENOMEM;
 	}
 
-	err = nvme_scan_topology(r, NULL, NULL);
+	if (optind < argc)
+		devname = basename(argv[optind++]);
+
+	if (devname) {
+		int subsys_id, nsid;
+
+		if (sscanf(devname, "nvme%dn%d", &subsys_id, &nsid) != 2) {
+			nvme_show_error("Invalid device name %s\n", devname);
+			return -EINVAL;
+		}
+		filter = nvme_match_device_filter;
+	}
+
+	err = nvme_scan_topology(ctx, filter, (void *)devname);
 	if (err < 0) {
-		nvme_show_error("Failed to scan topology: %s", nvme_strerror(errno));
+		nvme_show_error("Failed to scan topology: %s", nvme_strerror(err));
 		return err;
 	}
 
-	nvme_show_topology(r, rank, flags);
+	if (flags & TABULAR)
+		nvme_show_topology_tabular(ctx, flags);
+	else
+		nvme_show_topology(ctx, rank, flags);
 
 	return err;
 }
 
-static int discover_cmd(int argc, char **argv, struct command *command, struct plugin *plugin)
+static int discover_cmd(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
 	const char *desc = "Send Get Log Page request to Discovery Controller.";
 
 	return nvmf_discover(desc, argc, argv, false);
 }
 
-static int connect_all_cmd(int argc, char **argv, struct command *command, struct plugin *plugin)
+static int connect_all_cmd(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
 	const char *desc = "Discover NVMeoF subsystems and connect to them";
 
 	return nvmf_discover(desc, argc, argv, true);
 }
 
-static int connect_cmd(int argc, char **argv, struct command *command, struct plugin *plugin)
+static int connect_cmd(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
 	const char *desc = "Connect to NVMeoF subsystem";
 
 	return nvmf_connect(desc, argc, argv);
 }
 
-static int disconnect_cmd(int argc, char **argv, struct command *command, struct plugin *plugin)
+static int disconnect_cmd(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
 	const char *desc = "Disconnect from NVMeoF subsystem";
 
 	return nvmf_disconnect(desc, argc, argv);
 }
 
-int disconnect_all_cmd(int argc, char **argv, struct command *command,
+int disconnect_all_cmd(int argc, char **argv, struct command *acmd,
 	struct plugin *plugin)
 {
 	const char *desc = "Disconnect from all connected NVMeoF subsystems";
@@ -9822,14 +10108,14 @@ int disconnect_all_cmd(int argc, char **argv, struct command *command,
 	return nvmf_disconnect_all(desc, argc, argv);
 }
 
-static int config_cmd(int argc, char **argv, struct command *command, struct plugin *plugin)
+static int config_cmd(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
 	const char *desc = "Configuration of NVMeoF subsystems";
 
 	return nvmf_config(desc, argc, argv);
 }
 
-static int dim_cmd(int argc, char **argv, struct command *command, struct plugin *plugin)
+static int dim_cmd(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
 	const char *desc =
 	    "Send Discovery Information Management command to a Discovery Controller (DC)";
@@ -9853,7 +10139,8 @@ static int nvme_mi(int argc, char **argv, __u8 admin_opcode, const char *desc)
 	_cleanup_fd_ int fd = -1;
 	int flags;
 	_cleanup_huge_ struct nvme_mem_huge mh = { 0, };
-	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
 	__u32 result;
 
 	struct config {
@@ -9885,9 +10172,14 @@ static int nvme_mi(int argc, char **argv, __u8 admin_opcode, const char *desc)
 		  OPT_UINT("nmd1", '1', &cfg.nmd1, nmd1),
 		  OPT_FILE("input-file", 'i', &cfg.input_file, input));
 
-	err = parse_and_open(&dev, argc, argv, desc, opts);
+	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err)
 		return err;
+
+	if (!argconfig_parse_seen(opts, "opcode")) {
+		nvme_show_error("%s: opcode parameter required", *argv);
+		return -EINVAL;
+	}
 
 	if (admin_opcode == nvme_admin_nvme_mi_send) {
 		flags = O_RDONLY;
@@ -9909,8 +10201,10 @@ static int nvme_mi(int argc, char **argv, __u8 admin_opcode, const char *desc)
 
 	if (cfg.data_len) {
 		data = nvme_alloc_huge(cfg.data_len, &mh);
-		if (!data)
+		if (!data) {
+			nvme_show_error("failed to allocate huge memory");
 			return -ENOMEM;
+		}
 
 		if (send) {
 			if (read(fd, data, cfg.data_len) < 0) {
@@ -9921,11 +10215,11 @@ static int nvme_mi(int argc, char **argv, __u8 admin_opcode, const char *desc)
 		}
 	}
 
-	err = nvme_cli_admin_passthru(dev, admin_opcode, 0, 0, cfg.namespace_id, 0, 0,
-				      cfg.nmimt << 11 | 4, cfg.opcode, cfg.nmd0, cfg.nmd1, 0, 0,
-				      cfg.data_len, data, 0, NULL, 0, &result);
+	err = nvme_admin_passthru(hdl, admin_opcode, 0, 0, cfg.namespace_id, 0, 0,
+				  cfg.nmimt << 11 | 4, cfg.opcode, cfg.nmd0, cfg.nmd1, 0, 0,
+				  cfg.data_len, data, 0, NULL, 0, &result);
 	if (err < 0) {
-		nvme_show_error("nmi_recv: %s", nvme_strerror(errno));
+		nvme_show_error("nmi_recv: %s", nvme_strerror(err));
 	} else if (err) {
 		nvme_show_status(err);
 	} else  {
@@ -9945,7 +10239,7 @@ static int nvme_mi(int argc, char **argv, __u8 admin_opcode, const char *desc)
 	return err;
 }
 
-static int nmi_recv(int argc, char **argv, struct command *cmd, struct plugin *plugin)
+static int nmi_recv(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
 	const char *desc =
 	    "Send a NVMe-MI Receive command to the specified device, return results.";
@@ -9953,11 +10247,665 @@ static int nmi_recv(int argc, char **argv, struct command *cmd, struct plugin *p
 	return nvme_mi(argc, argv, nvme_admin_nvme_mi_recv, desc);
 }
 
-static int nmi_send(int argc, char **argv, struct command *cmd, struct plugin *plugin)
+static int nmi_send(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
 	const char *desc = "Send a NVMe-MI Send command to the specified device, return results.";
 
 	return nvme_mi(argc, argv, nvme_admin_nvme_mi_send, desc);
+}
+
+static int get_mgmt_addr_list_log(int argc, char **argv, struct command *acmd, struct plugin *plugin)
+{
+	const char *desc = "Retrieve Management Address List Log, show it";
+	nvme_print_flags_t flags;
+	int err = -1;
+
+	_cleanup_free_ struct nvme_mgmt_addr_list_log *ma_log = NULL;
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
+
+	NVME_ARGS(opts);
+
+	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
+	if (err)
+		return err;
+
+	err = validate_output_format(nvme_cfg.output_format, &flags);
+	if (err < 0) {
+		nvme_show_error("Invalid output format");
+		return err;
+	}
+
+	ma_log = nvme_alloc(sizeof(*ma_log));
+	if (!ma_log)
+		return -ENOMEM;
+
+	err = nvme_get_log_mgmt_addr_list(hdl, ma_log, sizeof(*ma_log));
+	if (!err)
+		nvme_show_mgmt_addr_list_log(ma_log, flags);
+	else if (err > 0)
+		nvme_show_status(err);
+	else
+		nvme_show_perror("management address list log");
+
+	return err;
+}
+
+static int get_rotational_media_info_log(int argc, char **argv, struct command *acmd,
+					 struct plugin *plugin)
+{
+	const char *desc = "Retrieve Rotational Media Information Log, show it";
+	nvme_print_flags_t flags;
+	int err = -1;
+
+	_cleanup_free_ struct nvme_rotational_media_info_log *info = NULL;
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
+
+	struct config {
+		__u16 endgid;
+	};
+
+	struct config cfg = {
+		.endgid = 0,
+	};
+
+	NVME_ARGS(opts,
+		  OPT_UINT("endg-id", 'e', &cfg.endgid, endgid));
+
+	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
+	if (err)
+		return err;
+
+	err = validate_output_format(nvme_cfg.output_format, &flags);
+	if (err < 0) {
+		nvme_show_error("Invalid output format");
+		return err;
+	}
+
+	info = nvme_alloc(sizeof(*info));
+	if (!info)
+		return -ENOMEM;
+
+	err = nvme_get_log_rotational_media_info(hdl, cfg.endgid, info, sizeof(*info));
+	if (!err)
+		nvme_show_rotational_media_info_log(info, flags);
+	else if (err > 0)
+		nvme_show_status(err);
+	else
+		nvme_show_perror("rotational media info log");
+
+	return err;
+}
+
+static int get_dispersed_ns_psub(struct nvme_transport_handle *hdl, __u32 nsid,
+				 struct nvme_dispersed_ns_participating_nss_log **logp)
+{
+	int err;
+	__u64 header_len = sizeof(**logp);
+	__u64 psub_list_len;
+	struct nvme_dispersed_ns_participating_nss_log *log = nvme_alloc(header_len);
+	struct nvme_passthru_cmd cmd;
+
+	if (!log)
+		return -ENOMEM;
+
+	err = nvme_get_log_dispersed_ns_participating_nss(hdl, nsid, log, header_len);
+	if (err)
+		goto err_free;
+
+	psub_list_len = le64_to_cpu(log->numpsub) * NVME_NQN_LENGTH;
+
+	log = nvme_realloc(log, header_len + psub_list_len);
+	if (!log) {
+		err = -ENOMEM;
+		goto err_free;
+	}
+
+	nvme_init_get_log_dispersed_ns_participating_nss(&cmd, nsid,
+		(void *)log->participating_nss, psub_list_len);
+	cmd.cdw12 = header_len & 0xffffffff;
+	cmd.cdw13 = header_len >> 32;
+	err = nvme_get_log(hdl, &cmd, false, NVME_LOG_PAGE_PDU_SIZE, NULL);
+	if (err)
+		goto err_free;
+
+	*logp = log;
+	return 0;
+
+err_free:
+	free(log);
+	return err;
+}
+
+static int get_dispersed_ns_participating_nss_log(int argc, char **argv, struct command *acmd,
+						  struct plugin *plugin)
+{
+	const char *desc = "Retrieve Dispersed Namespace Participating NVM Subsystems Log, show it";
+	nvme_print_flags_t flags;
+	int err;
+
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
+	_cleanup_free_ struct nvme_dispersed_ns_participating_nss_log *log = NULL;
+
+	struct config {
+		__u32 namespace_id;
+	};
+
+	struct config cfg = {
+		.namespace_id = 1,
+	};
+
+	NVME_ARGS(opts, OPT_UINT("namespace-id", 'n', &cfg.namespace_id, namespace_id_desired));
+
+	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
+	if (err)
+		return err;
+
+	err = validate_output_format(nvme_cfg.output_format, &flags);
+	if (err < 0) {
+		nvme_show_error("Invalid output format");
+		return err;
+	}
+
+	err = get_dispersed_ns_psub(hdl, cfg.namespace_id, &log);
+	if (!err)
+		nvme_show_dispersed_ns_psub_log(log, flags);
+	else if (err > 0)
+		nvme_show_status(err);
+	else
+		nvme_show_perror("dispersed ns participating nss log");
+
+	return err;
+}
+
+static int get_log_offset(struct nvme_transport_handle *hdl,
+			  struct nvme_get_log_args *args, __u64 *offset,
+			  __u32 len, void **log)
+{
+	struct nvme_passthru_cmd cmd;
+
+	args->lpo = *offset,
+	args->log = *log + *offset,
+	args->len = len;
+	*offset += args->len;
+
+	*log = nvme_realloc(*log, *offset);
+	if (!*log)
+		return -ENOMEM;
+
+	nvme_init_get_log(&cmd, args->nsid, args->lid,
+			  args->csi, args->log, args->len);
+	cmd.cdw10 |= NVME_FIELD_ENCODE(args->lsp,
+			NVME_LOG_CDW10_LSP_SHIFT,
+			NVME_LOG_CDW10_LSP_MASK);
+	cmd.cdw11 |= NVME_FIELD_ENCODE(args->lsi,
+			NVME_LOG_CDW11_LSI_SHIFT,
+			NVME_LOG_CDW11_LSI_MASK);
+	cmd.cdw12 = args->lpo & 0xffffffff;
+	cmd.cdw13 = args->lpo >> 32;
+	cmd.cdw14 |= NVME_FIELD_ENCODE(args->uidx,
+			NVME_LOG_CDW14_UUID_SHIFT,
+			NVME_LOG_CDW14_UUID_MASK) |
+		     NVME_FIELD_ENCODE(args->ot,
+			NVME_LOG_CDW14_OT_SHIFT,
+			NVME_LOG_CDW14_OT_MASK);
+
+	return nvme_get_log(hdl, &cmd, args->rae,
+			    NVME_LOG_PAGE_PDU_SIZE, args->result);
+}
+
+static int get_reachability_group_desc(struct nvme_transport_handle *hdl, struct nvme_get_log_args *args,
+				       __u64 *offset, struct nvme_reachability_groups_log **logp)
+{
+	int err;
+	struct nvme_reachability_groups_log *log = *logp;
+	__u16 i;
+	__u32 len;
+
+	for (i = 0; i < le16_to_cpu(log->nrgd); i++) {
+		len = sizeof(*log->rgd);
+		err = get_log_offset(hdl, args, offset, len, (void **)&log);
+		if (err)
+			goto err_free;
+		len = le32_to_cpu(log->rgd[i].nnid) * sizeof(*log->rgd[i].nsid);
+		err = get_log_offset(hdl, args, offset, len, (void **)&log);
+		if (err)
+			goto err_free;
+	}
+
+	*logp = log;
+	return 0;
+
+err_free:
+	free(log);
+	*logp = NULL;
+	return err;
+}
+
+static int get_reachability_groups(struct nvme_transport_handle *hdl, bool rgo, bool rae,
+				   struct nvme_reachability_groups_log **logp,
+				   __u64 *lenp)
+{
+	int err;
+	struct nvme_reachability_groups_log *log;
+	__u64 log_len = sizeof(*log);
+	struct nvme_get_log_args args = {
+		.lid = NVME_LOG_LID_REACHABILITY_GROUPS,
+		.nsid = NVME_NSID_ALL,
+		.lsp = rgo,
+		.rae = rae,
+	};
+
+	log = nvme_alloc(log_len);
+	if (!log)
+		return -ENOMEM;
+
+	err = nvme_get_log_reachability_groups(hdl, rgo, rae, log, log_len);
+	if (err)
+		goto err_free;
+
+	err = get_reachability_group_desc(hdl, &args, &log_len, &log);
+	if (err)
+		goto err_free;
+
+	*logp = log;
+	*lenp = log_len;
+	return 0;
+
+err_free:
+	free(log);
+	return err;
+}
+
+static int get_reachability_groups_log(int argc, char **argv, struct command *acmd,
+				       struct plugin *plugin)
+{
+	const char *desc = "Retrieve Reachability Groups Log, show it";
+	const char *rgo = "Return Groups Only";
+	nvme_print_flags_t flags;
+	int err;
+	__u64 len = 0;
+	_cleanup_free_ struct nvme_reachability_groups_log *log = NULL;
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
+
+	struct config {
+		bool rgo;
+		bool rae;
+	};
+
+	struct config cfg = {
+		.rgo = false,
+		.rae = false,
+	};
+
+	NVME_ARGS(opts,
+		  OPT_FLAG("groups-only", 'g', &cfg.rgo, rgo),
+		  OPT_FLAG("rae", 'r', &cfg.rae, rae));
+
+	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
+	if (err)
+		return err;
+
+	err = validate_output_format(nvme_cfg.output_format, &flags);
+	if (err < 0) {
+		nvme_show_error("Invalid output format");
+		return err;
+	}
+
+	err = get_reachability_groups(hdl, cfg.rgo, cfg.rae, &log, &len);
+	if (!err)
+		nvme_show_reachability_groups_log(log, len, flags);
+	else if (err > 0)
+		nvme_show_status(err);
+	else
+		nvme_show_perror("reachability groups log");
+
+	return err;
+}
+
+static int get_reachability_association_desc(struct nvme_transport_handle *hdl, struct nvme_get_log_args *args,
+					     __u64 *offset,
+					     struct nvme_reachability_associations_log **logp)
+{
+	int err;
+	struct nvme_reachability_associations_log *log = *logp;
+	__u16 i;
+	__u32 len;
+
+	for (i = 0; i < le16_to_cpu(log->nrad); i++) {
+		len = sizeof(*log->rad);
+		err = get_log_offset(hdl, args, offset, len, (void **)&log);
+		if (err)
+			goto err_free;
+		len = le32_to_cpu(log->rad[i].nrid) * sizeof(*log->rad[i].rgid);
+		err = get_log_offset(hdl, args, offset, len, (void **)&log);
+		if (err)
+			goto err_free;
+	}
+
+	*logp = log;
+	return 0;
+
+err_free:
+	free(log);
+	*logp = NULL;
+	return err;
+}
+
+static int get_reachability_associations(struct nvme_transport_handle *hdl, bool rao, bool rae,
+					 struct nvme_reachability_associations_log **logp,
+					 __u64 *lenp)
+{
+	int err;
+	struct nvme_reachability_associations_log *log;
+	__u64 log_len = sizeof(*log);
+	struct nvme_get_log_args args = {
+		.lid = NVME_LOG_LID_REACHABILITY_ASSOCIATIONS,
+		.nsid = NVME_NSID_ALL,
+		.lsp = rao,
+		.rae = rae,
+	};
+
+	log = nvme_alloc(log_len);
+	if (!log)
+		return -ENOMEM;
+
+	err = nvme_get_log_reachability_associations(hdl, rao, rae, log, log_len);
+	if (err)
+		goto err_free;
+
+	err = get_reachability_association_desc(hdl, &args, &log_len, &log);
+	if (err)
+		goto err_free;
+
+	*logp = log;
+	*lenp = log_len;
+	return 0;
+
+err_free:
+	free(log);
+	return err;
+}
+
+static int get_reachability_associations_log(int argc, char **argv, struct command *acmd,
+					     struct plugin *plugin)
+{
+	const char *desc = "Retrieve Reachability Associations Log, show it";
+	const char *rao = "Return Associations Only";
+	nvme_print_flags_t flags;
+	int err;
+	__u64 len = 0;
+	_cleanup_free_ struct nvme_reachability_associations_log *log = NULL;
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
+
+	struct config {
+		bool rao;
+		bool rae;
+	};
+
+	struct config cfg = {
+		.rao = false,
+		.rae = false,
+	};
+
+	NVME_ARGS(opts,
+		  OPT_FLAG("associations-only", 'a', &cfg.rao, rao),
+		  OPT_FLAG("rae", 'r', &cfg.rae, rae));
+
+	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
+	if (err)
+		return err;
+
+	err = validate_output_format(nvme_cfg.output_format, &flags);
+	if (err < 0) {
+		nvme_show_error("Invalid output format");
+		return err;
+	}
+
+	err = get_reachability_associations(hdl, cfg.rao, cfg.rae, &log, &len);
+	if (!err)
+		nvme_show_reachability_associations_log(log, len, flags);
+	else if (err > 0)
+		nvme_show_status(err);
+	else
+		nvme_show_perror("reachability associations log");
+
+	return err;
+}
+
+static int get_host_discovery(struct nvme_transport_handle *hdl, bool allhoste, bool rae,
+			      struct nvme_host_discover_log **logp)
+{
+	int err;
+	struct nvme_host_discover_log *log;
+	__u64 log_len = sizeof(*log);
+	struct nvme_get_log_args args = {
+		.lid = NVME_LOG_LID_HOST_DISCOVERY,
+		.nsid = NVME_NSID_ALL,
+		.lsp = allhoste,
+		.rae = rae,
+	};
+
+	log = nvme_alloc(log_len);
+	if (!log)
+		return -ENOMEM;
+
+	err = nvme_get_log_host_discovery(hdl, allhoste, rae, log, log_len);
+	if (err)
+		goto err_free;
+
+	log_len = le32_to_cpu(log->thdlpl);
+	err = get_log_offset(hdl, &args, &log_len, le32_to_cpu(log->thdlpl) - log_len,
+			     (void **)&log);
+	if (err)
+		goto err_free;
+
+	*logp = log;
+	return 0;
+
+err_free:
+	free(log);
+	return err;
+}
+
+static int get_host_discovery_log(int argc, char **argv, struct command *acmd, struct plugin *plugin)
+{
+	const char *desc = "Retrieve Host Discovery Log, show it";
+	const char *allhoste = "All Host Entries";
+	nvme_print_flags_t flags;
+	int err;
+	_cleanup_free_ struct nvme_host_discover_log *log = NULL;
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
+
+	struct config {
+		bool allhoste;
+		bool rae;
+	};
+
+	struct config cfg = {
+		.allhoste = false,
+		.rae = false,
+	};
+
+	NVME_ARGS(opts,
+		  OPT_FLAG("all-host-entries", 'a', &cfg.allhoste, allhoste),
+		  OPT_FLAG("rae", 'r', &cfg.rae, rae));
+
+
+	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
+	if (err)
+		return err;
+
+	err = validate_output_format(nvme_cfg.output_format, &flags);
+	if (err < 0) {
+		nvme_show_error("Invalid output format");
+		return err;
+	}
+
+	err = get_host_discovery(hdl, cfg.allhoste, cfg.rae, &log);
+	if (!err)
+		nvme_show_host_discovery_log(log, flags);
+	else if (err > 0)
+		nvme_show_status(err);
+	else
+		nvme_show_perror("host discovery log");
+
+	return err;
+}
+
+static int get_ave_discovery(struct nvme_transport_handle *hdl, bool rae, struct nvme_ave_discover_log **logp)
+{
+	int err;
+	struct nvme_ave_discover_log *log;
+	__u64 log_len = sizeof(*log);
+	struct nvme_get_log_args args = {
+		.lid = NVME_LOG_LID_AVE_DISCOVERY,
+		.nsid = NVME_NSID_ALL,
+		.rae = rae,
+	};
+
+	log = nvme_alloc(log_len);
+	if (!log)
+		return -ENOMEM;
+
+	err = nvme_get_log_ave_discovery(hdl, rae, log, log_len);
+	if (err)
+		goto err_free;
+
+	log_len = le32_to_cpu(log->tadlpl);
+	err = get_log_offset(hdl, &args, &log_len, le32_to_cpu(log->tadlpl) - log_len,
+			     (void **)&log);
+	if (err)
+		goto err_free;
+
+	*logp = log;
+	return 0;
+
+err_free:
+	free(log);
+	return err;
+}
+
+static int get_ave_discovery_log(int argc, char **argv, struct command *acmd, struct plugin *plugin)
+{
+	const char *desc = "Retrieve AVE Discovery Log, show it";
+	nvme_print_flags_t flags;
+	int err;
+
+	_cleanup_free_ struct nvme_ave_discover_log *log = NULL;
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
+
+	struct config {
+		bool rae;
+	};
+
+	struct config cfg = {
+		.rae = false,
+	};
+
+	NVME_ARGS(opts, OPT_FLAG("rae", 'r', &cfg.rae, rae));
+
+	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
+	if (err)
+		return err;
+
+	err = validate_output_format(nvme_cfg.output_format, &flags);
+	if (err < 0) {
+		nvme_show_error("Invalid output format");
+		return err;
+	}
+
+	err = get_ave_discovery(hdl, cfg.rae, &log);
+	if (!err)
+		nvme_show_ave_discovery_log(log, flags);
+	else if (err > 0)
+		nvme_show_status(err);
+	else
+		nvme_show_perror("ave discovery log");
+
+	return err;
+}
+
+static int get_pull_model_ddc_req(struct nvme_transport_handle *hdl,
+				  bool rae, struct nvme_pull_model_ddc_req_log **logp)
+{
+	int err;
+	struct nvme_pull_model_ddc_req_log *log;
+	__u64 log_len = sizeof(*log);
+	struct nvme_get_log_args args = {
+		.lid = NVME_LOG_LID_PULL_MODEL_DDC_REQ,
+		.nsid = NVME_NSID_ALL,
+		.rae = rae,
+	};
+
+	log = nvme_alloc(log_len);
+	if (!log)
+		return -ENOMEM;
+
+	err = nvme_get_log_pull_model_ddc_req(hdl, rae, log, log_len);
+	if (err)
+		goto err_free;
+
+	log_len = le32_to_cpu(log->tpdrpl);
+	err = get_log_offset(hdl, &args, &log_len, le32_to_cpu(log->tpdrpl) - log_len,
+			     (void **)&log);
+	if (err)
+		goto err_free;
+
+	*logp = log;
+	return 0;
+
+err_free:
+	free(log);
+	return err;
+}
+
+static int get_pull_model_ddc_req_log(int argc, char **argv, struct command *acmd,
+				      struct plugin *plugin)
+{
+	const char *desc = "Retrieve Pull Model DDC Request Log, show it";
+	nvme_print_flags_t flags;
+	int err;
+
+	_cleanup_free_ struct nvme_pull_model_ddc_req_log *log = NULL;
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
+
+	struct config {
+		bool rae;
+	};
+
+	struct config cfg = {
+		.rae = false,
+	};
+
+	NVME_ARGS(opts, OPT_FLAG("rae", 'r', &cfg.rae, rae));
+
+	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
+	if (err)
+		return err;
+
+	err = validate_output_format(nvme_cfg.output_format, &flags);
+	if (err < 0) {
+		nvme_show_error("Invalid output format");
+		return err;
+	}
+
+	err = get_pull_model_ddc_req(hdl, cfg.rae, &log);
+	if (!err)
+		nvme_show_pull_model_ddc_req_log(log, flags);
+	else if (err > 0)
+		nvme_show_status(err);
+	else
+		nvme_show_perror("pull model ddc req log");
+
+	return err;
 }
 
 void register_extension(struct plugin *plugin)
@@ -9973,14 +10921,18 @@ int main(int argc, char **argv)
 
 	nvme.extensions->parent = &nvme;
 	if (argc < 2) {
-		general_help(&builtin);
+		general_help(&builtin, NULL);
 		return 0;
 	}
 	setlocale(LC_ALL, "");
 
+	err = nvme_install_sigint_handler();
+	if (err)
+		return err;
+
 	err = handle_plugin(argc - 1, &argv[1], nvme.extensions);
 	if (err == -ENOTTY)
-		general_help(&builtin);
+		general_help(&builtin, NULL);
 
 	return err ? 1 : 0;
 }

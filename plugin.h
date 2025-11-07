@@ -27,11 +27,11 @@ struct plugin {
 struct command {
 	char *name;
 	char *help;
-	int (*fn)(int argc, char **argv, struct command *command, struct plugin *plugin);
+	int (*fn)(int argc, char **argv, struct command *acmd, struct plugin *plugin);
 	char *alias;
 };
 
-void general_help(struct plugin *plugin);
+void general_help(struct plugin *plugin, char *str);
 int handle_plugin(int argc, char **argv, struct plugin *plugin);
 
 #endif

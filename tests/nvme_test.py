@@ -31,8 +31,19 @@ import stat
 import subprocess
 import sys
 import unittest
+import time
 
 from nvme_test_logger import TestNVMeLogger
+
+
+def to_decimal(value):
+    """ Wrapper for converting numbers to base 10 decimal
+        - Args:
+            - value: A number in any common base
+        - Returns:
+            - Decimal integer
+    """
+    return int(str(value), 0)
 
 
 class TestNVMe(unittest.TestCase):
@@ -66,6 +77,7 @@ class TestNVMe(unittest.TestCase):
         self.load_config()
         if self.do_validate_pci_device:
             self.validate_pci_device()
+        self.create_and_attach_default_ns()
         print(f"\nsetup: ctrl: {self.ctrl}, ns1: {self.ns1}, default_nsid: {self.default_nsid}, flbas: {self.flbas}\n")
 
     def tearDown(self):
@@ -244,7 +256,7 @@ class TestNVMe(unittest.TestCase):
             - Returns:
                 - True if 'Get LBA Status' command is supported, otherwise False
         """
-        return int(self.get_id_ctrl_field_value("oacs"), 16) & (1 << 9)
+        return to_decimal(self.get_id_ctrl_field_value("oacs")) & (1 << 9)
 
     def get_lba_format_size(self):
         """ Wrapper for extracting lba format size of the given flbas
@@ -282,7 +294,7 @@ class TestNVMe(unittest.TestCase):
             - Returns:
                 - Total NVM capacity.
         """
-        return int(self.get_id_ctrl_field_value("tnvmcap"))
+        return to_decimal(self.get_id_ctrl_field_value("tnvmcap"))
 
     def get_id_ctrl_field_value(self, field):
         """ Wrapper for extracting id-ctrl field values
@@ -311,32 +323,7 @@ class TestNVMe(unittest.TestCase):
             - Returns:
                 - Optional Copy Formats Supported
         """
-        return int(self.get_id_ctrl_field_value("ocfs"), 16)
-
-    def get_format(self):
-        """ Wrapper for extracting format.
-            - Args:
-                - None
-            - Returns:
-                - maximum format of namespace.
-        """
-        # defaulting to 4K
-        nvm_format = 4096
-        nvm_format_cmd = f"{self.nvme_bin} id-ns {self.ctrl} " + \
-            f"--namespace-id={self.default_nsid}"
-        proc = subprocess.Popen(nvm_format_cmd,
-                                shell=True,
-                                stdout=subprocess.PIPE,
-                                encoding='utf-8')
-        err = proc.wait()
-        self.assertEqual(err, 0, "ERROR : reading nvm capacity failed")
-
-        # Not using json output here because parsing flbas makes this less
-        # readable as the format index is split into lower and upper bits
-        for line in proc.stdout:
-            if "in use" in line:
-                nvm_format = 2 ** int(line.split(":")[3].split()[0])
-        return int(nvm_format)
+        return to_decimal(self.get_id_ctrl_field_value("ocfs"))
 
     def delete_all_ns(self):
         """ Wrapper for deleting all the namespaces.
@@ -367,12 +354,13 @@ class TestNVMe(unittest.TestCase):
                 - flbas : new namespace format.
                 - dps : new namespace data protection information.
             - Returns:
-                - return code of the nvme create namespace command.
+                - Popen object of the nvme create namespace command.
         """
         create_ns_cmd = f"{self.nvme_bin} create-ns {self.ctrl} " + \
             f"--nsze={str(nsze)} --ncap={str(ncap)} --flbas={str(flbas)} " + \
-            f"--dps={str(dps)}"
-        return self.exec_cmd(create_ns_cmd)
+            f"--dps={str(dps)} --verbose --output-format=json"
+        return subprocess.Popen(create_ns_cmd, shell=True,
+                                stdout=subprocess.PIPE, encoding='utf-8')
 
     def create_and_validate_ns(self, nsid, nsze, ncap, flbas, dps):
         """ Wrapper for creating and validating a namespace.
@@ -385,8 +373,12 @@ class TestNVMe(unittest.TestCase):
             - Returns:
                 - return 0 on success, error code on failure.
         """
-        err = self.create_ns(nsze, ncap, flbas, dps)
+        proc = self.create_ns(nsze, ncap, flbas, dps)
+        err = proc.wait()
         if err == 0:
+            json_output = json.loads(proc.stdout.read())
+            self.assertEqual(int(json_output['nsid']), nsid,
+                             "ERROR : create namespace failed")
             id_ns_cmd = f"{self.nvme_bin} id-ns {self.ctrl} " + \
                 f"--namespace-id={str(nsid)}"
             err = subprocess.call(id_ns_cmd,
@@ -394,7 +386,7 @@ class TestNVMe(unittest.TestCase):
                                   stdout=subprocess.DEVNULL)
         return err
 
-    def attach_ns(self, ctrl_id, ns_id):
+    def attach_ns(self, ctrl_id, nsid):
         """ Wrapper for attaching the namespace.
             - Args:
                 - ctrl_id : controller id to which namespace to be attached.
@@ -403,16 +395,22 @@ class TestNVMe(unittest.TestCase):
                 - 0 on success, error code on failure.
         """
         attach_ns_cmd = f"{self.nvme_bin} attach-ns {self.ctrl} " + \
-            f"--namespace-id={str(ns_id)} --controllers={ctrl_id}"
+            f"--namespace-id={str(nsid)} --controllers={ctrl_id} --verbose"
         err = subprocess.call(attach_ns_cmd,
                               shell=True,
                               stdout=subprocess.DEVNULL)
-        if err == 0:
-            # enumerate new namespace block device
-            self.nvme_reset_ctrl()
-            # check if new namespace block device exists
-            err = 0 if stat.S_ISBLK(os.stat(self.ns1).st_mode) else 1
-        return err
+        if err != 0:
+            return err
+
+        # Try to find block device for 5 seconds
+        device_path = f"{self.ctrl}n{str(nsid)}"
+        stop_time = time.time() + 5
+        while time.time() < stop_time:
+            if os.path.exists(device_path) and stat.S_ISBLK(os.stat(device_path).st_mode):
+                return 0
+            time.sleep(0.1)
+
+        return 1
 
     def detach_ns(self, ctrl_id, nsid):
         """ Wrapper for detaching the namespace.
@@ -423,7 +421,7 @@ class TestNVMe(unittest.TestCase):
                 - 0 on success, error code on failure.
         """
         detach_ns_cmd = f"{self.nvme_bin} detach-ns {self.ctrl} " + \
-            f"--namespace-id={str(nsid)} --controllers={ctrl_id}"
+            f"--namespace-id={str(nsid)} --controllers={ctrl_id} --verbose"
         return subprocess.call(detach_ns_cmd,
                                shell=True,
                                stdout=subprocess.DEVNULL)
@@ -437,7 +435,7 @@ class TestNVMe(unittest.TestCase):
         """
         # delete the namespace
         delete_ns_cmd = f"{self.nvme_bin} delete-ns {self.ctrl} " + \
-            f"--namespace-id={str(nsid)}"
+            f"--namespace-id={str(nsid)} --verbose"
         err = subprocess.call(delete_ns_cmd,
                               shell=True,
                               stdout=subprocess.DEVNULL)

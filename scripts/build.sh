@@ -13,6 +13,7 @@ usage() {
     echo " -c [gcc]|clang       compiler to use"
     echo " -m [meson]|muon      use meson or muon"
     echo " -t [arm]|ppc64le|s390x  cross compile target"
+    echo " -x                   run test with valgrind"
     echo ""
     echo "configs with meson:"
     echo "  [default]           default settings"
@@ -20,7 +21,6 @@ usage() {
     echo "                      and build them as shared libraries"
     echo "  cross               use cross toolchain to build"
     echo "  coverage            build coverage report"
-    echo "  appimage            build AppImage target"
     echo "  distro              build libnvme and nvme-cli separately"
     echo "  docs                build documentation"
     echo "  static              build a static binary"
@@ -35,7 +35,9 @@ BUILDTYPE=release
 CROSS_TARGET=arm
 CC=${CC:-"gcc"}
 
-while getopts "b:c:m:t:" o; do
+use_valgrind=0
+
+while getopts "b:c:m:t:x" o; do
     case "${o}" in
         b)
             BUILDTYPE="${OPTARG}"
@@ -48,6 +50,9 @@ while getopts "b:c:m:t:" o; do
             ;;
         t)
             CROSS_TARGET="${OPTARG}"
+            ;;
+        x)
+            use_valgrind=1
             ;;
         *)
             usage
@@ -108,16 +113,6 @@ config_meson_coverage() {
         "${BUILDDIR}"
 }
 
-config_meson_appimage() {
-    CC="${CC}" "${MESON}" setup                 \
-        --werror                                \
-        --buildtype="${BUILDTYPE}"              \
-        --force-fallback-for=libnvme            \
-        --prefix=/usr                           \
-        -Dlibnvme:werror=false                  \
-        "${BUILDDIR}"
-}
-
 config_meson_docs() {
     CC="${CC}" "${MESON}" setup                 \
         -Ddocs=all                              \
@@ -133,6 +128,7 @@ config_meson_static() {
         --buildtype=release                     \
         --default-library=static                \
         --wrap-mode=forcefallback               \
+        --prefix=/usr                           \
         -Dc_link_args="-static"                 \
         -Dlibnvme:keyutils=disabled             \
         "${BUILDDIR}"
@@ -144,19 +140,23 @@ build_meson() {
 }
 
 test_meson() {
-    "${MESON}" test                             \
-        -C "${BUILDDIR}"
+    local args=(-C "${BUILDDIR}")
+
+    if [ "${use_valgrind:-0}" -eq 1 ]; then
+        if command -v valgrind >/dev/null 2>&1; then
+            args+=(--wrapper valgrind)
+        else
+            echo "Warning: valgrind requested but not found; running without it." >&2
+        fi
+    fi
+
+    "${MESON}" test "${args[@]}"
 }
 
 test_meson_coverage() {
     "${MESON}" test                             \
         -C "${BUILDDIR}"
     ninja -C "${BUILDDIR}" coverage --verbose
-}
-
-install_meson_appimage() {
-    "${MESON}" install                          \
-        -C "${BUILDDIR}"
 }
 
 install_meson_docs() {
@@ -195,7 +195,6 @@ tools_build_muon() {
 
     CC="${CC}" ninja="${SAMU}" stage1/muon-bootstrap setup    \
         -Dprefix="${TOOLDIR}"                                 \
-        -Ddocs=disabled                                       \
         -Dsamurai=disabled                                    \
         "${TOOLDIR}/build-muon"
     "${SAMU}" -C "${TOOLDIR}/build-muon"
@@ -233,16 +232,11 @@ test_muon() {
 }
 
 _install_libnvme() {
-    local libnvme_ref=$(sed -n "s/revision = \([0-9a-z]\+\)/\1/p" subprojects/libnvme.wrap)
     local LBUILDDIR="${BUILDDIR}/.build-libnvme"
 
     mkdir -p "${BUILDDIR}/libnvme"
 
-    pushd "${BUILDDIR}/libnvme"
-    git init
-    git remote add origin https://github.com/linux-nvme/libnvme.git
-    git fetch origin ${libnvme_ref}
-    git reset --hard FETCH_HEAD
+    pushd "libnvme"
 
     CC="${CC}" "${MESON}" setup                 \
         --prefix="${BUILDDIR}/usr"              \
@@ -266,6 +260,7 @@ config_meson_distro() {
         --prefix="${BUILDDIR}/usr"              \
         --werror                                \
         --buildtype="${BUILDTYPE}"              \
+        --force-fallback-for=                   \
         "${BUILDDIR}"
 }
 

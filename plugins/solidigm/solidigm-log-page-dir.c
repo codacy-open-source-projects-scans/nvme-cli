@@ -14,6 +14,7 @@
 #include "common.h"
 #include "nvme-print.h"
 
+#include "plugins/ocp/ocp-nvme.h"
 #include "plugins/ocp/ocp-utils.h"
 #include "solidigm-util.h"
 
@@ -39,29 +40,20 @@ static void init_lid_dir(struct lid_dir *lid_dir)
 	}
 }
 
-static int get_supported_log_pages_log(struct nvme_dev *dev, int uuid_index,
+static int get_supported_log_pages_log(struct nvme_transport_handle *hdl, int uuid_index,
 				       struct nvme_supported_log_pages *supported)
 {
-	memset(supported, 0, sizeof(*supported));
-	struct nvme_get_log_args args = {
-		.lpo = 0,
-		.result = NULL,
-		.log = supported,
-		.args_size = sizeof(args),
-		.fd = dev_fd(dev),
-		.timeout = NVME_DEFAULT_IOCTL_TIMEOUT,
-		.lid = NVME_LOG_LID_SUPPORTED_LOG_PAGES,
-		.len = sizeof(*supported),
-		.nsid = NVME_NSID_ALL,
-		.csi = NVME_CSI_NVM,
-		.lsi = NVME_LOG_LSI_NONE,
-		.lsp = 0,
-		.uuidx = uuid_index,
-		.rae = false,
-		.ot = false,
-	};
+	struct nvme_passthru_cmd cmd;
 
-	return nvme_get_log(&args);
+	memset(supported, 0, sizeof(*supported));
+	nvme_init_get_log(&cmd, NVME_NSID_ALL,
+			  NVME_LOG_LID_SUPPORTED_LOG_PAGES, NVME_CSI_NVM,
+			  supported, sizeof(*supported));
+	cmd.cdw14 |= NVME_FIELD_ENCODE(uuid_index,
+				       NVME_LOG_CDW14_UUID_SHIFT,
+				       NVME_LOG_CDW14_UUID_MASK);
+	return nvme_get_log(hdl, &cmd, false,
+			    NVME_LOG_PAGE_PDU_SIZE, NULL);
 }
 
 static struct lid_dir *get_standard_lids(struct nvme_supported_log_pages *supported)
@@ -109,10 +101,12 @@ static struct lid_dir *get_solidigm_lids(struct nvme_supported_log_pages *suppor
 	solidigm_dir.lid[0xDD].str = "VU Marketing Description Log Page";
 	solidigm_dir.lid[0xEF].str = "Performance Rating and LBA Access Histogram";
 	solidigm_dir.lid[0xF2].str = "Get Power Usage Log Page";
+	solidigm_dir.lid[0xF4].str = "Nand Statistics Log Page";
+	solidigm_dir.lid[0xF5].str = "Nand Defects Count Log Page";
 	solidigm_dir.lid[0xF6].str = "Vt Histo Get Log Page";
 	solidigm_dir.lid[0xF9].str = "Workload Tracker Get Log Page";
 	solidigm_dir.lid[0xFD].str = "Garbage Control Collection  Log Page";
-	solidigm_dir.lid[0xFE].str = "Latency Outlier Log Page";
+	solidigm_dir.lid[0xFE].str = "Latency Outlier / SK SMART Log Page";
 
 	update_vendor_lid_supported(supported, &solidigm_dir);
 
@@ -130,6 +124,9 @@ static struct lid_dir *get_ocp_lids(struct nvme_supported_log_pages *supported)
 	ocp_dir.lid[0xC3].str = "OCP Latency Monitor";
 	ocp_dir.lid[0xC4].str = "OCP Device Capabilities";
 	ocp_dir.lid[0xC5].str = "OCP Unsupported Requirements";
+	ocp_dir.lid[0xC6].str = "OCP Hardware Component";
+	ocp_dir.lid[0xC7].str = "OCP TCG Configuration";
+	ocp_dir.lid[0xC9].str = "OCP Telemetry String Log";
 
 	update_vendor_lid_supported(supported, &ocp_dir);
 
@@ -182,21 +179,23 @@ static void supported_log_pages_json(struct lid_dir *lid_dir[SOLIDIGM_MAX_UUID +
 	printf("\n");
 }
 
-int solidigm_get_log_page_directory_log(int argc, char **argv, struct command *cmd,
+int solidigm_get_log_page_directory_log(int argc, char **argv, struct command *acmd,
 					struct plugin *plugin)
 {
 	const int NO_UUID_INDEX = 0;
 	const char *description = "Retrieves list of supported log pages for each UUID index.";
-	char *format = "normal";
 
 	OPT_ARGS(options) = {
-		OPT_FMT("output-format", 'o', &format, "output format : normal | json"),
+		OPT_FMT("output-format", 'o', &nvme_cfg.output_format,
+			"output format : normal | json"),
+		OPT_INCR("verbose", 'v', &nvme_cfg.verbose, verbose),
 		OPT_END()
 	};
 
-	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
-	int err = parse_and_open(&dev, argc, argv, description, options);
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
 
+	int err = parse_and_open(&ctx, &hdl, argc, argv, description, options);
 	if (err)
 		return err;
 
@@ -204,13 +203,13 @@ int solidigm_get_log_page_directory_log(int argc, char **argv, struct command *c
 	struct nvme_id_uuid_list uuid_list = { 0 };
 	struct nvme_supported_log_pages supported = { 0 };
 
-	err = get_supported_log_pages_log(dev, NO_UUID_INDEX, &supported);
+	err = get_supported_log_pages_log(hdl, NO_UUID_INDEX, &supported);
 
 	if (!err) {
 		lid_dirs[NO_UUID_INDEX] = get_standard_lids(&supported);
 
 		// Assume VU logs are the Solidigm log pages if UUID not supported.
-		if (nvme_identify_uuid(dev_fd(dev), &uuid_list)) {
+		if (!nvme_identify_uuid_list(hdl, &uuid_list)) {
 			struct lid_dir *solidigm_lid_dir = get_solidigm_lids(&supported);
 
 			// Transfer supported Solidigm lids to lid directory at UUID index 0
@@ -226,12 +225,12 @@ int solidigm_get_log_page_directory_log(int argc, char **argv, struct command *c
 			ocp_find_uuid_index(&uuid_list, &ocp_idx);
 
 			if (sldgm_idx && (sldgm_idx <= SOLIDIGM_MAX_UUID)) {
-				err = get_supported_log_pages_log(dev, sldgm_idx, &supported);
+				err = get_supported_log_pages_log(hdl, sldgm_idx, &supported);
 				if (!err)
 					lid_dirs[sldgm_idx] = get_solidigm_lids(&supported);
 			}
 			if (ocp_idx && (ocp_idx <= SOLIDIGM_MAX_UUID)) {
-				err = get_supported_log_pages_log(dev, ocp_idx, &supported);
+				err = get_supported_log_pages_log(hdl, ocp_idx, &supported);
 				if (!err)
 					lid_dirs[ocp_idx] = get_ocp_lids(&supported);
 			}
@@ -243,9 +242,10 @@ int solidigm_get_log_page_directory_log(int argc, char **argv, struct command *c
 	if (!err) {
 		nvme_print_flags_t print_flag;
 
-		err = validate_output_format(format, &print_flag);
-		if (err < 0) {
-			fprintf(stderr, "Error: Invalid output format specified: %s.\n", format);
+		err = validate_output_format(nvme_cfg.output_format, &print_flag);
+		if (err) {
+			nvme_show_error("Error: Invalid output format specified: %s.\n",
+					nvme_cfg.output_format);
 			return err;
 		}
 

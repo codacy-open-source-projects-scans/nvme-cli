@@ -11,7 +11,7 @@
 #if !defined(OCP_NVME) || defined(CMD_HEADER_MULTI_READ)
 #define OCP_NVME
 
-#define OCP_PLUGIN_VERSION   "2.9.3"
+#define OCP_PLUGIN_VERSION   "2.15.3"
 #include "cmd.h"
 
 PLUGIN(NAME("ocp", "OCP cloud SSD extensions", OCP_PLUGIN_VERSION),
@@ -42,6 +42,12 @@ PLUGIN(NAME("ocp", "OCP cloud SSD extensions", OCP_PLUGIN_VERSION),
 		      get_enable_ieee1667_silo)
 		ENTRY("set-enable-ieee1667-silo", "enable IEEE1667 silo", set_enable_ieee1667_silo)
 		ENTRY("hardware-component-log", "retrieve hardware component log", hwcomp_log)
+		ENTRY("get-latency-monitor", "Get Latency Monitor Feature",
+		      ocp_get_latency_monitor_feature)
+		ENTRY("get-clear-pcie-correctable-errors", "Clear PCIe correctable error counters",
+		      get_clear_pcie_correctable_error_counters)
+		ENTRY("get-telemetry-profile", "Get Telemetry Profile Feature",
+		      ocp_get_telemetry_profile_feature)
 	)
 );
 
@@ -51,6 +57,8 @@ PLUGIN(NAME("ocp", "OCP cloud SSD extensions", OCP_PLUGIN_VERSION),
 
 #ifndef OCP_NVME_H
 #define OCP_NVME_H
+#include "common.h"
+
 struct __packed ssd_latency_monitor_log {
 	__u8	feature_status;			/* 0x00 */
 	__u8	rsvd1;				/* 0x01 */
@@ -244,5 +252,32 @@ struct __packed tcg_configuration_log {
 	__le16  log_page_version;
 	__u8    log_page_guid[GUID_LEN];
 
+};
+
+enum ocp_dssd_log_id {
+	OCP_LID_SMART = 0xc0, /* SMART / Helth Information Extended */
+	OCP_LID_EREC, /* Error Recovery */
+	OCP_LID_FAHL_OBSOLETE, /* Firmware Activation History (Obsolete) */
+	OCP_LID_LMLOG, /* Latency Monitor */
+	OCP_LID_DCLP, /* Device Capabilities */
+	OCP_LID_URLP, /* Unsupported Requirements */
+	OCP_LID_HWCOMP, /* Hardware Component */
+	OCP_LID_TCGL, /* TCG Configuration */
+	OCP_LID_RESERVED, /* Reserved for future use */
+	OCP_LID_TELSLG, /* Telemetry String */
+	OCP_LID_LMLOG_DEBUG, /* Latency Monitor Debug Telemetry */
+};
+
+enum ocp_dssd_feature_id {
+	OCP_FID_ERRI = 0xc0, /* Error Injection */
+	OCP_FID_CFUH, /* Clear Firmware Update History (Obsolete) */
+	OCP_FID_ROWTM, /* EOL/PLP Failure Mode */
+	OCP_FID_CPCIE, /* Clear PCIe Correctable Error Counters */
+	OCP_FID_1667, /* Enable IEEE1667 Silo */
+	OCP_FID_LM, /* Latency Monitor */
+	OCP_FID_PLPI, /* PLP Health Check Interval */
+	OCP_FID_DSSDPS, /* DSSD Power State */
+	OCP_FID_TEL_CFG, /* Telemetry Profile */
+	OCP_FID_DAEC, /* DSSD Asynchronous Event Configuration */
 };
 #endif /* OCP_NVME_H */

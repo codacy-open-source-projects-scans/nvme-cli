@@ -7,7 +7,7 @@
 
 #include "common.h"
 #include "util/types.h"
-#include "util/logging.h"
+#include "logging.h"
 #include "nvme-print.h"
 #include "ocp-hardware-component-log.h"
 #include "ocp-print.h"
@@ -167,59 +167,74 @@ const char *hwcomp_id_to_string(__u32 id)
 	return "Reserved";
 }
 
-static int get_hwcomp_log_data(struct nvme_dev *dev, struct hwcomp_log *log)
+static int get_hwcomp_log_data(struct nvme_transport_handle *hdl, struct hwcomp_log *log)
 {
-	int ret = 0;
 	size_t desc_offset = offsetof(struct hwcomp_log, desc);
-	struct nvme_get_log_args args = {
-		.args_size = sizeof(args),
-		.fd = dev_fd(dev),
-		.timeout = NVME_DEFAULT_IOCTL_TIMEOUT,
-		.lid = LID_HWCOMP,
-		.nsid = NVME_NSID_ALL,
-		.log = log,
-		.len = desc_offset,
-	};
+	struct nvme_passthru_cmd cmd;
+	nvme_uint128_t log_size;
+	long double log_bytes;
+	__u32 len;
+	__u8 uidx;
+	int ret = 0;
 
-	ocp_get_uuid_index(dev, &args.uuidx);
+	ocp_get_uuid_index(hdl, &uidx);
 
 #ifdef HWCOMP_DUMMY
 	memcpy(log, hwcomp_dummy, desc_offset);
 #else /* HWCOMP_DUMMY */
-	ret = nvme_get_log_page(dev_fd(dev), NVME_LOG_PAGE_PDU_SIZE, &args);
+	nvme_init_get_log(&cmd, NVME_NSID_ALL,
+			  (enum nvme_cmd_get_log_lid)OCP_LID_HWCOMP,
+			  NVME_CSI_NVM, log, desc_offset);
+	cmd.cdw14 |= NVME_FIELD_ENCODE(uidx,
+				       NVME_LOG_CDW14_UUID_SHIFT,
+				       NVME_LOG_CDW14_UUID_MASK);
+	ret = nvme_get_log(hdl, &cmd, false,
+				   NVME_LOG_PAGE_PDU_SIZE, NULL);
 	if (ret) {
 		print_info_error("error: ocp: failed to get hwcomp log size (ret: %d)\n", ret);
 		return ret;
 	}
 #endif /* HWCOMP_DUMMY */
 
-	print_info("id: %02Xh\n", LID_HWCOMP);
+	log_size = le128_to_cpu(log->size);
+
+	print_info("id: %02Xh\n", OCP_LID_HWCOMP);
 	print_info("version: %04Xh\n", log->ver);
 	print_info_array("guid", log->guid, ARRAY_SIZE(log->guid));
-	print_info("size: %s\n", uint128_t_to_string(le128_to_cpu(log->size)));
+	print_info("size: %s\n", uint128_t_to_string(log_size));
 
-	if (log->ver > 1)
-		args.len = uint128_t_to_double(le128_to_cpu(log->size)) - desc_offset;
-	else
-		args.len = uint128_t_to_double(le128_to_cpu(log->size)) * sizeof(__le32)
-			- desc_offset;
+	log_bytes = uint128_t_to_double(log_size);
+	if (log->ver == 1)
+		log_bytes *= sizeof(__le32);
 
-	log->desc = calloc(1, args.len);
-	if (!log->desc) {
-		fprintf(stderr, "error: ocp: calloc: %s\n", strerror(errno));
-		return -1;
+	if (log_bytes <= desc_offset) {
+		print_info_error("error: ocp: invalid hwcomp log size bytes: %.0Lf\n", log_bytes);
+		return -EINVAL;
 	}
 
-	args.log = log->desc,
-	args.lpo = desc_offset,
+	len = log_bytes - desc_offset;
+
+	print_info("args.len: %u\n", len);
+
+	log->desc = calloc(1, len);
+	if (!log->desc) {
+		fprintf(stderr, "error: ocp: calloc: %s\n", strerror(errno));
+		return -errno;
+	}
 
 #ifdef HWCOMP_DUMMY
-	memcpy(log->desc, &hwcomp_dummy[desc_offset], args.len);
+	memcpy(log->desc, &hwcomp_dummy[desc_offset], len);
 #else /* HWCOMP_DUMMY */
-	ret = nvme_get_log_page(dev_fd(dev), NVME_LOG_PAGE_PDU_SIZE, &args);
+	nvme_init_get_log(&cmd, NVME_NSID_ALL,
+			  (enum nvme_cmd_get_log_lid)OCP_LID_HWCOMP,
+			  NVME_CSI_NVM, log->desc, len);
+	nvme_init_get_log_lpo(&cmd, desc_offset);
+	ret = nvme_get_log(hdl, &cmd, false,
+				   NVME_LOG_PAGE_PDU_SIZE, NULL);
 	if (ret) {
 		print_info_error("error: ocp: failed to get log page (hwcomp: %02X, ret: %d)\n",
-				 LID_HWCOMP, ret);
+				 OCP_LID_HWCOMP, ret);
+		free(log->desc);
 		return ret;
 	}
 #endif /* HWCOMP_DUMMY */
@@ -227,14 +242,12 @@ static int get_hwcomp_log_data(struct nvme_dev *dev, struct hwcomp_log *log)
 	return ret;
 }
 
-static int get_hwcomp_log(struct nvme_dev *dev, __u32 id, bool list)
+static int get_hwcomp_log(struct nvme_transport_handle *hdl, __u32 id, bool list)
 {
-	_cleanup_free_ __u8 *desc = NULL;
-
 	int ret;
 	nvme_print_flags_t fmt;
 	struct hwcomp_log log = {
-		.desc = (struct hwcomp_desc *)desc,
+		.desc = NULL,
 	};
 
 	ret = validate_output_format(nvme_cfg.output_format, &fmt);
@@ -243,21 +256,24 @@ static int get_hwcomp_log(struct nvme_dev *dev, __u32 id, bool list)
 		return ret;
 	}
 
-	ret = get_hwcomp_log_data(dev, &log);
+	ret = get_hwcomp_log_data(hdl, &log);
 	if (ret) {
 		print_info_error("error: ocp: failed get hwcomp log: %02X data, ret: %d\n",
-				 LID_HWCOMP, ret);
+				 OCP_LID_HWCOMP, ret);
 		return ret;
 	}
 
 	ocp_show_hwcomp_log(&log, id, list, fmt);
 
+	free(log.desc);
+
 	return 0;
 }
 
-int ocp_hwcomp_log(int argc, char **argv, struct command *cmd, struct plugin *plugin)
+int ocp_hwcomp_log(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
-	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
 	int ret = 0;
 	const char *desc = "retrieve hardware component log";
 	struct config {
@@ -287,14 +303,14 @@ int ocp_hwcomp_log(int argc, char **argv, struct command *cmd, struct plugin *pl
 	NVME_ARGS(opts, OPT_LONG("comp-id", 'i', &cfg.id, id_desc, id),
 		  OPT_FLAG("list", 'l', &cfg.list, list_desc));
 
-	ret = parse_and_open(&dev, argc, argv, desc, opts);
+	ret = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (ret)
 		return ret;
 
-	ret = get_hwcomp_log(dev, cfg.id, cfg.list);
+	ret = get_hwcomp_log(hdl, cfg.id, cfg.list);
 	if (ret)
-		fprintf(stderr, "error: ocp: failed to get hwcomp log: %02X, ret: %d\n", LID_HWCOMP,
-			ret);
+		fprintf(stderr, "error: ocp: failed to get hwcomp log: %02X, ret: %d\n",
+			OCP_LID_HWCOMP, ret);
 
 	return ret;
 }

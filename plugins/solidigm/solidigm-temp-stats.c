@@ -38,10 +38,12 @@ static void show_temp_stats(struct temp_stats *stats)
 	printf("Estimated offset            : %"PRIu64"\n", le64_to_cpu(stats->est_offset));
 }
 
-int sldgm_get_temp_stats_log(int argc, char **argv, struct command *cmd, struct plugin *plugin)
+int sldgm_get_temp_stats_log(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
+	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
+	_cleanup_nvme_transport_handle_ struct nvme_transport_handle *hdl = NULL;
 	unsigned char buffer[4096] = {0};
-	_cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
+	struct nvme_passthru_cmd cmd;
 	__u8 uuid_idx;
 	int err;
 
@@ -60,34 +62,29 @@ int sldgm_get_temp_stats_log(int argc, char **argv, struct command *cmd, struct 
 		OPT_END()
 	};
 
-	err = parse_and_open(&dev, argc, argv, desc, opts);
+	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err)
 		return err;
 
-	sldgm_get_uuid_index(dev, &uuid_idx);
+	sldgm_get_uuid_index(hdl, &uuid_idx);
 
-	struct nvme_get_log_args args = {
-		.lpo	= 0,
-		.result = NULL,
-		.log	= buffer,
-		.args_size = sizeof(args),
-		.fd	= dev_fd(dev),
-		.uuidx	= uuid_idx,
-		.timeout = NVME_DEFAULT_IOCTL_TIMEOUT,
-		.lid	= SLDGM_TEMP_STATS_LID,
-		.len	= sizeof(buffer),
-		.nsid	= NVME_NSID_ALL,
-		.csi	= NVME_CSI_NVM,
-		.lsi	= NVME_LOG_LSI_NONE,
-		.lsp	= NVME_LOG_LSP_NONE,
-		.rae	= false,
-		.ot	= false,
-	};
-
-	err = nvme_get_log(&args);
+	nvme_init_get_log(&cmd, NVME_NSID_ALL,
+			  SLDGM_TEMP_STATS_LID, NVME_CSI_NVM,
+			  buffer, sizeof(buffer));
+	cmd.cdw14 |= NVME_FIELD_ENCODE(uuid_idx,
+				       NVME_LOG_CDW14_UUID_SHIFT,
+				       NVME_LOG_CDW14_UUID_MASK);
+	err = nvme_get_log(hdl, &cmd, false,
+				   NVME_LOG_PAGE_PDU_SIZE, NULL);
 	if (err > 0) {
-		args.lid = SLDGM_LEGACY_TEMP_STATS_LID;
-		err = nvme_get_log(&args);
+		nvme_init_get_log(&cmd, NVME_NSID_ALL,
+				  SLDGM_LEGACY_TEMP_STATS_LID, NVME_CSI_NVM,
+				  buffer, sizeof(buffer));
+		cmd.cdw14 |= NVME_FIELD_ENCODE(uuid_idx,
+					       NVME_LOG_CDW14_UUID_SHIFT,
+					       NVME_LOG_CDW14_UUID_MASK);
+		err = nvme_get_log(hdl, &cmd, false,
+				   NVME_LOG_PAGE_PDU_SIZE, NULL);
 		if (!err) {
 			uint64_t *guid = (uint64_t *)&buffer[4080];
 

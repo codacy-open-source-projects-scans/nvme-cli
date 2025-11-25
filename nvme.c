@@ -4358,7 +4358,7 @@ static int virtual_mgmt(int argc, char **argv, struct command *acmd, struct plug
 	};
 
 	NVME_ARGS(opts,
-		  OPT_UINT("cntlid", 'c', &cfg.cntlid, cntlid),
+		  OPT_SHRT("cntlid", 'c', &cfg.cntlid, cntlid),
 		  OPT_BYTE("rt",     'r', &cfg.rt,     rt),
 		  OPT_BYTE("act",    'a', &cfg.act,    act),
 		  OPT_SHRT("nr",     'n', &cfg.nr,     nr));
@@ -7263,7 +7263,7 @@ static int write_zeroes(int argc, char **argv, struct command *acmd, struct plug
 		cfg.ref_tag, cfg.storage_tag);
 	nvme_init_app_tag((struct nvme_passthru_cmd64 *)&cmd, cfg.app_tag,
 		cfg.app_tag_mask);
-	err = nvme_submit_admin_passthru(hdl, &cmd, &result);
+	err = nvme_submit_io_passthru(hdl, &cmd, &result);
 	if (err < 0)
 		nvme_show_error("write-zeroes: %s", nvme_strerror(err));
 	else if (err != 0)
@@ -7373,7 +7373,7 @@ static int dsm(int argc, char **argv, struct command *acmd, struct plugin *plugi
 
 	nvme_init_dsm(&cmd, cfg.namespace_id, nr, cfg.idr, cfg.idw, cfg.ad, dsm,
 		      sizeof(*dsm) * 256);
-	err = nvme_submit_admin_passthru(hdl, &cmd, NULL);
+	err = nvme_submit_io_passthru(hdl, &cmd, NULL);
 	if (err < 0)
 		nvme_show_error("data-set management: %s", nvme_strerror(err));
 	else if (err != 0)
@@ -7382,6 +7382,37 @@ static int dsm(int argc, char **argv, struct command *acmd, struct plugin *plugi
 		printf("NVMe DSM: success\n");
 
 	return err;
+}
+
+static int identify_pif_sts(struct nvme_transport_handle *hdl,
+			    __u32 nsid, __u8 *pif, __u8 *sts)
+{
+	_cleanup_free_ struct nvme_nvm_id_ns *nvm_ns = NULL;
+	_cleanup_free_ struct nvme_id_ns *ns = NULL;
+	int err;
+
+	ns = nvme_alloc(sizeof(*ns));
+	if (!ns)
+		return -ENOMEM;
+
+	err = nvme_identify_ns(hdl, nsid, ns);
+	if (err > 0) {
+		nvme_show_status(err);
+		return err;
+	} else if (err < 0) {
+		nvme_show_error("identify namespace: %s", nvme_strerror(-err));
+		return err;
+	}
+
+	nvm_ns = nvme_alloc(sizeof(*nvm_ns));
+	if (!nvm_ns)
+		return -ENOMEM;
+
+	err = nvme_identify_csi_ns(hdl, nsid, NVME_CSI_NVM, 0, nvm_ns);
+	if (!err)
+		get_pif_sts(ns, nvm_ns, pif, sts);
+
+	return 0;
 }
 
 static int copy_cmd(int argc, char **argv, struct command *acmd, struct plugin *plugin)
@@ -7416,6 +7447,8 @@ static int copy_cmd(int argc, char **argv, struct command *acmd, struct plugin *
 	__u64 slbas[256] = { 0 };
 	__u32 snsids[256] = { 0 };
 	__u16 sopts[256] = { 0 };
+	__u8 pif = 0;
+	__u8 sts = 0;
 	int err;
 
 	union {
@@ -7578,14 +7611,21 @@ static int copy_cmd(int argc, char **argv, struct command *acmd, struct plugin *
 		break;
 	}
 
+	err = identify_pif_sts(hdl, cfg.namespace_id, &pif, &sts);
+	if (err)
+		return err;
+
+	if (invalid_tags(0, cfg.ilbrt, sts, pif))
+		return -EINVAL;
+
 	nvme_init_copy(&cmd, cfg.namespace_id, cfg.sdlba, nr, cfg.format,
 		       cfg.prinfor, cfg.prinfow, 0, cfg.dtype, false, false,
 		       cfg.fua, cfg.lr, 0, cfg.dspec, copy->f0);
-	nvme_init_var_size_tags((struct nvme_passthru_cmd64 *)&cmd,
-		NVME_NVM_PIF_32B_GUARD, 0, cfg.ilbrt, 0);
+	nvme_init_var_size_tags((struct nvme_passthru_cmd64 *)&cmd, pif, sts,
+				cfg.ilbrt, 0);
 	nvme_init_app_tag((struct nvme_passthru_cmd64 *)&cmd, cfg.lbat,
 		cfg.lbatm);
-	err = nvme_submit_admin_passthru(hdl, &cmd, NULL);
+	err = nvme_submit_io_passthru(hdl, &cmd, NULL);
 	if (err < 0)
 		nvme_show_error("NVMe Copy: %s", nvme_strerror(err));
 	else if (err != 0)
@@ -7709,7 +7749,7 @@ static int resv_acquire(int argc, char **argv, struct command *acmd, struct plug
 
 	nvme_init_resv_acquire(&cmd, cfg.namespace_id, cfg.racqa, cfg.iekey,
 			       false, cfg.rtype, cfg.crkey, cfg.prkey, payload);
-	err = nvme_submit_admin_passthru(hdl, &cmd, NULL);
+	err = nvme_submit_io_passthru(hdl, &cmd, NULL);
 	if (err < 0)
 		nvme_show_error("reservation acquire: %s", nvme_strerror(err));
 	else if (err > 0)
@@ -7791,7 +7831,7 @@ static int resv_register(int argc, char **argv, struct command *acmd, struct plu
 	nvme_init_resv_register(&cmd, cfg.namespace_id, cfg.rrega, cfg.iekey,
 				false, cfg.cptpl, cfg.crkey, cfg.nrkey,
 				payload);
-	err = nvme_submit_admin_passthru(hdl, &cmd, NULL);
+	err = nvme_submit_io_passthru(hdl, &cmd, NULL);
 	if (err < 0)
 		nvme_show_error("reservation register: %s", nvme_strerror(err));
 	else if (err > 0)
@@ -8313,8 +8353,9 @@ static int submit_io(int opcode, char *command, const char *desc, int argc, char
 		cfg.ref_tag, cfg.storage_tag);
 	nvme_init_app_tag((struct nvme_passthru_cmd64 *)&cmd, cfg.app_tag,
 		cfg.app_tag_mask);
+
 	gettimeofday(&start_time, NULL);
-	err = nvme_submit_admin_passthru(hdl, &cmd, NULL);
+	err = nvme_submit_io_passthru(hdl, &cmd, NULL);
 	gettimeofday(&end_time, NULL);
 	if (cfg.latency)
 		printf(" latency: %s: %llu us\n", command, elapsed_utime(start_time, end_time));
@@ -8480,7 +8521,7 @@ static int verify_cmd(int argc, char **argv, struct command *acmd, struct plugin
 		cfg.ref_tag, cfg.storage_tag);
 	nvme_init_app_tag((struct nvme_passthru_cmd64 *)&cmd, cfg.app_tag,
 		cfg.app_tag_mask);
-	err = nvme_submit_admin_passthru(hdl, &cmd, NULL);
+	err = nvme_submit_io_passthru(hdl, &cmd, NULL);
 	if (err < 0)
 		nvme_show_error("verify: %s", nvme_strerror(err));
 	else if (err != 0)

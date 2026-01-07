@@ -51,6 +51,8 @@ cxx_available = add_languages('cpp', required: false, native: false)
 # dependencies are present. Also, -Dpython=enabled forces -Dlibnvme=enabled.
 want_nvme = get_option('nvme').disabled() == false
 want_libnvme = get_option('libnvme').disabled() == false
+want_docs = get_option('docs')
+want_docs_build = get_option('docs-build')
 
 feature_python = get_option('python')
 if feature_python.disabled()
@@ -74,7 +76,9 @@ endif
 # version to be composed of 2 or 3 digits after stripping trailing identifiers
 # such as "-rc.*". If the project version is composed of only two digits, then
 # we append '.0' to it.
-ver_digits = meson.project_version().split('-')[0]
+ver = meson.project_version()
+ver_digits = ver.split('-')[0]
+ver_digits = ver_digits.split('.dev')[0]
 num_digits = ver_digits.split('.').length()
 if num_digits < 2 or num_digits > 3
     error('Invalid version: ', meson.project_version())
@@ -559,9 +563,9 @@ if want_nvme
     if get_option('nvme-tests')
         subdir('tests')
     endif
-
-    subdir('Documentation')
 endif
+
+subdir('Documentation')
 
 
 ################################################################################
@@ -604,6 +608,7 @@ wanted_dict = {
     'nvme':             want_nvme,
     'libnvme':          want_libnvme,
     'python bindings ': want_python,
+    'build docs':       want_docs_build,
 }
 summary(wanted_dict, section: 'Features to build', bool_yn: true)
 

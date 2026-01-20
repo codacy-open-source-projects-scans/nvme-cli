@@ -579,7 +579,7 @@ int fabrics_discovery(const char *desc, int argc, char **argv, bool connect)
 
 out_free:
 	if (dump_config)
-		nvme_dump_config(ctx);
+		nvme_dump_config(ctx, NULL);
 
 	return ret;
 }
@@ -708,13 +708,13 @@ do_connect:
 
 	ret = nvmf_connect(ctx, fctx);
 	if (ret) {
-		fprintf(stderr, "failed to connected: %s\n",
-			nvme_strerror(ret));
+		fprintf(stderr, "failed to connect: %s\n",
+			nvme_strerror(-ret));
 		return ret;
 	}
 
 	if (dump_config)
-		nvme_dump_config(ctx);
+		nvme_dump_config(ctx, NULL);
 
 	return 0;
 }
@@ -1029,10 +1029,10 @@ int fabrics_config(const char *desc, int argc, char **argv)
 	}
 
 	if (update_config)
-		nvme_update_config(ctx);
+		nvme_dump_config(ctx, config_file);
 
 	if (dump_config)
-		nvme_dump_config(ctx);
+		nvme_dump_config(ctx, NULL);
 
 	return 0;
 }

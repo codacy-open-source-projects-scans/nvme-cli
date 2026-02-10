@@ -221,6 +221,7 @@ static const char *namespace_desired = "desired namespace";
 static const char *namespace_id_desired = "identifier of desired namespace";
 static const char *namespace_id_optional = "optional namespace attached to controller";
 static const char *nssf = "NVMe Security Specific Field";
+static const char *only_char_dev = "Only character device is allowed";
 static const char *prinfo = "PI and check field";
 static const char *rae = "Retain an Asynchronous Event";
 static const char *raw_directive = "show directive in binary format";
@@ -356,7 +357,9 @@ static int get_transport_handle(struct nvme_global_ctx *ctx, int argc,
 	devname = argv[optind];
 
 	ret = nvme_open(ctx, devname, hdl);
-	if (!ret && log_level >= LOG_DEBUG)
+	if (ret)
+		nvme_show_err(devname, ret);
+	else if (log_level >= LOG_DEBUG)
 		nvme_show_init();
 
 	return ret;
@@ -5349,6 +5352,11 @@ static int subsystem_reset(int argc, char **argv, struct command *acmd, struct p
 	if (err)
 		return err;
 
+	if (!nvme_transport_handle_is_chardev(hdl)) {
+		nvme_show_error(only_char_dev);
+		return -EINVAL;
+	}
+
 	err = nvme_subsystem_reset(hdl);
 	if (err < 0) {
 		if (errno == ENOTTY)
@@ -5375,6 +5383,11 @@ static int reset(int argc, char **argv, struct command *acmd, struct plugin *plu
 	if (err)
 		return err;
 
+	if (!nvme_transport_handle_is_chardev(hdl)) {
+		nvme_show_error(only_char_dev);
+		return -EINVAL;
+	}
+
 	err = nvme_ctrl_reset(hdl);
 	if (err < 0)
 		nvme_show_error("Reset: %s", nvme_strerror(err));
@@ -5398,6 +5411,11 @@ static int ns_rescan(int argc, char **argv, struct command *acmd, struct plugin 
 	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err)
 		return err;
+
+	if (!nvme_transport_handle_is_chardev(hdl)) {
+		nvme_show_error(only_char_dev);
+		return -EINVAL;
+	}
 
 	err = validate_output_format(nvme_cfg.output_format, &flags);
 	if (err < 0) {
@@ -5740,7 +5758,7 @@ static int show_registers(int argc, char **argv, struct command *acmd, struct pl
 		return err;
 
 	if (nvme_transport_handle_is_blkdev(hdl)) {
-		nvme_show_error("Only character device is allowed");
+		nvme_show_error(only_char_dev);
 		return -EINVAL;
 	}
 
@@ -6017,7 +6035,7 @@ static int get_register(int argc, char **argv, struct command *acmd, struct plug
 		return err;
 
 	if (nvme_transport_handle_is_blkdev(hdl)) {
-		nvme_show_error("Only character device is allowed");
+		nvme_show_error(only_char_dev);
 		return -EINVAL;
 	}
 
@@ -6321,7 +6339,7 @@ static int set_register(int argc, char **argv, struct command *acmd, struct plug
 		return err;
 
 	if (nvme_transport_handle_is_blkdev(hdl)) {
-		nvme_show_error("Only character device is allowed");
+		nvme_show_error(only_char_dev);
 		return -EINVAL;
 	}
 

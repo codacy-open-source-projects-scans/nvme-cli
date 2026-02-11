@@ -191,6 +191,7 @@ const char *output_format = "Output format: normal|binary";
 const char *timeout = "timeout value, in milliseconds";
 const char *verbose = "Increase output verbosity";
 const char *dry_run = "show command instead of sending";
+const char *uuid_index = "UUID index";
 
 static const char *app_tag = "app tag for end-to-end PI";
 static const char *app_tag_mask = "app tag mask for end-to-end PI";
@@ -238,7 +239,6 @@ static const char *start_block = "64-bit LBA of first block to access";
 static const char *storage_tag = "storage tag for end-to-end PI";
 static const char *storage_tag_check = "This bit specifies if the Storage Tag field shall be checked as\n"
 	"part of end-to-end data protection processing";
-static const char *uuid_index = "UUID index";
 static const char *uuid_index_specify = "specify uuid index";
 static const char dash[51] = {[0 ... 49] = '=', '\0'};
 static const char space[51] = {[0 ... 49] = ' ', '\0'};
@@ -1714,7 +1714,7 @@ static int get_endurance_event_agg_log(int argc, char **argv,
 
 	err = nvme_identify_ctrl(hdl, ctrl);
 	if (err < 0) {
-		nvme_show_error("identify controller: %s", nvme_strerror(err));
+		nvme_show_error("identify controller: %s", nvme_strerror(-err));
 		return err;
 	} else if (err) {
 		nvme_show_error("could not identify controller");
@@ -2910,7 +2910,7 @@ static bool is_ns_mgmt_support(struct nvme_transport_handle *hdl)
 static void ns_mgmt_show_status(struct nvme_transport_handle *hdl, int err, char *cmd, __u32 nsid)
 {
 	if (err < 0) {
-		nvme_show_error("%s: %s", cmd, nvme_strerror(err));
+		nvme_show_error("%s: %s", cmd, nvme_strerror(-err));
 		return;
 	}
 
@@ -2968,7 +2968,7 @@ static int delete_ns(int argc, char **argv, struct command *acmd, struct plugin 
 	if (!cfg.namespace_id) {
 		err = nvme_get_nsid(hdl, &cfg.namespace_id);
 		if (err < 0) {
-			nvme_show_error("get-namespace-id: %s", nvme_strerror(err));
+			nvme_show_error("get-namespace-id: %s", nvme_strerror(-err));
 			return err;
 		}
 	}
@@ -3539,7 +3539,7 @@ static int list(int argc, char **argv, struct command *acmd, struct plugin *plug
 	}
 	err = nvme_scan_topology(ctx, NULL, NULL);
 	if (err < 0) {
-		nvme_show_error("Failed to scan topology: %s", nvme_strerror(err));
+		nvme_show_error("Failed to scan topology: %s", nvme_strerror(-err));
 		return err;
 	}
 
@@ -3854,7 +3854,7 @@ static int ns_descs(int argc, char **argv, struct command *acmd, struct plugin *
 	if (!cfg.namespace_id) {
 		err = nvme_get_nsid(hdl, &cfg.namespace_id);
 		if (err < 0) {
-			nvme_show_error("get-namespace-id: %s", nvme_strerror(err));
+			nvme_show_error("get-namespace-id: %s", nvme_strerror(-err));
 			return err;
 		}
 	}
@@ -3935,7 +3935,7 @@ static int id_ns(int argc, char **argv, struct command *acmd, struct plugin *plu
 	if (!cfg.namespace_id) {
 		err = nvme_get_nsid(hdl, &cfg.namespace_id);
 		if (err < 0) {
-			nvme_show_error("get-namespace-id: %s", nvme_strerror(err));
+			nvme_show_error("get-namespace-id: %s", nvme_strerror(-err));
 			return err;
 		}
 	}
@@ -4317,7 +4317,7 @@ static int get_ns_id(int argc, char **argv, struct command *acmd, struct plugin 
 
 	err = nvme_get_nsid(hdl, &nsid);
 	if (err < 0) {
-		nvme_show_error("get namespace ID: %s", nvme_strerror(err));
+		nvme_show_error("get namespace ID: %s", nvme_strerror(-err));
 		return -errno;
 	}
 
@@ -4943,7 +4943,7 @@ static int get_feature(int argc, char **argv, struct command *acmd,
 		err = nvme_get_nsid(hdl, &cfg.namespace_id);
 		if (err < 0) {
 			if (errno != ENOTTY) {
-				nvme_show_error("get-namespace-id: %s", nvme_strerror(err));
+				nvme_show_error("get-namespace-id: %s", nvme_strerror(-err));
 				return err;
 			}
 			cfg.namespace_id = NVME_NSID_ALL;
@@ -5272,7 +5272,11 @@ static int fw_commit(int argc, char **argv, struct command *acmd, struct plugin 
 		"with an 'echo 1 > /sys/class/nvme/nvmeX/reset_controller'. "
 		"Ensure nvmeX is the device you just activated before reset.";
 	const char *slot = "[0-7]: firmware slot for commit action";
-	const char *action = "[0-7]: commit action";
+	const char *action = "[0-7]: commit action: 0 = replace, "
+				"1 = replace and activate, 2 = set active, "
+				"3 = replace and activate immediate, "
+				"6 = replace boot partition, "
+				"7 = activate boot partition";
 	const char *bpid = "[0,1]: boot partition identifier, if applicable (default: 0)";
 
 	_cleanup_nvme_global_ctx_ struct nvme_global_ctx *ctx = NULL;
@@ -5293,9 +5297,23 @@ static int fw_commit(int argc, char **argv, struct command *acmd, struct plugin 
 		.bpid	= 0,
 	};
 
+	OPT_VALS(ca) = {
+		VAL_BYTE("replace", NVME_FW_COMMIT_CA_REPLACE),
+		VAL_BYTE("replace-and-activate",
+			 NVME_FW_COMMIT_CA_REPLACE_AND_ACTIVATE),
+		VAL_BYTE("set-active", NVME_FW_COMMIT_CA_SET_ACTIVE),
+		VAL_BYTE("replace-and-activate-immediate",
+			 NVME_FW_COMMIT_CA_REPLACE_AND_ACTIVATE_IMMEDIATE),
+		VAL_BYTE("replace-boot-partition",
+			 NVME_FW_COMMIT_CA_REPLACE_BOOT_PARTITION),
+		VAL_BYTE("activate-boot-partition",
+			 NVME_FW_COMMIT_CA_ACTIVATE_BOOT_PARTITION),
+		VAL_END()
+	};
+
 	NVME_ARGS(opts,
 		  OPT_BYTE("slot",   's', &cfg.slot,   slot),
-		  OPT_BYTE("action", 'a', &cfg.action, action),
+		  OPT_BYTE("action", 'a', &cfg.action, action, ca),
 		  OPT_BYTE("bpid",   'b', &cfg.bpid,   bpid));
 
 	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
@@ -5312,10 +5330,19 @@ static int fw_commit(int argc, char **argv, struct command *acmd, struct plugin 
 		nvme_show_error("invalid slot:%d", cfg.slot);
 		return -EINVAL;
 	}
-	if (cfg.action > 7 || cfg.action == 4 || cfg.action == 5) {
+
+	switch (cfg.action) {
+	case NVME_FW_COMMIT_CA_REPLACE:
+	case NVME_FW_COMMIT_CA_REPLACE_AND_ACTIVATE:
+	case NVME_FW_COMMIT_CA_SET_ACTIVE:
+	case NVME_FW_COMMIT_CA_REPLACE_BOOT_PARTITION:
+	case NVME_FW_COMMIT_CA_ACTIVATE_BOOT_PARTITION:
+		break;
+	default:
 		nvme_show_error("invalid action:%d", cfg.action);
 		return -EINVAL;
 	}
+
 	if (cfg.bpid > 1) {
 		nvme_show_error("invalid boot partition id:%d", cfg.bpid);
 		return -EINVAL;
@@ -5362,7 +5389,7 @@ static int subsystem_reset(int argc, char **argv, struct command *acmd, struct p
 		if (errno == ENOTTY)
 			nvme_show_error("Subsystem-reset: NVM Subsystem Reset not supported.");
 		else
-			nvme_show_error("Subsystem-reset: %s", nvme_strerror(err));
+			nvme_show_error("Subsystem-reset: %s", nvme_strerror(-err));
 	} else if (argconfig_parse_seen(opts, "verbose"))
 		printf("resetting subsystem through %s\n", nvme_transport_handle_get_name(hdl));
 
@@ -5390,7 +5417,7 @@ static int reset(int argc, char **argv, struct command *acmd, struct plugin *plu
 
 	err = nvme_ctrl_reset(hdl);
 	if (err < 0)
-		nvme_show_error("Reset: %s", nvme_strerror(err));
+		nvme_show_error("Reset: %s", nvme_strerror(-err));
 	else if (argconfig_parse_seen(opts, "verbose"))
 		printf("resetting controller %s\n", nvme_transport_handle_get_name(hdl));
 
@@ -5425,7 +5452,7 @@ static int ns_rescan(int argc, char **argv, struct command *acmd, struct plugin 
 
 	err = nvme_ns_rescan(hdl);
 	if (err < 0)
-		nvme_show_error("Namespace Rescan: %s\n", nvme_strerror(err));
+		nvme_show_error("Namespace Rescan: %s\n", nvme_strerror(-err));
 	else if (argconfig_parse_seen(opts, "verbose"))
 		printf("rescanning namespaces through %s\n", nvme_transport_handle_get_name(hdl));
 
@@ -6590,7 +6617,7 @@ static int format_cmd(int argc, char **argv, struct command *acmd, struct plugin
 	} else if (!cfg.namespace_id) {
 		err = nvme_get_nsid(hdl, &cfg.namespace_id);
 		if (err < 0) {
-			nvme_show_error("get-namespace-id: %s", nvme_strerror(err));
+			nvme_show_error("get-namespace-id: %s", nvme_strerror(-err));
 			return -errno;
 		}
 	}
@@ -6798,7 +6825,7 @@ static int set_feature(int argc, char **argv, struct command *acmd, struct plugi
 		err = nvme_get_nsid(hdl, &cfg.nsid);
 		if (err < 0) {
 			if (errno != ENOTTY) {
-				nvme_show_error("get-namespace-id: %s", nvme_strerror(err));
+				nvme_show_error("get-namespace-id: %s", nvme_strerror(-err));
 				return -errno;
 			}
 			cfg.nsid = NVME_NSID_ALL;
@@ -7160,7 +7187,7 @@ static int write_uncor(int argc, char **argv, struct command *acmd, struct plugi
 	if (!cfg.namespace_id) {
 		err = nvme_get_nsid(hdl, &cfg.namespace_id);
 		if (err < 0) {
-			nvme_show_error("get-namespace-id: %s", nvme_strerror(err));
+			nvme_show_error("get-namespace-id: %s", nvme_strerror(-err));
 			return err;
 		}
 	}
@@ -7433,7 +7460,7 @@ static int write_zeroes(int argc, char **argv,
 	if (!cfg.nsid) {
 		err = nvme_get_nsid(hdl, &cfg.nsid);
 		if (err < 0) {
-			nvme_show_error("get-namespace-id: %s", nvme_strerror(err));
+			nvme_show_error("get-namespace-id: %s", nvme_strerror(-err));
 			return err;
 		}
 	}
@@ -7553,7 +7580,7 @@ static int dsm(int argc, char **argv, struct command *acmd, struct plugin *plugi
 	if (!cfg.namespace_id) {
 		err = nvme_get_nsid(hdl, &cfg.namespace_id);
 		if (err < 0) {
-			nvme_show_error("get-namespace-id: %s", nvme_strerror(err));
+			nvme_show_error("get-namespace-id: %s", nvme_strerror(-err));
 			return err;
 		}
 	}
@@ -7753,7 +7780,7 @@ static int copy_cmd(int argc, char **argv, struct command *acmd, struct plugin *
 	if (!cfg.nsid) {
 		err = nvme_get_nsid(hdl, &cfg.nsid);
 		if (err < 0) {
-			nvme_show_error("get-namespace-id: %s", nvme_strerror(err));
+			nvme_show_error("get-namespace-id: %s", nvme_strerror(-err));
 			return err;
 		}
 	}
@@ -7833,7 +7860,7 @@ static int flush_cmd(int argc, char **argv, struct command *acmd, struct plugin 
 	if (!cfg.namespace_id) {
 		err = nvme_get_nsid(hdl, &cfg.namespace_id);
 		if (err < 0) {
-			nvme_show_error("get-namespace-id: %s", nvme_strerror(err));
+			nvme_show_error("get-namespace-id: %s", nvme_strerror(-err));
 			return err;
 		}
 	}
@@ -7905,7 +7932,7 @@ static int resv_acquire(int argc, char **argv, struct command *acmd, struct plug
 	if (!cfg.namespace_id) {
 		err = nvme_get_nsid(hdl, &cfg.namespace_id);
 		if (err < 0) {
-			nvme_show_error("get-namespace-id: %s", nvme_strerror(err));
+			nvme_show_error("get-namespace-id: %s", nvme_strerror(-err));
 			return err;
 		}
 	}
@@ -7981,7 +8008,7 @@ static int resv_register(int argc, char **argv, struct command *acmd, struct plu
 	if (!cfg.namespace_id) {
 		err = nvme_get_nsid(hdl, &cfg.namespace_id);
 		if (err < 0) {
-			nvme_show_error("get-namespace-id: %s", nvme_strerror(err));
+			nvme_show_error("get-namespace-id: %s", nvme_strerror(-err));
 			return err;
 		}
 	}
@@ -8064,7 +8091,7 @@ static int resv_release(int argc, char **argv, struct command *acmd, struct plug
 	if (!cfg.nsid) {
 		err = nvme_get_nsid(hdl, &cfg.nsid);
 		if (err < 0) {
-			nvme_show_error("get-namespace-id: %s", nvme_strerror(err));
+			nvme_show_error("get-namespace-id: %s", nvme_strerror(-err));
 			return err;
 		}
 	}
@@ -8139,7 +8166,7 @@ static int resv_report(int argc, char **argv, struct command *acmd, struct plugi
 	if (!cfg.nsid) {
 		err = nvme_get_nsid(hdl, &cfg.nsid);
 		if (err < 0) {
-			nvme_show_error("get-namespace-id: %s", nvme_strerror(err));
+			nvme_show_error("get-namespace-id: %s", nvme_strerror(-err));
 			return err;
 		}
 	}
@@ -8326,7 +8353,7 @@ static int submit_io(int opcode, char *command, const char *desc, int argc, char
 	if (!cfg.nsid) {
 		err = nvme_get_nsid(hdl, &cfg.nsid);
 		if (err < 0) {
-			nvme_show_error("get-namespace-id: %s", nvme_strerror(err));
+			nvme_show_error("get-namespace-id: %s", nvme_strerror(-err));
 			return err;
 		}
 	}
@@ -8623,7 +8650,7 @@ static int verify_cmd(int argc, char **argv, struct command *acmd, struct plugin
 	if (!cfg.nsid) {
 		err = nvme_get_nsid(hdl, &cfg.nsid);
 		if (err < 0) {
-			nvme_show_error("get-namespace-id: %s", nvme_strerror(err));
+			nvme_show_error("get-namespace-id: %s", nvme_strerror(-err));
 			return err;
 		}
 	}
@@ -10144,7 +10171,7 @@ static int tls_key(int argc, char **argv, struct command *acmd, struct plugin *p
 		err = nvme_scan_tls_keys(ctx, cfg.keyring, __scan_tls_key, fd);
 		if (err < 0) {
 			nvme_show_error("Export of TLS keys failed with '%s'",
-				nvme_strerror(err));
+				nvme_strerror(-err));
 			return err;
 		}
 
@@ -10251,7 +10278,7 @@ static int show_topology_cmd(int argc, char **argv, struct command *acmd, struct
 
 	err = nvme_scan_topology(ctx, filter, (void *)devname);
 	if (err < 0) {
-		nvme_show_error("Failed to scan topology: %s", nvme_strerror(err));
+		nvme_show_error("Failed to scan topology: %s", nvme_strerror(-err));
 		return err;
 	}
 

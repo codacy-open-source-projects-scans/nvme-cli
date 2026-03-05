@@ -7,7 +7,6 @@
  * 	    Chaitanya Kulkarni <chaitanya.kulkarni@wdc.com>
  */
 
-#include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -33,14 +32,9 @@
 #include <ccan/array_size/array_size.h>
 #include <ccan/str/str.h>
 
+#include <libnvme.h>
+
 #include "cleanup.h"
-#include "fabrics.h"
-#include "linux.h"
-#include "ioctl.h"
-#include "nbft.h"
-#include "nvme/tree.h"
-#include "util.h"
-#include "log.h"
 #include "private.h"
 
 #define NVMF_HOSTID_SIZE	37
@@ -1968,13 +1962,13 @@ int nvme_parse_uri(const char *str, struct nvme_fabrics_uri **urip)
 
 	if (sscanf(str, "%m[^:/]://%m[^/?#]%ms",
 		   &scheme, &authority, &path) < 2) {
-		nvme_free_uri(uri);
+		nvmf_free_uri(uri);
 		return -EINVAL;
 	}
 
 	if (sscanf(scheme, "%m[^+]+%ms",
 		   &uri->scheme, &uri->protocol) < 1) {
-		nvme_free_uri(uri);
+		nvmf_free_uri(uri);
 		return -EINVAL;
 	}
 
@@ -1992,7 +1986,7 @@ int nvme_parse_uri(const char *str, struct nvme_fabrics_uri **urip)
 		/* treat it as IPv4/hostname */
 		if (sscanf(host, "%m[^:]:%d",
 			   &h, &uri->port) < 1) {
-			nvme_free_uri(uri);
+			nvmf_free_uri(uri);
 			return -EINVAL;
 		}
 		uri->host = unescape_uri(h, 0);
@@ -2036,7 +2030,7 @@ int nvme_parse_uri(const char *str, struct nvme_fabrics_uri **urip)
 	return 0;
 }
 
-void nvme_free_uri(struct nvme_fabrics_uri *uri)
+void nvmf_free_uri(struct nvme_fabrics_uri *uri)
 {
 	char **s;
 
@@ -2822,7 +2816,7 @@ static int nbft_connect(struct nvme_global_ctx *ctx,
 
 	/* Pause logging for unavailable SSNSs */
 	if (ss && ss->unavailable && saved_log_level < 1)
-		nvme_init_logging(ctx, -1, false, false);
+		nvme_set_logging_level(ctx, -1, false, false);
 
 	if (e) {
 		if (e->trtype == NVMF_TRTYPE_TCP &&
@@ -2834,7 +2828,7 @@ static int nbft_connect(struct nvme_global_ctx *ctx,
 
 	/* Resume logging */
 	if (ss && ss->unavailable && saved_log_level < 1)
-		nvme_init_logging(ctx,
+		nvme_set_logging_level(ctx,
 				  saved_log_level,
 				  saved_log_pid,
 				  saved_log_tstamp);

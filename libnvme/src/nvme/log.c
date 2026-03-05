@@ -15,10 +15,12 @@
 #include <syslog.h>
 #include <unistd.h>
 #include <time.h>
+
+#include <libnvme.h>
+
+#include "cleanup.h"
 #define LOG_FUNCNAME 1
 #include "private.h"
-#include "log.h"
-#include "cleanup.h"
 
 #ifndef LOG_CLOCK
 #define LOG_CLOCK CLOCK_MONOTONIC
@@ -82,10 +84,10 @@ __nvme_msg(struct nvme_global_ctx *ctx, int level,
 		message ? message : "<error>");
 }
 
-void nvme_init_logging(struct nvme_global_ctx *ctx, int lvl,
+void nvme_set_logging_level(struct nvme_global_ctx *ctx, int log_level,
 		bool log_pid, bool log_tstamp)
 {
-	ctx->log.level = lvl;
+	ctx->log.level = log_level;
 	ctx->log.pid = log_pid;
 	ctx->log.timestamp = log_tstamp;
 }

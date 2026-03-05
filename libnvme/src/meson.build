@@ -7,10 +7,12 @@
 #
 sources = [
     'nvme/base64.c',
+    'nvme/cmds.c',
     'nvme/crc32.c',
     'nvme/fabrics.c',
     'nvme/filters.c',
     'nvme/ioctl.c',
+    'nvme/lib.c',
     'nvme/linux.c',
     'nvme/log.c',
     'nvme/mi-mctp.c',
@@ -96,16 +98,18 @@ install_headers(
 )
 install_headers(
     [
+        'nvme/cmds.h',
         'nvme/fabrics.h',
         'nvme/filters.h',
         'nvme/ioctl.h',
+        'nvme/lib-types.h',
+        'nvme/lib.h',
         'nvme/linux.h',
-        'nvme/log.h',
+        'nvme/mi.h',
         'nvme/nbft.h',
         'nvme/tree.h',
         'nvme/types.h',
         'nvme/util.h',
-        'nvme/mi.h',
     ],
     subdir: 'nvme',
     install_mode: mode,

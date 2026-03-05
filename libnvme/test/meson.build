@@ -15,7 +15,7 @@ main = executable(
     dependencies: [
         config_dep,
         ccan_dep,
-        libnvme_dep,
+        libnvme_test_dep,
     ],
 )
 
@@ -61,7 +61,7 @@ zns = executable(
     dependencies: [
         config_dep,
         ccan_dep,
-        libnvme_dep,
+        libnvme_test_dep,
     ],
 )
 
@@ -143,7 +143,7 @@ if conf.get('HAVE_NETDB')
         dependencies: [
             config_dep,
             ccan_dep,
-            libnvme_dep,
+            libnvme_test_dep,
         ],
     )
     test('libnvme - util', test_util)
@@ -176,3 +176,32 @@ if openssl_dep.found()
         dependencies: openssl_dep,
     )
 endif
+
+foreach hdr : [
+    'cmds',
+    'fabrics',
+    'filters',
+    'ioctl',
+    'lib',
+    'lib-types',
+    'linux',
+    'mi',
+    'nbft',
+    'tree',
+    'types',
+    'util',
+]
+    hdr_conf = configuration_data()
+    hdr_conf.set('HDR', hdr)
+    src = configure_file(
+        input: 'test-header.c.in',
+        output: 'test-header-' + hdr + '.c',
+        configuration: hdr_conf,
+    )
+    exe = executable(
+        'test-header-' + hdr,
+        src,
+        dependencies: [libnvme_dep],
+    )
+    test('libnvme - header/' + hdr, exe)
+endforeach

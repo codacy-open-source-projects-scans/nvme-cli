@@ -24,31 +24,27 @@
 /**
  * This program uses NVMe IOCTLs to run native nvme commands to a device.
  */
-#include "nvme/tree.h"
-#include "nvme/types.h"
-#include "util/cleanup.h"
+#include <dirent.h>
 #include <errno.h>
-#include <getopt.h>
 #include <fcntl.h>
+#include <getopt.h>
 #include <inttypes.h>
+#include <libgen.h>
 #include <locale.h>
-#include <stdio.h>
+#include <math.h>
+#include <signal.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <math.h>
-#include <dirent.h>
-#include <libgen.h>
-#include <signal.h>
 
 #include <linux/fs.h>
 
-#include <sys/mman.h>
-#include <sys/types.h>
-#include <sys/stat.h>
 #include <sys/ioctl.h>
-
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <sys/types.h>
 
 #if HAVE_SYS_RANDOM
 	#include <sys/random.h>
@@ -59,10 +55,13 @@
 #include "common.h"
 #include "nvme.h"
 #include "nvme-print.h"
+#include "nvme/tree.h"
+#include "nvme/types.h"
 #include "plugin.h"
-#include "util/base64.h"
-#include "util/crc32.h"
 #include "util/argconfig.h"
+#include "util/base64.h"
+#include "util/cleanup.h"
+#include "util/crc32.h"
 #include "util/suffix.h"
 #include "logging.h"
 #include "util/sighdl.h"
@@ -8352,9 +8351,9 @@ static int submit_io(int opcode, char *command, const char *desc, int argc, char
 	__u32 dsmgmt = 0;
 	int mode = 0644;
 	void *buffer;
+	__u16 ms = 0;
 	int err = 0;
 	int flags;
-	__u16 ms;
 
 	const char *start_block_addr = "64-bit addr of first block to access";
 	const char *block_size = "if specified, logical block size in bytes;\n"
@@ -8531,13 +8530,7 @@ static int submit_io(int opcode, char *command, const char *desc, int argc, char
 	} else {
 		err = get_pi_info(hdl, cfg.nsid, cfg.prinfo,
 			cfg.ilbrt, cfg.lbst, &logical_block_size, &ms);
-		if (err) {
-			logical_block_size = 0;
-			ms = 0;
-			pi_available = false;
-		} else {
-			pi_available = true;
-		}
+		pi_available = err == 0;
 	}
 
 	buffer_size = ((long long)cfg.block_count + 1) * logical_block_size;
@@ -9529,7 +9522,7 @@ static int gen_hostnqn_cmd(int argc, char **argv, struct command *acmd, struct p
 {
 	char *hostnqn;
 
-	hostnqn = nvmf_hostnqn_generate();
+	hostnqn = nvme_hostnqn_generate();
 	if (!hostnqn) {
 		nvme_show_error("\"%s\" not supported. Install lib uuid and rebuild.",
 				acmd->name);
@@ -9544,9 +9537,9 @@ static int show_hostnqn_cmd(int argc, char **argv, struct command *acmd, struct 
 {
 	char *hostnqn;
 
-	hostnqn = nvmf_hostnqn_from_file();
+	hostnqn = nvme_hostnqn_from_file();
 	if (!hostnqn)
-		hostnqn =  nvmf_hostnqn_generate();
+		hostnqn =  nvme_hostnqn_generate();
 
 	if (!hostnqn) {
 		nvme_show_error("hostnqn is not available -- use nvme gen-hostnqn");
@@ -9674,7 +9667,7 @@ static int gen_dhchap_key(int argc, char **argv, struct command *acmd, struct pl
 	}
 
 	if (!cfg.nqn) {
-		cfg.nqn = hnqn = nvmf_hostnqn_from_file();
+		cfg.nqn = hnqn = nvme_hostnqn_from_file();
 		if (!cfg.nqn) {
 			nvme_show_error("Could not read host NQN");
 			return -ENOENT;
@@ -9938,7 +9931,7 @@ static int gen_tls_key(int argc, char **argv, struct command *acmd, struct plugi
 			return -EINVAL;
 		}
 		if (!cfg.hostnqn) {
-			cfg.hostnqn = hnqn = nvmf_hostnqn_from_file();
+			cfg.hostnqn = hnqn = nvme_hostnqn_from_file();
 			if (!cfg.hostnqn) {
 				nvme_show_error("Failed to read host NQN");
 				return -EINVAL;
@@ -10100,7 +10093,7 @@ static int check_tls_key(int argc, char **argv, struct command *acmd, struct plu
 
 	if (cfg.subsysnqn) {
 		if (!cfg.hostnqn) {
-			cfg.hostnqn = hnqn = nvmf_hostnqn_from_file();
+			cfg.hostnqn = hnqn = nvme_hostnqn_from_file();
 			if (!cfg.hostnqn) {
 				nvme_show_error("Failed to read host NQN");
 				return -EINVAL;
@@ -10434,6 +10427,7 @@ static int show_topology_cmd(int argc, char **argv, struct command *acmd, struct
 	return err;
 }
 
+#ifdef CONFIG_FABRICS
 static int discover_cmd(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
 	const char *desc = "Send Get Log Page request to Discovery Controller.";
@@ -10484,6 +10478,7 @@ static int dim_cmd(int argc, char **argv, struct command *acmd, struct plugin *p
 
 	return fabrics_dim(desc, argc, argv);
 }
+#endif
 
 static int nvme_mi(int argc, char **argv, __u8 admin_opcode, const char *desc)
 {

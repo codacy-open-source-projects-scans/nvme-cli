@@ -1,3 +1,12 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
+
+/**
+ * This file is part of libnvme.
+ *
+ * Copyright (c) 2025, Dell Technologies Inc. or its subsidiaries.
+ * Authors: Martin Belanger <Martin.Belanger@dell.com>
+ *
+ */
 
 LIBNVME_ACCESSORS_3 {
 	global:
@@ -49,8 +58,8 @@ LIBNVME_ACCESSORS_3 {
 		nvme_ctrl_set_traddr;
 		nvme_ctrl_get_trsvcid;
 		nvme_ctrl_set_trsvcid;
-		nvme_ctrl_get_dhchap_key;
-		nvme_ctrl_set_dhchap_key;
+		nvme_ctrl_get_dhchap_host_key;
+		nvme_ctrl_set_dhchap_host_key;
 		nvme_ctrl_get_dhchap_ctrl_key;
 		nvme_ctrl_set_dhchap_ctrl_key;
 		nvme_ctrl_get_keyring;
@@ -99,8 +108,8 @@ LIBNVME_ACCESSORS_3 {
 		nvme_host_set_hostnqn;
 		nvme_host_get_hostid;
 		nvme_host_set_hostid;
-		nvme_host_get_dhchap_key;
-		nvme_host_set_dhchap_key;
+		nvme_host_get_dhchap_host_key;
+		nvme_host_set_dhchap_host_key;
 		nvme_host_get_hostsymname;
 		nvme_host_set_hostsymname;
 		nvme_host_get_pdc_enabled_valid;

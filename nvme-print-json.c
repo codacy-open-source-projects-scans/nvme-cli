@@ -2678,7 +2678,7 @@ static unsigned int json_print_nvme_subsystem_multipath(nvme_subsystem_t s, json
 		path_attrs = json_create_object();
 		obj_add_str(path_attrs, "Name", nvme_ctrl_get_name(c));
 		obj_add_str(path_attrs, "Transport", nvme_ctrl_get_transport(c));
-		obj_add_str(path_attrs, "Address", nvme_ctrl_get_address(c));
+		obj_add_str(path_attrs, "Address", nvme_ctrl_get_traddr(c));
 		obj_add_str(path_attrs, "State", nvme_ctrl_get_state(c));
 		obj_add_str(path_attrs, "ANAState", nvme_path_get_ana_state(p));
 		array_add_obj(paths, path_attrs);
@@ -2699,7 +2699,7 @@ static void json_print_nvme_subsystem_ctrls(nvme_subsystem_t s,
 		path_attrs = json_create_object();
 		obj_add_str(path_attrs, "Name", nvme_ctrl_get_name(c));
 		obj_add_str(path_attrs, "Transport", nvme_ctrl_get_transport(c));
-		obj_add_str(path_attrs, "Address", nvme_ctrl_get_address(c));
+		obj_add_str(path_attrs, "Address", nvme_ctrl_get_traddr(c));
 		obj_add_str(path_attrs, "State", nvme_ctrl_get_state(c));
 		array_add_obj(paths, path_attrs);
 	}
@@ -2734,7 +2734,7 @@ static void json_print_nvme_subsystem_list(struct nvme_global_ctx *ctx,
 
 			subsystem_attrs = json_create_object();
 			obj_add_str(subsystem_attrs, "Name", nvme_subsystem_get_name(s));
-			obj_add_str(subsystem_attrs, "NQN", nvme_subsystem_get_nqn(s));
+			obj_add_str(subsystem_attrs, "NQN", nvme_subsystem_get_subsysnqn(s));
 
 			if (verbose_mode()) {
 				obj_add_str(subsystem_attrs, "Model",
@@ -2742,11 +2742,11 @@ static void json_print_nvme_subsystem_list(struct nvme_global_ctx *ctx,
 				obj_add_str(subsystem_attrs, "Serial",
 						nvme_subsystem_get_serial(s));
 				obj_add_str(subsystem_attrs, "Firmware",
-						nvme_subsystem_get_fw_rev(s));
+						nvme_subsystem_get_firmware(s));
 				obj_add_str(subsystem_attrs, "IOPolicy",
 						nvme_subsystem_get_iopolicy(s));
 				obj_add_str(subsystem_attrs, "Type",
-						nvme_subsystem_get_type(s));
+						nvme_subsystem_get_subsystype(s));
 			}
 
 			array_add_obj(subsystems, subsystem_attrs);
@@ -4663,7 +4663,7 @@ static void json_print_detail_list_multipath(nvme_subsystem_t s,
 			obj_add_str(jpath, "ModelNumber", nvme_ctrl_get_model(c));
 			obj_add_str(jpath, "Firmware", nvme_ctrl_get_firmware(c));
 			obj_add_str(jpath, "Transport", nvme_ctrl_get_transport(c));
-			obj_add_str(jpath, "Address", nvme_ctrl_get_address(c));
+			obj_add_str(jpath, "Address", nvme_ctrl_get_traddr(c));
 			obj_add_str(jpath, "Slot", nvme_ctrl_get_phy_slot(c));
 
 			array_add_obj(jpaths, jpath);
@@ -4691,7 +4691,7 @@ static void json_print_detail_list(nvme_subsystem_t s, struct json_object *jss)
 		obj_add_str(jctrl, "ModelNumber", nvme_ctrl_get_model(c));
 		obj_add_str(jctrl, "Firmware", nvme_ctrl_get_firmware(c));
 		obj_add_str(jctrl, "Transport", nvme_ctrl_get_transport(c));
-		obj_add_str(jctrl, "Address", nvme_ctrl_get_address(c));
+		obj_add_str(jctrl, "Address", nvme_ctrl_get_traddr(c));
 		obj_add_str(jctrl, "Slot", nvme_ctrl_get_phy_slot(c));
 
 		nvme_ctrl_for_each_ns(c, n) {
@@ -4740,7 +4740,7 @@ static void json_detail_list_v2(struct nvme_global_ctx *ctx)
 			struct json_object *jss = json_create_object();
 
 			obj_add_str(jss, "Subsystem", nvme_subsystem_get_name(s));
-			obj_add_str(jss, "SubsystemNQN", nvme_subsystem_get_nqn(s));
+			obj_add_str(jss, "SubsystemNQN", nvme_subsystem_get_subsysnqn(s));
 
 			if (nvme_is_multipath(s))
 				json_print_detail_list_multipath(s, jss);
@@ -4786,7 +4786,7 @@ static void json_detail_list(struct nvme_global_ctx *ctx)
 			struct json_object *jnss = json_create_array();
 
 			obj_add_str(jss, "Subsystem", nvme_subsystem_get_name(s));
-			obj_add_str(jss, "SubsystemNQN", nvme_subsystem_get_nqn(s));
+			obj_add_str(jss, "SubsystemNQN", nvme_subsystem_get_subsysnqn(s));
 
 			nvme_subsystem_for_each_ctrl(s, c) {
 				struct json_object *jctrl = json_create_object();
@@ -4799,7 +4799,7 @@ static void json_detail_list(struct nvme_global_ctx *ctx)
 				obj_add_str(jctrl, "ModelNumber", nvme_ctrl_get_model(c));
 				obj_add_str(jctrl, "Firmware", nvme_ctrl_get_firmware(c));
 				obj_add_str(jctrl, "Transport", nvme_ctrl_get_transport(c));
-				obj_add_str(jctrl, "Address", nvme_ctrl_get_address(c));
+				obj_add_str(jctrl, "Address", nvme_ctrl_get_traddr(c));
 				obj_add_str(jctrl, "Slot", nvme_ctrl_get_phy_slot(c));
 
 				nvme_ctrl_for_each_ns(c, n) {
@@ -4979,7 +4979,7 @@ static unsigned int json_subsystem_topology_multipath(nvme_subsystem_t s,
 			ctrl_attrs = json_create_object();
 			obj_add_str(ctrl_attrs, "Name", nvme_ctrl_get_name(c));
 			obj_add_str(ctrl_attrs, "Transport", nvme_ctrl_get_transport(c));
-			obj_add_str(ctrl_attrs, "Address", nvme_ctrl_get_address(c));
+			obj_add_str(ctrl_attrs, "Address", nvme_ctrl_get_traddr(c));
 			obj_add_str(ctrl_attrs, "State", nvme_ctrl_get_state(c));
 			array_add_obj(ctrls, ctrl_attrs);
 			obj_add_array(path_attrs, "Controller", ctrls);
@@ -5017,7 +5017,7 @@ static void json_print_nvme_subsystem_topology(nvme_subsystem_t s,
 			obj_add_str(ctrl_attrs, "Transport",
 						     nvme_ctrl_get_transport(c));
 			obj_add_str(ctrl_attrs, "Address",
-						     nvme_ctrl_get_address(c));
+						     nvme_ctrl_get_traddr(c));
 			obj_add_str(ctrl_attrs, "State",
 						     nvme_ctrl_get_state(c));
 
@@ -5048,7 +5048,7 @@ static void json_simple_topology(struct nvme_global_ctx *ctx)
 		nvme_for_each_subsystem(h, s) {
 			subsystem_attrs = json_create_object();
 			obj_add_str(subsystem_attrs, "Name", nvme_subsystem_get_name(s));
-			obj_add_str(subsystem_attrs, "NQN", nvme_subsystem_get_nqn(s));
+			obj_add_str(subsystem_attrs, "NQN", nvme_subsystem_get_subsysnqn(s));
 			obj_add_str(subsystem_attrs, "IOPolicy",
 					nvme_subsystem_get_iopolicy(s));
 
@@ -5058,9 +5058,9 @@ static void json_simple_topology(struct nvme_global_ctx *ctx)
 				obj_add_str(subsystem_attrs, "Serial",
 						nvme_subsystem_get_serial(s));
 				obj_add_str(subsystem_attrs, "Firmware",
-						nvme_subsystem_get_fw_rev(s));
+						nvme_subsystem_get_firmware(s));
 				obj_add_str(subsystem_attrs, "Type",
-						nvme_subsystem_get_type(s));
+						nvme_subsystem_get_subsystype(s));
 			}
 
 			array_add_obj(subsystems, subsystem_attrs);

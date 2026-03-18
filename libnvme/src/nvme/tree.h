@@ -114,7 +114,7 @@ void nvme_host_set_pdc_enabled(nvme_host_t h, bool enabled);
 bool nvme_host_is_pdc_enabled(nvme_host_t h, bool fallback);
 
 /**
- * nvme_host_get() - Returns a host object
+ * nvme_get_host() - Returns a host object
  * @ctx:	struct nvme_global_ctx object
  * @hostnqn:	Host NQN (optional)
  * @hostid:	Host ID (optional)
@@ -125,7 +125,7 @@ bool nvme_host_is_pdc_enabled(nvme_host_t h, bool fallback);
  *
  * Return: 0 on success or negative error code otherwise
  */
-int nvme_host_get(struct nvme_global_ctx *ctx, const char *hostnqn,
+int nvme_get_host(struct nvme_global_ctx *ctx, const char *hostnqn,
 		const char *hostid, nvme_host_t *h);
 
 /**
@@ -181,7 +181,7 @@ nvme_subsystem_t nvme_first_subsystem(nvme_host_t h);
 nvme_subsystem_t nvme_next_subsystem(nvme_host_t h, nvme_subsystem_t s);
 
 /**
- * nvme_subsystem_get() - Returns nvme_subsystem_t object
+ * nvme_get_subsystem() - Returns nvme_subsystem_t object
  * @ctx:	struct nvme_global_ctx object
  * @h:		&nvme_host_t object
  * @name:	Name of the subsystem (may be NULL)
@@ -192,7 +192,7 @@ nvme_subsystem_t nvme_next_subsystem(nvme_host_t h, nvme_subsystem_t s);
  * and @subsysnqn or create one if not found.
  *
  */
-int nvme_subsystem_get(struct nvme_global_ctx *ctx,
+int nvme_get_subsystem(struct nvme_global_ctx *ctx,
 		struct nvme_host *h, const char *name,
 		const char *subsysnqn, struct nvme_subsystem **s);
 
@@ -281,7 +281,7 @@ nvme_path_t nvme_namespace_first_path(nvme_ns_t ns);
 nvme_path_t nvme_namespace_next_path(nvme_ns_t ns, nvme_path_t p);
 
 /**
- * nvme_ctrl_config_match() - Check if ctrl @c matches config params
+ * nvme_ctrl_match_config() - Check if ctrl @c matches config params
  * @c:			An existing controller instance
  * @transport:		Transport name
  * @traddr:		Transport address
@@ -296,7 +296,7 @@ nvme_path_t nvme_namespace_next_path(nvme_ns_t ns, nvme_path_t p);
  *
  * Return: true if there's a match, false otherwise.
  */
-bool nvme_ctrl_config_match(struct nvme_ctrl *c, const char *transport,
+bool nvme_ctrl_match_config(struct nvme_ctrl *c, const char *transport,
 			    const char *traddr, const char *trsvcid,
 			    const char *subsysnqn, const char *host_traddr,
 			    const char *host_iface);
@@ -717,15 +717,6 @@ struct nvme_transport_handle *nvme_ctrl_get_transport_handle(nvme_ctrl_t c);
 void nvme_ctrl_release_transport_handle(nvme_ctrl_t c);
 
 /**
- * nvme_ctrl_get_address() - Address string of a controller
- * @c:	Controller instance
- *
- * Return: NVMe-over-Fabrics address string of @c or empty string
- * of no address is present.
- */
-const char *nvme_ctrl_get_address(nvme_ctrl_t c);
-
-/**
  * nvme_ctrl_get_src_addr() - Extract src_addr from the c->address string
  * @c:	Controller instance
  * @src_addr: Where to copy the src_addr. Size must be at least INET6_ADDRSTRLEN.
@@ -769,21 +760,6 @@ const char *nvme_ctrl_get_subsysnqn(nvme_ctrl_t c);
 nvme_subsystem_t nvme_ctrl_get_subsystem(nvme_ctrl_t c);
 
 /**
- * nvme_ctrl_get_dhchap_host_key() - Return host key
- * @c:	Controller to be checked
- *
- * Return: DH-HMAC-CHAP host key or NULL if not set
- */
-const char *nvme_ctrl_get_dhchap_host_key(nvme_ctrl_t c);
-
-/**
- * nvme_ctrl_set_dhchap_host_key() - Set host key
- * @c:		Host for which the key should be set
- * @key:	DH-HMAC-CHAP Key to set or NULL to clear existing key
- */
-void nvme_ctrl_set_dhchap_host_key(nvme_ctrl_t c, const char *key);
-
-/**
  * nvme_ns_head_get_sysfs_dir() - sysfs dir of namespave head
  * @head: namespace head instance
  *
@@ -798,41 +774,6 @@ const char *nvme_ns_head_get_sysfs_dir(nvme_ns_head_t head);
  * Return: Fabrics configuration of @c
  */
 struct nvme_fabrics_config *nvme_ctrl_get_config(nvme_ctrl_t c);
-
-/**
- * nvme_ctrl_is_discovered() - Returns the value of the 'discovered' flag
- * @c:	Controller instance
- *
- * Return: Value of the 'discovered' flag of @c
- */
-bool nvme_ctrl_is_discovered(nvme_ctrl_t c);
-
-/**
- * nvme_ctrl_is_persistent() - Returns the value of the 'persistent' flag
- * @c:	Controller instance
- *
- * Return: Value of the 'persistent' flag of @c
- */
-bool nvme_ctrl_is_persistent(nvme_ctrl_t c);
-
-/**
- * nvme_ctrl_is_discovery_ctrl() - Check the 'discovery_ctrl' flag
- * @c:	Controller to be checked
- *
- * Returns the value of the 'discovery_ctrl' flag which specifies whether
- * @c connects to a discovery subsystem.
- *
- * Return: Value of the 'discover_ctrl' flag
- */
-bool nvme_ctrl_is_discovery_ctrl(nvme_ctrl_t c);
-
-/**
- * nvme_ctrl_is_unique_discovery_ctrl() - Check the 'unique_discovery_ctrl' flag
- * @c:		Controller to be checked
- *
- * Return: Value of the 'unique_discovery_ctrl' flag
- */
-bool nvme_ctrl_is_unique_discovery_ctrl(nvme_ctrl_t c);
 
 /**
  * nvme_ctrl_identify() - Issues an 'identify controller' command
@@ -895,32 +836,6 @@ void nvme_free_ctrl(struct nvme_ctrl *c);
  * @c:	Controller instance
  */
 void nvme_unlink_ctrl(struct nvme_ctrl *c);
-
-/**
- * nvme_subsystem_get_nqn() - Retrieve NQN from subsystem
- * @s:	nvme_subsystem_t object
- *
- * Return: NQN of subsystem
- */
-const char *nvme_subsystem_get_nqn(nvme_subsystem_t s);
-
-/**
- * nvme_subsystem_get_type() - Returns the type of a subsystem
- * @s:	nvme_subsystem_t object
- *
- * Returns the subsystem type of @s.
- *
- * Return: 'nvm' or 'discovery'
- */
-const char *nvme_subsystem_get_type(nvme_subsystem_t s);
-
-/**
- * nvme_subsystem_get_fw_rev() - Return the firmware rev of subsystem
- * @s:	nvme_subsystem_t object
- *
- * Return: Firmware revision of the current subsystem
- */
-const char *nvme_subsystem_get_fw_rev(nvme_subsystem_t s);
 
 /**
  * nvme_scan_topology() - Scan NVMe topology and apply filter

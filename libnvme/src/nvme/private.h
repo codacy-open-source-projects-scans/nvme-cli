@@ -184,31 +184,31 @@ struct nvme_ctrl { /*!generate-accessors*/
 
 	struct nvme_global_ctx *ctx;
 	struct nvme_transport_handle *hdl;
-	char *name;
-	char *sysfs_dir;
+	char *name; //!accessors:readonly
+	char *sysfs_dir; //!accessors:readonly
 	char *address; //!accessors:none
-	char *firmware;
-	char *model;
+	char *firmware; //!accessors:readonly
+	char *model; //!accessors:readonly
 	char *state; //!accessors:none
-	char *numa_node;
-	char *queue_count;
-	char *serial;
-	char *sqsize;
-	char *transport;
-	char *subsysnqn; //!accessors:none
-	char *traddr;
-	char *trsvcid;
+	char *numa_node; //!accessors:readonly
+	char *queue_count; //!accessors:readonly
+	char *serial; //!accessors:readonly
+	char *sqsize; //!accessors:readonly
+	char *transport; //!accessors:readonly
+	char *subsysnqn; //!accessors:readonly
+	char *traddr; //!accessors:readonly
+	char *trsvcid; //!accessors:readonly
 	char *dhchap_host_key;
 	char *dhchap_ctrl_key;
 	char *keyring;
 	char *tls_key_identity;
 	char *tls_key;
-	char *cntrltype;
-	char *cntlid;
-	char *dctype;
-	char *phy_slot; //!accessors:none
-	char *host_traddr;
-	char *host_iface;
+	char *cntrltype; //!accessors:readonly
+	char *cntlid; //!accessors:readonly
+	char *dctype; //!accessors:readonly
+	char *phy_slot; //!accessors:readonly
+	char *host_traddr; //!accessors:readonly
+	char *host_iface; //!accessors:readonly
 	bool discovery_ctrl;
 	bool unique_discovery_ctrl;
 	bool discovered;
@@ -222,13 +222,13 @@ struct nvme_subsystem { /*!generate-accessors*/
 	struct list_head namespaces;
 	struct nvme_host *h;
 
-	char *name;
-	char *sysfs_dir;
-	char *subsysnqn;
-	char *model;
-	char *serial;
-	char *firmware;
-	char *subsystype;
+	char *name; /*!accessors:readonly*/
+	char *sysfs_dir; /*!accessors:readonly*/
+	char *subsysnqn; /*!accessors:readonly*/
+	char *model; /*!accessors:readonly*/
+	char *serial; /*!accessors:readonly*/
+	char *firmware; /*!accessors:readonly*/
+	char *subsystype; /*!accessors:readonly*/
 	char *application;
 	char *iopolicy;
 };
@@ -238,8 +238,8 @@ struct nvme_host { /*!generate-accessors*/
 	struct list_head subsystems;
 	struct nvme_global_ctx *ctx;
 
-	char *hostnqn;
-	char *hostid;
+	char *hostnqn; /*!accessors:readonly*/
+	char *hostid; /*!accessors:readonly*/
 	char *dhchap_host_key;
 	char *hostsymname;
 	bool pdc_enabled; //!accessors:none
@@ -306,51 +306,6 @@ struct nvme_global_ctx {
 #endif
 };
 
-struct nvmf_discovery_ctx {
-	/* defaults */
-	int default_max_discovery_retries;
-	int default_keep_alive_timeout;
-
-	void (*discovery_log)(struct nvmf_discovery_ctx *dctx,
-			bool connect,
-			struct nvmf_discovery_log *log,
-			uint64_t numrec, void *user_data);
-	void (*already_connected)(struct nvme_host *host,
-			struct nvmf_disc_log_entry *entry,
-			void *user_data);
-	bool (*decide_retry)(struct nvmf_discovery_ctx *dctx, int err,
-			void *user_data);
-	void (*connected)(struct nvmf_discovery_ctx *dctx, struct nvme_ctrl *c,
-			void *user_data);
-	int (*parser_init)(struct nvmf_discovery_ctx *dctx,
-			void *user_data);
-	void (*parser_cleanup)(struct nvmf_discovery_ctx *dctx,
-			void *user_data);
-	int (*parser_next_line)(struct nvmf_discovery_ctx *dctx,
-			void *user_data);
-
-	/* connfiguration */
-	bool persistent;
-	const char *device;
-	const char *subsysnqn;
-	const char *transport;
-	const char *traddr;
-	const char *host_traddr;
-	const char *host_iface;
-	const char *trsvcid;
-	const char *hostnqn;
-	const char *hostid;
-	const char *hostkey;
-	const char *ctrlkey;
-	const char *keyring;
-	const char *tls_key;
-	const char *tls_key_identity;
-	struct nvme_fabrics_config *cfg;
-	struct nvme_fabrics_config *defcfg;
-
-	void *user_data;
-};
-
 struct nvmf_context {
 	/* common callbacks */
 	bool (*decide_retry)(struct nvmf_context *fctx, int err,
@@ -403,15 +358,6 @@ struct nvmf_context {
 	const char *tls_key_identity;
 
 	void *user_data;
-};
-
-struct fabric_args {
-	const char *subsysnqn;
-	const char *transport;
-	const char *traddr;
-	const char *trsvcid;
-	const char *host_traddr;
-	const char *host_iface;
 };
 
 int nvme_set_attr(const char *dir, const char *attr, const char *value);

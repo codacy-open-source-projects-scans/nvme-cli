@@ -11,7 +11,6 @@
 #include <stdarg.h>
 #include <stdbool.h>
 #include <stdio.h>
-#include <syslog.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -20,7 +19,7 @@
 #include "cleanup.h"
 #define LOG_FUNCNAME 1
 #include "private.h"
-#include "compiler_attributes.h"
+#include "compiler-attributes.h"
 
 #ifndef LOG_CLOCK
 #define LOG_CLOCK CLOCK_MONOTONIC

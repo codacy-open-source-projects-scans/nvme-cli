@@ -194,7 +194,7 @@ if openssl_dep.found()
 endif
 
 foreach hdr : [
-    'cmds',
+    'endian',
     'fabrics',
     'filters',
     'ioctl',
@@ -203,8 +203,9 @@ foreach hdr : [
     'linux',
     'mi',
     'nbft',
+    'nvme-cmds',
+    'nvme-types',
     'tree',
-    'types',
     'util',
 ]
     hdr_conf = configuration_data()

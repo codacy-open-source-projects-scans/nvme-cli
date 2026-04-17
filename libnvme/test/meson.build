@@ -77,29 +77,31 @@ zns = executable(
     ],
 )
 
-mi = executable(
-    'test-mi',
-    ['mi.c', 'utils.c'],
-    dependencies: [
-        config_dep,
-        ccan_dep,
-        libnvme_test_dep,
-    ],
-)
+if want_mi
+    mi = executable(
+        'test-mi',
+        ['mi.c', 'utils.c'],
+        dependencies: [
+            config_dep,
+            ccan_dep,
+            libnvme_test_dep,
+        ],
+    )
 
-test('libnvme - mi', mi)
+    test('libnvme - mi', mi)
 
-mi_mctp = executable(
-    'test-mi-mctp',
-    ['mi-mctp.c', 'utils.c'],
-    dependencies: [
-        config_dep,
-        ccan_dep,
-        libnvme_test_dep,
-    ],
-)
+    mi_mctp = executable(
+        'test-mi-mctp',
+        ['mi-mctp.c', 'utils.c'],
+        dependencies: [
+            config_dep,
+            ccan_dep,
+            libnvme_test_dep,
+        ],
+    )
 
-test('libnvme - mi-mctp', mi_mctp)
+    test('libnvme - mi-mctp', mi_mctp)
+endif
 
 uuid = executable(
     'test-uuid',
@@ -124,7 +126,26 @@ if want_fabrics
         ],
     )
 
-test('libnvme - uriparser', uriparser)
+    test('libnvme - uriparser', uriparser)
+
+    test_fabrics = executable(
+        'test-fabrics',
+        ['test-fabrics.c'],
+        # -fgnu89-inline: '#define static' (used to expose static helpers
+        # for unit testing) turns 'static inline' into plain 'inline'.
+        # Under C99, plain 'inline' has external linkage and may require an
+        # external symbol definition that doesn't exist for header-only
+        # inline functions.  GNU89 semantics treat it as an inlining hint
+        # only, avoiding the linker failure in -static builds.
+        c_args: ['-fgnu89-inline'],
+        dependencies: [
+            config_dep,
+            ccan_dep,
+            libnvme_test_dep,
+        ],
+    )
+
+    test('libnvme - fabrics', test_fabrics)
 endif
 
 if conf.get('HAVE_NETDB')
@@ -203,6 +224,7 @@ foreach hdr : [
     'linux',
     'mi',
     'nbft',
+    'nbft-types',
     'nvme-cmds',
     'nvme-types',
     'tree',

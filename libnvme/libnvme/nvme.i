@@ -10,6 +10,20 @@
                clashes with the same macro defined in Python.h.
  */
 #undef fallthrough
+
+#include <Python.h>
+
+/* WORKAROUND: Py_NewRef() was introduced in Python 3.10. SWIG >= 4.1 generates
+               calls to it in its runtime boilerplate, which breaks older
+               distributions (e.g. SLES 15.6/15.7 with Python 3.6).
+ */
+#if PY_VERSION_HEX < 0x030a0000
+static inline PyObject *Py_NewRef(PyObject *obj)
+{
+	Py_INCREF(obj);
+	return obj;
+}
+#endif
 %}
 
 %module(docstring="Python bindings for libnvme") nvme
@@ -19,12 +33,11 @@
 
 %allowexception;
 
-%rename(global_ctx)      libnvme_global_ctx;
-%rename(host)            libnvme_host;
-%rename(ctrl)            libnvme_ctrl;
-%rename(subsystem)       libnvme_subsystem;
-%rename(ns)              libnvme_ns;
-%rename(fabrics_context) libnvmf_context;
+%rename(global_ctx) libnvme_global_ctx;
+%rename(host)       libnvme_host;
+%rename(ctrl)       libnvme_ctrl;
+%rename(subsystem)  libnvme_subsystem;
+%rename(ns)         libnvme_ns;
 
 %{
 	#include <ccan/list/list.h>
@@ -52,9 +65,221 @@
 		free(val);
 		return obj;
 	}
+
+	static const char *dict_get_str(PyObject *dict, const char *key)
+	{
+		PyObject *val = PyDict_GetItemString(dict, key);
+
+		if (!val || val == Py_None)
+			return NULL;
+		return PyUnicode_AsUTF8(val);
+	}
+
+	static int set_fctx_from_dict(struct libnvmf_context *fctx, PyObject *dict)
+	{
+		struct libnvme_fabrics_config *cfg;
+		const char *subsysnqn, *transport;
+		const char *hostnqn = NULL, *hostid = NULL;
+		const char *hostkey = NULL, *ctrlkey = NULL;
+		const char *keyring = NULL, *tls_key = NULL, *tls_key_identity = NULL;
+		bool persistent = false;
+		bool has_persistent = false;
+		Py_ssize_t pos = 0;
+		PyObject *key, *value;
+
+		subsysnqn = dict_get_str(dict, "subsysnqn");
+		transport = dict_get_str(dict, "transport");
+
+		if (!subsysnqn || !transport) {
+			PyErr_SetString(PyExc_KeyError,
+					"'subsysnqn' and 'transport' are required");
+			return -1;
+		}
+
+		libnvmf_context_set_connection(fctx, subsysnqn, transport,
+					       dict_get_str(dict, "traddr"),
+					       dict_get_str(dict, "trsvcid"),
+					       dict_get_str(dict, "host_traddr"),
+					       dict_get_str(dict, "host_iface"));
+
+		cfg = libnvmf_context_get_fabrics_config(fctx);
+
+		while (PyDict_Next(dict, &pos, &key, &value)) {
+			/* Already consumed above via dict_get_str() */
+			if (!PyUnicode_CompareWithASCIIString(key, "subsysnqn") ||
+			    !PyUnicode_CompareWithASCIIString(key, "transport") ||
+			    !PyUnicode_CompareWithASCIIString(key, "traddr") ||
+			    !PyUnicode_CompareWithASCIIString(key, "trsvcid") ||
+			    !PyUnicode_CompareWithASCIIString(key, "host_traddr") ||
+			    !PyUnicode_CompareWithASCIIString(key, "host_iface"))
+				continue;
+			if (!PyUnicode_CompareWithASCIIString(key, "queue_size")) {
+				libnvme_fabrics_config_set_queue_size(cfg, PyLong_AsLong(value));
+				continue;
+			}
+			if (!PyUnicode_CompareWithASCIIString(key, "nr_io_queues")) {
+				libnvme_fabrics_config_set_nr_io_queues(cfg, PyLong_AsLong(value));
+				continue;
+			}
+			if (!PyUnicode_CompareWithASCIIString(key, "reconnect_delay")) {
+				libnvme_fabrics_config_set_reconnect_delay(cfg, PyLong_AsLong(value));
+				continue;
+			}
+			if (!PyUnicode_CompareWithASCIIString(key, "ctrl_loss_tmo")) {
+				libnvme_fabrics_config_set_ctrl_loss_tmo(cfg, PyLong_AsLong(value));
+				continue;
+			}
+			if (!PyUnicode_CompareWithASCIIString(key, "fast_io_fail_tmo")) {
+				libnvme_fabrics_config_set_fast_io_fail_tmo(cfg, PyLong_AsLong(value));
+				continue;
+			}
+			if (!PyUnicode_CompareWithASCIIString(key, "keep_alive_tmo")) {
+				libnvme_fabrics_config_set_keep_alive_tmo(cfg, PyLong_AsLong(value));
+				continue;
+			}
+			if (!PyUnicode_CompareWithASCIIString(key, "nr_write_queues")) {
+				libnvme_fabrics_config_set_nr_write_queues(cfg, PyLong_AsLong(value));
+				continue;
+			}
+			if (!PyUnicode_CompareWithASCIIString(key, "nr_poll_queues")) {
+				libnvme_fabrics_config_set_nr_poll_queues(cfg, PyLong_AsLong(value));
+				continue;
+			}
+			if (!PyUnicode_CompareWithASCIIString(key, "tos")) {
+				libnvme_fabrics_config_set_tos(cfg, PyLong_AsLong(value));
+				continue;
+			}
+			if (!PyUnicode_CompareWithASCIIString(key, "keyring_id")) {
+				libnvme_fabrics_config_set_keyring_id(cfg, PyLong_AsLong(value));
+				continue;
+			}
+			if (!PyUnicode_CompareWithASCIIString(key, "tls_key_id")) {
+				libnvme_fabrics_config_set_tls_key_id(cfg, PyLong_AsLong(value));
+				continue;
+			}
+			if (!PyUnicode_CompareWithASCIIString(key, "tls_configured_key_id")) {
+				libnvme_fabrics_config_set_tls_configured_key_id(cfg, PyLong_AsLong(value));
+				continue;
+			}
+			if (!PyUnicode_CompareWithASCIIString(key, "duplicate_connect")) {
+				libnvme_fabrics_config_set_duplicate_connect(cfg,
+					PyObject_IsTrue(value) ? true : false);
+				continue;
+			}
+			if (!PyUnicode_CompareWithASCIIString(key, "disable_sqflow")) {
+				libnvme_fabrics_config_set_disable_sqflow(cfg,
+					PyObject_IsTrue(value) ? true : false);
+				continue;
+			}
+			if (!PyUnicode_CompareWithASCIIString(key, "hdr_digest")) {
+				libnvme_fabrics_config_set_hdr_digest(cfg,
+					PyObject_IsTrue(value) ? true : false);
+				continue;
+			}
+			if (!PyUnicode_CompareWithASCIIString(key, "data_digest")) {
+				libnvme_fabrics_config_set_data_digest(cfg,
+					PyObject_IsTrue(value) ? true : false);
+				continue;
+			}
+			if (!PyUnicode_CompareWithASCIIString(key, "tls")) {
+				libnvme_fabrics_config_set_tls(cfg,
+					PyObject_IsTrue(value) ? true : false);
+				continue;
+			}
+			if (!PyUnicode_CompareWithASCIIString(key, "concat")) {
+				libnvme_fabrics_config_set_concat(cfg,
+					PyObject_IsTrue(value) ? true : false);
+				continue;
+			}
+			if (!PyUnicode_CompareWithASCIIString(key, "hostnqn")) {
+				hostnqn = (value != Py_None) ? PyUnicode_AsUTF8(value) : NULL;
+				continue;
+			}
+			if (!PyUnicode_CompareWithASCIIString(key, "hostid")) {
+				hostid = (value != Py_None) ? PyUnicode_AsUTF8(value) : NULL;
+				continue;
+			}
+			if (!PyUnicode_CompareWithASCIIString(key, "hostkey")) {
+				hostkey = (value != Py_None) ? PyUnicode_AsUTF8(value) : NULL;
+				continue;
+			}
+			if (!PyUnicode_CompareWithASCIIString(key, "ctrlkey")) {
+				ctrlkey = (value != Py_None) ? PyUnicode_AsUTF8(value) : NULL;
+				continue;
+			}
+			if (!PyUnicode_CompareWithASCIIString(key, "keyring")) {
+				keyring = (value != Py_None) ? PyUnicode_AsUTF8(value) : NULL;
+				continue;
+			}
+			if (!PyUnicode_CompareWithASCIIString(key, "tls_key")) {
+				tls_key = (value != Py_None) ? PyUnicode_AsUTF8(value) : NULL;
+				continue;
+			}
+			if (!PyUnicode_CompareWithASCIIString(key, "tls_key_identity")) {
+				tls_key_identity = (value != Py_None) ? PyUnicode_AsUTF8(value) : NULL;
+				continue;
+			}
+			if (!PyUnicode_CompareWithASCIIString(key, "persistent")) {
+				persistent = PyObject_IsTrue(value) ? true : false;
+				has_persistent = true;
+				continue;
+			}
+			PyErr_Format(PyExc_KeyError, "unknown ctrl config key: '%U'", key);
+			return -1;
+		}
+
+		if (hostnqn || hostid)
+			libnvmf_context_set_hostnqn(fctx, hostnqn, hostid);
+		if (hostkey || ctrlkey || keyring || tls_key || tls_key_identity)
+			libnvmf_context_set_crypto(fctx, hostkey, ctrlkey,
+						   keyring, tls_key,
+						   tls_key_identity);
+		if (has_persistent)
+			libnvmf_context_set_persistent(fctx, persistent);
+
+		return 0;
+	}
 %}
 PyObject *read_hostnqn();
 PyObject *read_hostid();
+
+/* libnvmf_context is declared as an opaque forward declaration in the public
+ * header fabrics.h. SWIG treats any type it knows only as an incomplete type
+ * (no struct body) as an opaque pointer, which causes SWIG's own built-in
+ * opaque-pointer typemap to take precedence over any user-defined %typemap.
+ * Providing an empty struct body here gives SWIG a complete type, which
+ * restores normal typemap precedence rules. The actual fields are in
+ * private-fabrics.h, which is included in the %{%} block above and is
+ * therefore visible to all generated C code — just not to SWIG's parser.
+ */
+struct libnvmf_context {};
+
+/* Convert a Python dict to a struct libnvmf_context * automatically.
+ * arg1 is the libnvme_global_ctx * (first argument of the enclosing function).
+ * The context is created here and freed by %typemap(freearg) after the call.
+ */
+%typemap(in) struct libnvmf_context * (struct libnvmf_context *temp = NULL) {
+	if (!PyDict_Check($input)) {
+		PyErr_SetString(PyExc_TypeError,
+				"expected a dict for fabrics context argument");
+		SWIG_fail;
+	}
+	if (libnvmf_context_create(arg1, NULL, NULL, NULL, NULL, &temp)) {
+		PyErr_SetString(PyExc_RuntimeError,
+				"failed to create fabrics context");
+		SWIG_fail;
+	}
+	if (set_fctx_from_dict(temp, $input)) {
+		libnvmf_context_free(temp);
+		temp = NULL;
+		SWIG_fail;
+	}
+	$1 = temp;
+}
+
+%typemap(freearg) struct libnvmf_context * {
+	libnvmf_context_free($1);
+}
 
 %exception libnvme_ctrl::connect {
 	connect_err = 0;
@@ -432,113 +657,6 @@ struct libnvme_ns {
 	uint8_t uuid[16];
 };
 
-/*
- * %rename directives give the %extend methods Python-friendly names while
- * using distinct C-level names (fctx_*) that do not collide with the public
- * libnvmf_context_* API declarations in fabrics.h.  Without this, SWIG would
- * emit SWIGINTERN libnvmf_context_set_hostnqn() which clashes with the
- * non-static extern of the same name.
- */
-%rename(set_hostnqn)        libnvmf_context::fctx_set_hostnqn;
-%rename(set_connection)     libnvmf_context::fctx_set_connection;
-%rename(set_persistent)     libnvmf_context::fctx_set_persistent;
-%rename(set_device)         libnvmf_context::fctx_set_device;
-
-struct libnvmf_context {};
-
-%extend libnvmf_context {
-	libnvmf_context(struct libnvme_global_ctx *ctx) {
-		struct libnvmf_context *fctx;
-		int err;
-
-		err = libnvmf_context_create(ctx, NULL, NULL, NULL, NULL, &fctx);
-		if (err)
-			return NULL;
-
-		return fctx;
-	}
-	~libnvmf_context() {
-		libnvmf_context_free($self);
-	}
-	int fctx_set_hostnqn(const char *hostnqn, const char *hostid = NULL) {
-		return libnvmf_context_set_hostnqn($self, hostnqn, hostid);
-	}
-	int fctx_set_connection(const char *subsysnqn, const char *transport,
-				const char *traddr = NULL, const char *trsvcid = NULL,
-				const char *host_traddr = NULL,
-				const char *host_iface = NULL) {
-		return libnvmf_context_set_connection($self, subsysnqn, transport,
-					      traddr, trsvcid,
-					      host_traddr, host_iface);
-	}
-	int fctx_set_persistent(bool persistent) {
-		return libnvmf_context_set_persistent($self, persistent);
-	}
-	int fctx_set_device(const char *device) {
-		return libnvmf_context_set_device($self, device);
-	}
-	void fctx_set_fabrics_config(PyObject *dict) {
-		Py_ssize_t pos = 0;
-		PyObject *key, *value;
-
-		if (!PyDict_Check(dict)) {
-			PyErr_SetString(PyExc_TypeError,
-					"set_fabrics_config: argument must be a dict");
-			return;
-		}
-
-		while (PyDict_Next(dict, &pos, &key, &value)) {
-			if (!PyUnicode_CompareWithASCIIString(key, "nr_io_queues")) {
-				$self->cfg.nr_io_queues = PyLong_AsLong(value);
-				continue;
-			}
-			if (!PyUnicode_CompareWithASCIIString(key, "reconnect_delay")) {
-				$self->cfg.reconnect_delay = PyLong_AsLong(value);
-				continue;
-			}
-			if (!PyUnicode_CompareWithASCIIString(key, "ctrl_loss_tmo")) {
-				$self->cfg.ctrl_loss_tmo = PyLong_AsLong(value);
-				continue;
-			}
-			if (!PyUnicode_CompareWithASCIIString(key, "keep_alive_tmo")) {
-				$self->cfg.keep_alive_tmo = PyLong_AsLong(value);
-				continue;
-			}
-			if (!PyUnicode_CompareWithASCIIString(key, "nr_write_queues")) {
-				$self->cfg.nr_write_queues = PyLong_AsLong(value);
-				continue;
-			}
-			if (!PyUnicode_CompareWithASCIIString(key, "nr_poll_queues")) {
-				$self->cfg.nr_poll_queues = PyLong_AsLong(value);
-				continue;
-			}
-			if (!PyUnicode_CompareWithASCIIString(key, "tos")) {
-				$self->cfg.tos = PyLong_AsLong(value);
-				continue;
-			}
-			if (!PyUnicode_CompareWithASCIIString(key, "duplicate_connect")) {
-				$self->cfg.duplicate_connect =
-					PyObject_IsTrue(value) ? true : false;
-				continue;
-			}
-			if (!PyUnicode_CompareWithASCIIString(key, "disable_sqflow")) {
-				$self->cfg.disable_sqflow =
-					PyObject_IsTrue(value) ? true : false;
-				continue;
-			}
-			if (!PyUnicode_CompareWithASCIIString(key, "hdr_digest")) {
-				$self->cfg.hdr_digest =
-					PyObject_IsTrue(value) ? true : false;
-				continue;
-			}
-			if (!PyUnicode_CompareWithASCIIString(key, "data_digest")) {
-				$self->cfg.data_digest =
-					PyObject_IsTrue(value) ? true : false;
-				continue;
-			}
-		}
-	}
-};
 
 %extend libnvme_global_ctx {
 	libnvme_global_ctx(const char *config_file = NULL) {
@@ -577,6 +695,20 @@ struct libnvmf_context {};
 	    while h:
 	        yield h
 	        h = libnvme_next_host(self, h)
+	def __setattr__(self, name, value):
+	    if name == 'this' or name.startswith('_'):
+	        object.__setattr__(self, name, value)
+	        return
+	    for klass in type(self).__mro__:
+	        attr = klass.__dict__.get(name)
+	        if attr is not None:
+	            if isinstance(attr, property) and attr.fset is not None:
+	                attr.fset(self, value)
+	                return
+	            break
+	    raise AttributeError(
+	        f"'{type(self).__name__}' object has no writable attribute '{name}'"
+	    )
 	%}
 	void refresh_topology() {
 		libnvme_refresh_topology($self);
@@ -641,6 +773,20 @@ struct libnvmf_context {};
 	    while s:
 	        yield s
 	        s = libnvme_next_subsystem(self, s)
+	def __setattr__(self, name, value):
+	    if name == 'this' or name.startswith('_'):
+	        object.__setattr__(self, name, value)
+	        return
+	    for klass in type(self).__mro__:
+	        attr = klass.__dict__.get(name)
+	        if attr is not None:
+	            if isinstance(attr, property) and attr.fset is not None:
+	                attr.fset(self, value)
+	                return
+	            break
+	    raise AttributeError(
+	        f"'{type(self).__name__}' object has no writable attribute '{name}'"
+	    )
 	%}
 }
 
@@ -697,6 +843,20 @@ struct libnvmf_context {};
 	    while ns:
 	        yield ns
 	        ns = libnvme_subsystem_next_ns(self, ns)
+	def __setattr__(self, name, value):
+	    if name == 'this' or name.startswith('_'):
+	        object.__setattr__(self, name, value)
+	        return
+	    for klass in type(self).__mro__:
+	        attr = klass.__dict__.get(name)
+	        if attr is not None:
+	            if isinstance(attr, property) and attr.fset is not None:
+	                attr.fset(self, value)
+	                return
+	            break
+	    raise AttributeError(
+	        f"'{type(self).__name__}' object has no writable attribute '{name}'"
+	    )
 	%}
 	%immutable name;
 	const char *name;
@@ -725,17 +885,69 @@ struct libnvmf_context {};
 	}
 %};
 
-%pythonappend libnvme_ctrl::connect(struct libnvme_host *h,
-				 struct libnvmf_context *fctx) {
+%pythonappend libnvme_ctrl::connect(struct libnvme_host *h) {
     self.__host = h  # Keep a reference to parent to ensure ctrl obj gets GCed before host}
 %pythonappend libnvme_ctrl::init(struct libnvme_host *h, int instance) {
     self.__host = h  # Keep a reference to parent to ensure ctrl obj gets GCed before host}
 %extend libnvme_ctrl {
-	libnvme_ctrl(struct libnvme_global_ctx *ctx,
-		  struct libnvmf_context *fctx) {
+	%feature("autodoc", "__init__(ctrl self, global_ctx ctx, dict fctx) -> ctrl\n"
+		"\n"
+		"Create a new NVMe-oF controller object.\n"
+		"\n"
+		"  params dict keys:\n"
+		"\n"
+		"    Required:\n"
+		"      subsysnqn (str)  -- Subsystem NQN\n"
+		"      transport (str)  -- Transport type: 'tcp', 'rdma', 'loop', 'fc'\n"
+		"\n"
+		"    Connection (optional):\n"
+		"      traddr (str)       -- Transport address\n"
+		"      trsvcid (str)      -- Service ID (port number)\n"
+		"      host_traddr (str)  -- Host transport address\n"
+		"      host_iface (str)   -- Host network interface\n"
+		"\n"
+		"    Fabrics config (optional):\n"
+		"      queue_size (int)             -- IO queue entries\n"
+		"      nr_io_queues (int)           -- Number of IO queues\n"
+		"      reconnect_delay (int)        -- Reconnect interval in seconds\n"
+		"      ctrl_loss_tmo (int)          -- Controller loss timeout in seconds\n"
+		"      fast_io_fail_tmo (int)       -- Fast I/O fail timeout in seconds\n"
+		"      keep_alive_tmo (int)         -- Keep-alive timeout in seconds\n"
+		"      nr_write_queues (int)        -- Queues reserved for writes only\n"
+		"      nr_poll_queues (int)         -- Queues reserved for polling\n"
+		"      tos (int)                    -- Type of service\n"
+		"      keyring_id (int)             -- Keyring ID for key lookup\n"
+		"      tls_key_id (int)             -- TLS PSK key ID\n"
+		"      tls_configured_key_id (int)  -- TLS PSK key ID for connect command\n"
+		"      duplicate_connect (bool)     -- Allow duplicate connections\n"
+		"      disable_sqflow (bool)        -- Disable SQ flow control\n"
+		"      hdr_digest (bool)            -- Header digest (TCP only)\n"
+		"      data_digest (bool)           -- Data digest (TCP only)\n"
+		"      tls (bool)                   -- Enable TLS (TCP only)\n"
+		"      concat (bool)                -- Secure concatenation (TCP only)\n"
+		"\n"
+		"    Host identity (optional):\n"
+		"      hostnqn (str)  -- Host NQN, overrides the system-wide default\n"
+		"      hostid (str)   -- Host ID, overrides the system-wide default\n"
+		"\n"
+		"    Authentication and TLS (optional):\n"
+		"      hostkey (str)           -- Host DH-HMAC-CHAP key\n"
+		"      ctrlkey (str)           -- Controller DH-HMAC-CHAP key\n"
+		"      keyring (str)           -- Keyring identifier\n"
+		"      tls_key (str)           -- TLS key, or 'pin:<value>' for PIN-derived key\n"
+		"      tls_key_identity (str)  -- TLS key identity string\n"
+		"\n"
+		"    Persistence (optional):\n"
+		"      persistent (bool)  -- Keep connection alive after process exit\n"
+	) libnvme_ctrl;
+	libnvme_ctrl(struct libnvme_global_ctx *ctx, struct libnvmf_context *fctx) {
 		struct libnvme_ctrl *c;
-		if (libnvmf_create_ctrl(ctx, fctx, &c))
+
+		if (libnvmf_create_ctrl(ctx, fctx, &c)) {
+			PyErr_SetString(PyExc_RuntimeError,
+					"failed to create ctrl");
 			return NULL;
+		}
 		return c;
 	}
 	~libnvme_ctrl() {
@@ -756,13 +968,6 @@ struct libnvmf_context {};
 
 	void connect(struct libnvme_host *h) {
 		int ret;
-		const char *dev;
-
-		dev = libnvme_ctrl_get_name($self);
-		if (dev && $self->cfg.duplicate_connect) {
-			connect_err = -ENVME_CONNECT_ALREADY;
-			return;
-		}
 
 		Py_BEGIN_ALLOW_THREADS  /* Release Python GIL */
 		ret = libnvmf_add_ctrl(h, $self);
@@ -881,6 +1086,20 @@ struct libnvmf_context {};
 	    while ns:
 	        yield ns
 	        ns = libnvme_ctrl_next_ns(self, ns)
+	def __setattr__(self, name, value):
+	    if name == 'this' or name.startswith('_'):
+	        object.__setattr__(self, name, value)
+	        return
+	    for klass in type(self).__mro__:
+	        attr = klass.__dict__.get(name)
+	        if attr is not None:
+	            if isinstance(attr, property) and attr.fset is not None:
+	                attr.fset(self, value)
+	                return
+	            break
+	    raise AttributeError(
+	        f"'{type(self).__name__}' object has no writable attribute '{name}'"
+	    )
 	%}
 }
 

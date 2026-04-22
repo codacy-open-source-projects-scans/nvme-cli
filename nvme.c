@@ -39,13 +39,11 @@
 #include <string.h>
 #include <unistd.h>
 
-#include <linux/fs.h>
-
-#include <sys/ioctl.h>
+#ifdef NVME_HAVE_MMAP
 #include <sys/mman.h>
+#endif
 #include <sys/stat.h>
 #include <sys/types.h>
-
 
 #include <libnvme.h>
 
@@ -257,6 +255,7 @@ struct nvme_args nvme_args = {
 };
 
 static void *mmap_registers(struct libnvme_transport_handle *hdl, bool writable);
+static int munmap_registers(void *addr);
 
 static OPT_VALS(feature_name) = {
 	VAL_BYTE("arbitration", NVME_FEAT_FID_ARBITRATION),
@@ -1107,7 +1106,7 @@ static int get_effects_log(int argc, char **argv, struct command *acmd, struct p
 
 		if (bar) {
 			cap = mmio_read64(bar + NVME_REG_CAP);
-			munmap(bar, getpagesize());
+			munmap_registers(bar);
 		} else {
 			nvme_init_get_property(&cmd, NVME_REG_CAP);
 			err = libnvme_submit_admin_passthru(hdl, &cmd);
@@ -5802,8 +5801,9 @@ static int nvme_get_properties(struct libnvme_transport_handle *hdl, void **pbar
 
 static void *mmap_registers(struct libnvme_transport_handle *hdl, bool writable)
 {
+	void *membase = NULL;
+#ifdef NVME_HAVE_MMAP
 	char path[512];
-	void *membase;
 	int fd;
 	int prot = PROT_READ;
 
@@ -5832,7 +5832,17 @@ static void *mmap_registers(struct libnvme_transport_handle *hdl, bool writable)
 	}
 
 	close(fd);
+#endif
 	return membase;
+}
+
+static int munmap_registers(void *addr)
+{
+#ifdef NVME_HAVE_MMAP
+	return munmap(addr, getpagesize());
+#else
+	return 0;
+#endif
 }
 
 static int show_registers(int argc, char **argv, struct command *acmd, struct plugin *plugin)
@@ -5886,7 +5896,7 @@ static int show_registers(int argc, char **argv, struct command *acmd, struct pl
 	if (cfg.fabrics)
 		free(bar);
 	else
-		munmap(bar, getpagesize());
+		munmap_registers(bar);
 
 	return 0;
 }
@@ -6171,7 +6181,7 @@ static int get_register(int argc, char **argv, struct command *acmd, struct plug
 	if (fabrics)
 		free(bar);
 	else
-		munmap(bar, getpagesize());
+		munmap_registers(bar);
 
 	return err;
 }
@@ -6455,7 +6465,7 @@ static int set_register(int argc, char **argv, struct command *acmd, struct plug
 		err = set_register_names(hdl, bar, opts, &cfg);
 
 	if (bar)
-		munmap(bar, getpagesize());
+		munmap_registers(bar);
 
 	return err;
 }
@@ -6813,19 +6823,12 @@ static int format_cmd(int argc, char **argv, struct command *acmd, struct plugin
 			 * to the given one because blkdev will not
 			 * update by itself without re-opening fd.
 			 */
-			if (ioctl(libnvme_transport_handle_get_fd(hdl), BLKBSZSET,
-				  &block_size) < 0) {
+			err = libnvme_update_block_size(hdl, block_size);
+			if (err < 0) {
 				nvme_show_error(
 				    "failed to set block size to %d",
 				    block_size);
-				return -errno;
-			}
-
-			if (ioctl(libnvme_transport_handle_get_fd(hdl),
-				  BLKRRPART) < 0) {
-				nvme_show_error(
-				    "failed to re-read partition table");
-				return -errno;
+				return err;
 			}
 		}
 	}

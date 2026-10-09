@@ -1,489 +1,3 @@
-.. c:function:: void libnvme_fabrics_config_set_queue_size (struct libnvme_fabrics_config *p, int queue_size)
-
-   Set queue_size.
-
-**Parameters**
-
-``struct libnvme_fabrics_config *p``
-  The :c:type:`struct libnvme_fabrics_config <libnvme_fabrics_config>` instance to update.
-
-``int queue_size``
-  Value to assign to the queue_size field.
-
-
-.. c:function:: int libnvme_fabrics_config_get_queue_size (const struct libnvme_fabrics_config *p)
-
-   Get queue_size.
-
-**Parameters**
-
-``const struct libnvme_fabrics_config *p``
-  The :c:type:`struct libnvme_fabrics_config <libnvme_fabrics_config>` instance to query.
-
-**Return**
-
-The value of the queue_size field.
-
-
-.. c:function:: void libnvme_fabrics_config_set_nr_io_queues (struct libnvme_fabrics_config *p, int nr_io_queues)
-
-   Set nr_io_queues.
-
-**Parameters**
-
-``struct libnvme_fabrics_config *p``
-  The :c:type:`struct libnvme_fabrics_config <libnvme_fabrics_config>` instance to update.
-
-``int nr_io_queues``
-  Value to assign to the nr_io_queues field.
-
-
-.. c:function:: int libnvme_fabrics_config_get_nr_io_queues (const struct libnvme_fabrics_config *p)
-
-   Get nr_io_queues.
-
-**Parameters**
-
-``const struct libnvme_fabrics_config *p``
-  The :c:type:`struct libnvme_fabrics_config <libnvme_fabrics_config>` instance to query.
-
-**Return**
-
-The value of the nr_io_queues field.
-
-
-.. c:function:: void libnvme_fabrics_config_set_reconnect_delay (struct libnvme_fabrics_config *p, int reconnect_delay)
-
-   Set reconnect_delay.
-
-**Parameters**
-
-``struct libnvme_fabrics_config *p``
-  The :c:type:`struct libnvme_fabrics_config <libnvme_fabrics_config>` instance to update.
-
-``int reconnect_delay``
-  Value to assign to the reconnect_delay field.
-
-
-.. c:function:: int libnvme_fabrics_config_get_reconnect_delay (const struct libnvme_fabrics_config *p)
-
-   Get reconnect_delay.
-
-**Parameters**
-
-``const struct libnvme_fabrics_config *p``
-  The :c:type:`struct libnvme_fabrics_config <libnvme_fabrics_config>` instance to query.
-
-**Return**
-
-The value of the reconnect_delay field.
-
-
-.. c:function:: void libnvme_fabrics_config_set_ctrl_loss_tmo (struct libnvme_fabrics_config *p, int ctrl_loss_tmo)
-
-   Set ctrl_loss_tmo.
-
-**Parameters**
-
-``struct libnvme_fabrics_config *p``
-  The :c:type:`struct libnvme_fabrics_config <libnvme_fabrics_config>` instance to update.
-
-``int ctrl_loss_tmo``
-  Value to assign to the ctrl_loss_tmo field.
-
-
-.. c:function:: int libnvme_fabrics_config_get_ctrl_loss_tmo (const struct libnvme_fabrics_config *p)
-
-   Get ctrl_loss_tmo.
-
-**Parameters**
-
-``const struct libnvme_fabrics_config *p``
-  The :c:type:`struct libnvme_fabrics_config <libnvme_fabrics_config>` instance to query.
-
-**Return**
-
-The value of the ctrl_loss_tmo field.
-
-
-.. c:function:: void libnvme_fabrics_config_set_fast_io_fail_tmo (struct libnvme_fabrics_config *p, int fast_io_fail_tmo)
-
-   Set fast_io_fail_tmo.
-
-**Parameters**
-
-``struct libnvme_fabrics_config *p``
-  The :c:type:`struct libnvme_fabrics_config <libnvme_fabrics_config>` instance to update.
-
-``int fast_io_fail_tmo``
-  Value to assign to the fast_io_fail_tmo field.
-
-
-.. c:function:: int libnvme_fabrics_config_get_fast_io_fail_tmo (const struct libnvme_fabrics_config *p)
-
-   Get fast_io_fail_tmo.
-
-**Parameters**
-
-``const struct libnvme_fabrics_config *p``
-  The :c:type:`struct libnvme_fabrics_config <libnvme_fabrics_config>` instance to query.
-
-**Return**
-
-The value of the fast_io_fail_tmo field.
-
-
-.. c:function:: void libnvme_fabrics_config_set_keep_alive_tmo (struct libnvme_fabrics_config *p, int keep_alive_tmo)
-
-   Set keep_alive_tmo.
-
-**Parameters**
-
-``struct libnvme_fabrics_config *p``
-  The :c:type:`struct libnvme_fabrics_config <libnvme_fabrics_config>` instance to update.
-
-``int keep_alive_tmo``
-  Value to assign to the keep_alive_tmo field.
-
-
-.. c:function:: int libnvme_fabrics_config_get_keep_alive_tmo (const struct libnvme_fabrics_config *p)
-
-   Get keep_alive_tmo.
-
-**Parameters**
-
-``const struct libnvme_fabrics_config *p``
-  The :c:type:`struct libnvme_fabrics_config <libnvme_fabrics_config>` instance to query.
-
-**Return**
-
-The value of the keep_alive_tmo field.
-
-
-.. c:function:: void libnvme_fabrics_config_set_nr_write_queues (struct libnvme_fabrics_config *p, int nr_write_queues)
-
-   Set nr_write_queues.
-
-**Parameters**
-
-``struct libnvme_fabrics_config *p``
-  The :c:type:`struct libnvme_fabrics_config <libnvme_fabrics_config>` instance to update.
-
-``int nr_write_queues``
-  Value to assign to the nr_write_queues field.
-
-
-.. c:function:: int libnvme_fabrics_config_get_nr_write_queues (const struct libnvme_fabrics_config *p)
-
-   Get nr_write_queues.
-
-**Parameters**
-
-``const struct libnvme_fabrics_config *p``
-  The :c:type:`struct libnvme_fabrics_config <libnvme_fabrics_config>` instance to query.
-
-**Return**
-
-The value of the nr_write_queues field.
-
-
-.. c:function:: void libnvme_fabrics_config_set_nr_poll_queues (struct libnvme_fabrics_config *p, int nr_poll_queues)
-
-   Set nr_poll_queues.
-
-**Parameters**
-
-``struct libnvme_fabrics_config *p``
-  The :c:type:`struct libnvme_fabrics_config <libnvme_fabrics_config>` instance to update.
-
-``int nr_poll_queues``
-  Value to assign to the nr_poll_queues field.
-
-
-.. c:function:: int libnvme_fabrics_config_get_nr_poll_queues (const struct libnvme_fabrics_config *p)
-
-   Get nr_poll_queues.
-
-**Parameters**
-
-``const struct libnvme_fabrics_config *p``
-  The :c:type:`struct libnvme_fabrics_config <libnvme_fabrics_config>` instance to query.
-
-**Return**
-
-The value of the nr_poll_queues field.
-
-
-.. c:function:: void libnvme_fabrics_config_set_tos (struct libnvme_fabrics_config *p, int tos)
-
-   Set tos.
-
-**Parameters**
-
-``struct libnvme_fabrics_config *p``
-  The :c:type:`struct libnvme_fabrics_config <libnvme_fabrics_config>` instance to update.
-
-``int tos``
-  Value to assign to the tos field.
-
-
-.. c:function:: int libnvme_fabrics_config_get_tos (const struct libnvme_fabrics_config *p)
-
-   Get tos.
-
-**Parameters**
-
-``const struct libnvme_fabrics_config *p``
-  The :c:type:`struct libnvme_fabrics_config <libnvme_fabrics_config>` instance to query.
-
-**Return**
-
-The value of the tos field.
-
-
-.. c:function:: void libnvme_fabrics_config_set_keyring_id (struct libnvme_fabrics_config *p, long keyring_id)
-
-   Set keyring_id.
-
-**Parameters**
-
-``struct libnvme_fabrics_config *p``
-  The :c:type:`struct libnvme_fabrics_config <libnvme_fabrics_config>` instance to update.
-
-``long keyring_id``
-  Value to assign to the keyring_id field.
-
-
-.. c:function:: long libnvme_fabrics_config_get_keyring_id (const struct libnvme_fabrics_config *p)
-
-   Get keyring_id.
-
-**Parameters**
-
-``const struct libnvme_fabrics_config *p``
-  The :c:type:`struct libnvme_fabrics_config <libnvme_fabrics_config>` instance to query.
-
-**Return**
-
-The value of the keyring_id field.
-
-
-.. c:function:: void libnvme_fabrics_config_set_tls_key_id (struct libnvme_fabrics_config *p, long tls_key_id)
-
-   Set tls_key_id.
-
-**Parameters**
-
-``struct libnvme_fabrics_config *p``
-  The :c:type:`struct libnvme_fabrics_config <libnvme_fabrics_config>` instance to update.
-
-``long tls_key_id``
-  Value to assign to the tls_key_id field.
-
-
-.. c:function:: long libnvme_fabrics_config_get_tls_key_id (const struct libnvme_fabrics_config *p)
-
-   Get tls_key_id.
-
-**Parameters**
-
-``const struct libnvme_fabrics_config *p``
-  The :c:type:`struct libnvme_fabrics_config <libnvme_fabrics_config>` instance to query.
-
-**Return**
-
-The value of the tls_key_id field.
-
-
-.. c:function:: void libnvme_fabrics_config_set_tls_configured_key_id (struct libnvme_fabrics_config *p, long tls_configured_key_id)
-
-   Set tls_configured_key_id.
-
-**Parameters**
-
-``struct libnvme_fabrics_config *p``
-  The :c:type:`struct libnvme_fabrics_config <libnvme_fabrics_config>` instance to update.
-
-``long tls_configured_key_id``
-  Value to assign to the tls_configured_key_id field.
-
-
-.. c:function:: long libnvme_fabrics_config_get_tls_configured_key_id (const struct libnvme_fabrics_config *p)
-
-   Get tls_configured_key_id.
-
-**Parameters**
-
-``const struct libnvme_fabrics_config *p``
-  The :c:type:`struct libnvme_fabrics_config <libnvme_fabrics_config>` instance to query.
-
-**Return**
-
-The value of the tls_configured_key_id field.
-
-
-.. c:function:: void libnvme_fabrics_config_set_duplicate_connect (struct libnvme_fabrics_config *p, bool duplicate_connect)
-
-   Set duplicate_connect.
-
-**Parameters**
-
-``struct libnvme_fabrics_config *p``
-  The :c:type:`struct libnvme_fabrics_config <libnvme_fabrics_config>` instance to update.
-
-``bool duplicate_connect``
-  Value to assign to the duplicate_connect field.
-
-
-.. c:function:: bool libnvme_fabrics_config_get_duplicate_connect (const struct libnvme_fabrics_config *p)
-
-   Get duplicate_connect.
-
-**Parameters**
-
-``const struct libnvme_fabrics_config *p``
-  The :c:type:`struct libnvme_fabrics_config <libnvme_fabrics_config>` instance to query.
-
-**Return**
-
-The value of the duplicate_connect field.
-
-
-.. c:function:: void libnvme_fabrics_config_set_disable_sqflow (struct libnvme_fabrics_config *p, bool disable_sqflow)
-
-   Set disable_sqflow.
-
-**Parameters**
-
-``struct libnvme_fabrics_config *p``
-  The :c:type:`struct libnvme_fabrics_config <libnvme_fabrics_config>` instance to update.
-
-``bool disable_sqflow``
-  Value to assign to the disable_sqflow field.
-
-
-.. c:function:: bool libnvme_fabrics_config_get_disable_sqflow (const struct libnvme_fabrics_config *p)
-
-   Get disable_sqflow.
-
-**Parameters**
-
-``const struct libnvme_fabrics_config *p``
-  The :c:type:`struct libnvme_fabrics_config <libnvme_fabrics_config>` instance to query.
-
-**Return**
-
-The value of the disable_sqflow field.
-
-
-.. c:function:: void libnvme_fabrics_config_set_hdr_digest (struct libnvme_fabrics_config *p, bool hdr_digest)
-
-   Set hdr_digest.
-
-**Parameters**
-
-``struct libnvme_fabrics_config *p``
-  The :c:type:`struct libnvme_fabrics_config <libnvme_fabrics_config>` instance to update.
-
-``bool hdr_digest``
-  Value to assign to the hdr_digest field.
-
-
-.. c:function:: bool libnvme_fabrics_config_get_hdr_digest (const struct libnvme_fabrics_config *p)
-
-   Get hdr_digest.
-
-**Parameters**
-
-``const struct libnvme_fabrics_config *p``
-  The :c:type:`struct libnvme_fabrics_config <libnvme_fabrics_config>` instance to query.
-
-**Return**
-
-The value of the hdr_digest field.
-
-
-.. c:function:: void libnvme_fabrics_config_set_data_digest (struct libnvme_fabrics_config *p, bool data_digest)
-
-   Set data_digest.
-
-**Parameters**
-
-``struct libnvme_fabrics_config *p``
-  The :c:type:`struct libnvme_fabrics_config <libnvme_fabrics_config>` instance to update.
-
-``bool data_digest``
-  Value to assign to the data_digest field.
-
-
-.. c:function:: bool libnvme_fabrics_config_get_data_digest (const struct libnvme_fabrics_config *p)
-
-   Get data_digest.
-
-**Parameters**
-
-``const struct libnvme_fabrics_config *p``
-  The :c:type:`struct libnvme_fabrics_config <libnvme_fabrics_config>` instance to query.
-
-**Return**
-
-The value of the data_digest field.
-
-
-.. c:function:: void libnvme_fabrics_config_set_tls (struct libnvme_fabrics_config *p, bool tls)
-
-   Set tls.
-
-**Parameters**
-
-``struct libnvme_fabrics_config *p``
-  The :c:type:`struct libnvme_fabrics_config <libnvme_fabrics_config>` instance to update.
-
-``bool tls``
-  Value to assign to the tls field.
-
-
-.. c:function:: bool libnvme_fabrics_config_get_tls (const struct libnvme_fabrics_config *p)
-
-   Get tls.
-
-**Parameters**
-
-``const struct libnvme_fabrics_config *p``
-  The :c:type:`struct libnvme_fabrics_config <libnvme_fabrics_config>` instance to query.
-
-**Return**
-
-The value of the tls field.
-
-
-.. c:function:: void libnvme_fabrics_config_set_concat (struct libnvme_fabrics_config *p, bool concat)
-
-   Set concat.
-
-**Parameters**
-
-``struct libnvme_fabrics_config *p``
-  The :c:type:`struct libnvme_fabrics_config <libnvme_fabrics_config>` instance to update.
-
-``bool concat``
-  Value to assign to the concat field.
-
-
-.. c:function:: bool libnvme_fabrics_config_get_concat (const struct libnvme_fabrics_config *p)
-
-   Get concat.
-
-**Parameters**
-
-``const struct libnvme_fabrics_config *p``
-  The :c:type:`struct libnvme_fabrics_config <libnvme_fabrics_config>` instance to query.
-
-**Return**
-
-The value of the concat field.
-
-
 .. c:function:: void libnvme_path_set_name (struct libnvme_path *p, const char *name)
 
    Set name.
@@ -538,87 +52,6 @@ The value of the name field, or NULL if not set.
 The value of the sysfs_dir field, or NULL if not set.
 
 
-.. c:function:: void libnvme_path_set_ana_state (struct libnvme_path *p, const char *ana_state)
-
-   Set ana_state.
-
-**Parameters**
-
-``struct libnvme_path *p``
-  The :c:type:`struct libnvme_path <libnvme_path>` instance to update.
-
-``const char *ana_state``
-  New string; a copy is stored. Pass NULL to clear.
-
-
-.. c:function:: const char * libnvme_path_get_ana_state (const struct libnvme_path *p)
-
-   Get ana_state.
-
-**Parameters**
-
-``const struct libnvme_path *p``
-  The :c:type:`struct libnvme_path <libnvme_path>` instance to query.
-
-**Return**
-
-The value of the ana_state field, or NULL if not set.
-
-
-.. c:function:: void libnvme_path_set_numa_nodes (struct libnvme_path *p, const char *numa_nodes)
-
-   Set numa_nodes.
-
-**Parameters**
-
-``struct libnvme_path *p``
-  The :c:type:`struct libnvme_path <libnvme_path>` instance to update.
-
-``const char *numa_nodes``
-  New string; a copy is stored. Pass NULL to clear.
-
-
-.. c:function:: const char * libnvme_path_get_numa_nodes (const struct libnvme_path *p)
-
-   Get numa_nodes.
-
-**Parameters**
-
-``const struct libnvme_path *p``
-  The :c:type:`struct libnvme_path <libnvme_path>` instance to query.
-
-**Return**
-
-The value of the numa_nodes field, or NULL if not set.
-
-
-.. c:function:: void libnvme_path_set_grpid (struct libnvme_path *p, int grpid)
-
-   Set grpid.
-
-**Parameters**
-
-``struct libnvme_path *p``
-  The :c:type:`struct libnvme_path <libnvme_path>` instance to update.
-
-``int grpid``
-  Value to assign to the grpid field.
-
-
-.. c:function:: int libnvme_path_get_grpid (const struct libnvme_path *p)
-
-   Get grpid.
-
-**Parameters**
-
-``const struct libnvme_path *p``
-  The :c:type:`struct libnvme_path <libnvme_path>` instance to query.
-
-**Return**
-
-The value of the grpid field.
-
-
 .. c:function:: void libnvme_ns_set_nsid (struct libnvme_ns *p, __u32 nsid)
 
    Set nsid.
@@ -646,19 +79,6 @@ The value of the grpid field.
 The value of the nsid field.
 
 
-.. c:function:: void libnvme_ns_set_name (struct libnvme_ns *p, const char *name)
-
-   Set name.
-
-**Parameters**
-
-``struct libnvme_ns *p``
-  The :c:type:`struct libnvme_ns <libnvme_ns>` instance to update.
-
-``const char *name``
-  New string; a copy is stored. Pass NULL to clear.
-
-
 .. c:function:: const char * libnvme_ns_get_name (const struct libnvme_ns *p)
 
    Get name.
@@ -671,6 +91,20 @@ The value of the nsid field.
 **Return**
 
 The value of the name field, or NULL if not set.
+
+
+.. c:function:: const char * libnvme_ns_get_generic_name (const struct libnvme_ns *p)
+
+   Get generic_name.
+
+**Parameters**
+
+``const struct libnvme_ns *p``
+  The :c:type:`struct libnvme_ns <libnvme_ns>` instance to query.
+
+**Return**
+
+The value of the generic_name field, or NULL if not set.
 
 
 .. c:function:: void libnvme_ns_set_sysfs_dir (struct libnvme_ns *p, const char *sysfs_dir)
@@ -698,141 +132,6 @@ The value of the name field, or NULL if not set.
 **Return**
 
 The value of the sysfs_dir field, or NULL if not set.
-
-
-.. c:function:: void libnvme_ns_set_lba_shift (struct libnvme_ns *p, int lba_shift)
-
-   Set lba_shift.
-
-**Parameters**
-
-``struct libnvme_ns *p``
-  The :c:type:`struct libnvme_ns <libnvme_ns>` instance to update.
-
-``int lba_shift``
-  Value to assign to the lba_shift field.
-
-
-.. c:function:: int libnvme_ns_get_lba_shift (const struct libnvme_ns *p)
-
-   Get lba_shift.
-
-**Parameters**
-
-``const struct libnvme_ns *p``
-  The :c:type:`struct libnvme_ns <libnvme_ns>` instance to query.
-
-**Return**
-
-The value of the lba_shift field.
-
-
-.. c:function:: void libnvme_ns_set_lba_size (struct libnvme_ns *p, int lba_size)
-
-   Set lba_size.
-
-**Parameters**
-
-``struct libnvme_ns *p``
-  The :c:type:`struct libnvme_ns <libnvme_ns>` instance to update.
-
-``int lba_size``
-  Value to assign to the lba_size field.
-
-
-.. c:function:: int libnvme_ns_get_lba_size (const struct libnvme_ns *p)
-
-   Get lba_size.
-
-**Parameters**
-
-``const struct libnvme_ns *p``
-  The :c:type:`struct libnvme_ns <libnvme_ns>` instance to query.
-
-**Return**
-
-The value of the lba_size field.
-
-
-.. c:function:: void libnvme_ns_set_meta_size (struct libnvme_ns *p, int meta_size)
-
-   Set meta_size.
-
-**Parameters**
-
-``struct libnvme_ns *p``
-  The :c:type:`struct libnvme_ns <libnvme_ns>` instance to update.
-
-``int meta_size``
-  Value to assign to the meta_size field.
-
-
-.. c:function:: int libnvme_ns_get_meta_size (const struct libnvme_ns *p)
-
-   Get meta_size.
-
-**Parameters**
-
-``const struct libnvme_ns *p``
-  The :c:type:`struct libnvme_ns <libnvme_ns>` instance to query.
-
-**Return**
-
-The value of the meta_size field.
-
-
-.. c:function:: void libnvme_ns_set_lba_count (struct libnvme_ns *p, uint64_t lba_count)
-
-   Set lba_count.
-
-**Parameters**
-
-``struct libnvme_ns *p``
-  The :c:type:`struct libnvme_ns <libnvme_ns>` instance to update.
-
-``uint64_t lba_count``
-  Value to assign to the lba_count field.
-
-
-.. c:function:: uint64_t libnvme_ns_get_lba_count (const struct libnvme_ns *p)
-
-   Get lba_count.
-
-**Parameters**
-
-``const struct libnvme_ns *p``
-  The :c:type:`struct libnvme_ns <libnvme_ns>` instance to query.
-
-**Return**
-
-The value of the lba_count field.
-
-
-.. c:function:: void libnvme_ns_set_lba_util (struct libnvme_ns *p, uint64_t lba_util)
-
-   Set lba_util.
-
-**Parameters**
-
-``struct libnvme_ns *p``
-  The :c:type:`struct libnvme_ns <libnvme_ns>` instance to update.
-
-``uint64_t lba_util``
-  Value to assign to the lba_util field.
-
-
-.. c:function:: uint64_t libnvme_ns_get_lba_util (const struct libnvme_ns *p)
-
-   Get lba_util.
-
-**Parameters**
-
-``const struct libnvme_ns *p``
-  The :c:type:`struct libnvme_ns <libnvme_ns>` instance to query.
-
-**Return**
-
-The value of the lba_util field.
 
 
 .. c:function:: const char * libnvme_ctrl_get_name (const struct libnvme_ctrl *p)
@@ -863,23 +162,9 @@ The value of the name field, or NULL if not set.
 The value of the sysfs_dir field, or NULL if not set.
 
 
-.. c:function:: const char * libnvme_ctrl_get_firmware (const struct libnvme_ctrl *p)
+.. c:function:: const char * libnvme_ctrl_get_address (const struct libnvme_ctrl *p)
 
-   Get firmware.
-
-**Parameters**
-
-``const struct libnvme_ctrl *p``
-  The :c:type:`struct libnvme_ctrl <libnvme_ctrl>` instance to query.
-
-**Return**
-
-The value of the firmware field, or NULL if not set.
-
-
-.. c:function:: const char * libnvme_ctrl_get_model (const struct libnvme_ctrl *p)
-
-   Get model.
+   Get address.
 
 **Parameters**
 
@@ -888,63 +173,7 @@ The value of the firmware field, or NULL if not set.
 
 **Return**
 
-The value of the model field, or NULL if not set.
-
-
-.. c:function:: const char * libnvme_ctrl_get_numa_node (const struct libnvme_ctrl *p)
-
-   Get numa_node.
-
-**Parameters**
-
-``const struct libnvme_ctrl *p``
-  The :c:type:`struct libnvme_ctrl <libnvme_ctrl>` instance to query.
-
-**Return**
-
-The value of the numa_node field, or NULL if not set.
-
-
-.. c:function:: const char * libnvme_ctrl_get_queue_count (const struct libnvme_ctrl *p)
-
-   Get queue_count.
-
-**Parameters**
-
-``const struct libnvme_ctrl *p``
-  The :c:type:`struct libnvme_ctrl <libnvme_ctrl>` instance to query.
-
-**Return**
-
-The value of the queue_count field, or NULL if not set.
-
-
-.. c:function:: const char * libnvme_ctrl_get_serial (const struct libnvme_ctrl *p)
-
-   Get serial.
-
-**Parameters**
-
-``const struct libnvme_ctrl *p``
-  The :c:type:`struct libnvme_ctrl <libnvme_ctrl>` instance to query.
-
-**Return**
-
-The value of the serial field, or NULL if not set.
-
-
-.. c:function:: const char * libnvme_ctrl_get_sqsize (const struct libnvme_ctrl *p)
-
-   Get sqsize.
-
-**Parameters**
-
-``const struct libnvme_ctrl *p``
-  The :c:type:`struct libnvme_ctrl <libnvme_ctrl>` instance to query.
-
-**Return**
-
-The value of the sqsize field, or NULL if not set.
+The value of the address field, or NULL if not set.
 
 
 .. c:function:: const char * libnvme_ctrl_get_transport (const struct libnvme_ctrl *p)
@@ -1003,87 +232,6 @@ The value of the traddr field, or NULL if not set.
 The value of the trsvcid field, or NULL if not set.
 
 
-.. c:function:: void libnvme_ctrl_set_dhchap_host_key (struct libnvme_ctrl *p, const char *dhchap_host_key)
-
-   Set dhchap_host_key.
-
-**Parameters**
-
-``struct libnvme_ctrl *p``
-  The :c:type:`struct libnvme_ctrl <libnvme_ctrl>` instance to update.
-
-``const char *dhchap_host_key``
-  New string; a copy is stored. Pass NULL to clear.
-
-
-.. c:function:: const char * libnvme_ctrl_get_dhchap_host_key (const struct libnvme_ctrl *p)
-
-   Get dhchap_host_key.
-
-**Parameters**
-
-``const struct libnvme_ctrl *p``
-  The :c:type:`struct libnvme_ctrl <libnvme_ctrl>` instance to query.
-
-**Return**
-
-The value of the dhchap_host_key field, or NULL if not set.
-
-
-.. c:function:: void libnvme_ctrl_set_dhchap_ctrl_key (struct libnvme_ctrl *p, const char *dhchap_ctrl_key)
-
-   Set dhchap_ctrl_key.
-
-**Parameters**
-
-``struct libnvme_ctrl *p``
-  The :c:type:`struct libnvme_ctrl <libnvme_ctrl>` instance to update.
-
-``const char *dhchap_ctrl_key``
-  New string; a copy is stored. Pass NULL to clear.
-
-
-.. c:function:: const char * libnvme_ctrl_get_dhchap_ctrl_key (const struct libnvme_ctrl *p)
-
-   Get dhchap_ctrl_key.
-
-**Parameters**
-
-``const struct libnvme_ctrl *p``
-  The :c:type:`struct libnvme_ctrl <libnvme_ctrl>` instance to query.
-
-**Return**
-
-The value of the dhchap_ctrl_key field, or NULL if not set.
-
-
-.. c:function:: void libnvme_ctrl_set_keyring (struct libnvme_ctrl *p, const char *keyring)
-
-   Set keyring.
-
-**Parameters**
-
-``struct libnvme_ctrl *p``
-  The :c:type:`struct libnvme_ctrl <libnvme_ctrl>` instance to update.
-
-``const char *keyring``
-  New string; a copy is stored. Pass NULL to clear.
-
-
-.. c:function:: const char * libnvme_ctrl_get_keyring (const struct libnvme_ctrl *p)
-
-   Get keyring.
-
-**Parameters**
-
-``const struct libnvme_ctrl *p``
-  The :c:type:`struct libnvme_ctrl <libnvme_ctrl>` instance to query.
-
-**Return**
-
-The value of the keyring field, or NULL if not set.
-
-
 .. c:function:: void libnvme_ctrl_set_tls_key_identity (struct libnvme_ctrl *p, const char *tls_key_identity)
 
    Set tls_key_identity.
@@ -1136,62 +284,6 @@ The value of the tls_key_identity field, or NULL if not set.
 **Return**
 
 The value of the tls_key field, or NULL if not set.
-
-
-.. c:function:: const char * libnvme_ctrl_get_cntrltype (const struct libnvme_ctrl *p)
-
-   Get cntrltype.
-
-**Parameters**
-
-``const struct libnvme_ctrl *p``
-  The :c:type:`struct libnvme_ctrl <libnvme_ctrl>` instance to query.
-
-**Return**
-
-The value of the cntrltype field, or NULL if not set.
-
-
-.. c:function:: const char * libnvme_ctrl_get_cntlid (const struct libnvme_ctrl *p)
-
-   Get cntlid.
-
-**Parameters**
-
-``const struct libnvme_ctrl *p``
-  The :c:type:`struct libnvme_ctrl <libnvme_ctrl>` instance to query.
-
-**Return**
-
-The value of the cntlid field, or NULL if not set.
-
-
-.. c:function:: const char * libnvme_ctrl_get_dctype (const struct libnvme_ctrl *p)
-
-   Get dctype.
-
-**Parameters**
-
-``const struct libnvme_ctrl *p``
-  The :c:type:`struct libnvme_ctrl <libnvme_ctrl>` instance to query.
-
-**Return**
-
-The value of the dctype field, or NULL if not set.
-
-
-.. c:function:: const char * libnvme_ctrl_get_phy_slot (const struct libnvme_ctrl *p)
-
-   Get phy_slot.
-
-**Parameters**
-
-``const struct libnvme_ctrl *p``
-  The :c:type:`struct libnvme_ctrl <libnvme_ctrl>` instance to query.
-
-**Return**
-
-The value of the phy_slot field, or NULL if not set.
 
 
 .. c:function:: const char * libnvme_ctrl_get_host_traddr (const struct libnvme_ctrl *p)
@@ -1330,6 +422,258 @@ The value of the discovered field.
 The value of the persistent field.
 
 
+.. c:function:: int libnvme_ctrl_get_queue_size (const struct libnvme_ctrl *p)
+
+   Get queue_size.
+
+**Parameters**
+
+``const struct libnvme_ctrl *p``
+  The :c:type:`struct libnvme_ctrl <libnvme_ctrl>` instance to query.
+
+**Return**
+
+The value of the queue_size field.
+
+
+.. c:function:: int libnvme_ctrl_get_nr_io_queues (const struct libnvme_ctrl *p)
+
+   Get nr_io_queues.
+
+**Parameters**
+
+``const struct libnvme_ctrl *p``
+  The :c:type:`struct libnvme_ctrl <libnvme_ctrl>` instance to query.
+
+**Return**
+
+The value of the nr_io_queues field.
+
+
+.. c:function:: int libnvme_ctrl_get_reconnect_delay (const struct libnvme_ctrl *p)
+
+   Get reconnect_delay.
+
+**Parameters**
+
+``const struct libnvme_ctrl *p``
+  The :c:type:`struct libnvme_ctrl <libnvme_ctrl>` instance to query.
+
+**Return**
+
+The value of the reconnect_delay field.
+
+
+.. c:function:: int libnvme_ctrl_get_ctrl_loss_tmo (const struct libnvme_ctrl *p)
+
+   Get ctrl_loss_tmo.
+
+**Parameters**
+
+``const struct libnvme_ctrl *p``
+  The :c:type:`struct libnvme_ctrl <libnvme_ctrl>` instance to query.
+
+**Return**
+
+The value of the ctrl_loss_tmo field.
+
+
+.. c:function:: int libnvme_ctrl_get_fast_io_fail_tmo (const struct libnvme_ctrl *p)
+
+   Get fast_io_fail_tmo.
+
+**Parameters**
+
+``const struct libnvme_ctrl *p``
+  The :c:type:`struct libnvme_ctrl <libnvme_ctrl>` instance to query.
+
+**Return**
+
+The value of the fast_io_fail_tmo field.
+
+
+.. c:function:: int libnvme_ctrl_get_keep_alive_tmo (const struct libnvme_ctrl *p)
+
+   Get keep_alive_tmo.
+
+**Parameters**
+
+``const struct libnvme_ctrl *p``
+  The :c:type:`struct libnvme_ctrl <libnvme_ctrl>` instance to query.
+
+**Return**
+
+The value of the keep_alive_tmo field.
+
+
+.. c:function:: int libnvme_ctrl_get_nr_write_queues (const struct libnvme_ctrl *p)
+
+   Get nr_write_queues.
+
+**Parameters**
+
+``const struct libnvme_ctrl *p``
+  The :c:type:`struct libnvme_ctrl <libnvme_ctrl>` instance to query.
+
+**Return**
+
+The value of the nr_write_queues field.
+
+
+.. c:function:: int libnvme_ctrl_get_nr_poll_queues (const struct libnvme_ctrl *p)
+
+   Get nr_poll_queues.
+
+**Parameters**
+
+``const struct libnvme_ctrl *p``
+  The :c:type:`struct libnvme_ctrl <libnvme_ctrl>` instance to query.
+
+**Return**
+
+The value of the nr_poll_queues field.
+
+
+.. c:function:: int libnvme_ctrl_get_tos (const struct libnvme_ctrl *p)
+
+   Get tos.
+
+**Parameters**
+
+``const struct libnvme_ctrl *p``
+  The :c:type:`struct libnvme_ctrl <libnvme_ctrl>` instance to query.
+
+**Return**
+
+The value of the tos field.
+
+
+.. c:function:: long libnvme_ctrl_get_keyring_id (const struct libnvme_ctrl *p)
+
+   Get keyring_id.
+
+**Parameters**
+
+``const struct libnvme_ctrl *p``
+  The :c:type:`struct libnvme_ctrl <libnvme_ctrl>` instance to query.
+
+**Return**
+
+The value of the keyring_id field.
+
+
+.. c:function:: long libnvme_ctrl_get_tls_key_id (const struct libnvme_ctrl *p)
+
+   Get tls_key_id.
+
+**Parameters**
+
+``const struct libnvme_ctrl *p``
+  The :c:type:`struct libnvme_ctrl <libnvme_ctrl>` instance to query.
+
+**Return**
+
+The value of the tls_key_id field.
+
+
+.. c:function:: long libnvme_ctrl_get_tls_configured_key_id (const struct libnvme_ctrl *p)
+
+   Get tls_configured_key_id.
+
+**Parameters**
+
+``const struct libnvme_ctrl *p``
+  The :c:type:`struct libnvme_ctrl <libnvme_ctrl>` instance to query.
+
+**Return**
+
+The value of the tls_configured_key_id field.
+
+
+.. c:function:: bool libnvme_ctrl_get_duplicate_connect (const struct libnvme_ctrl *p)
+
+   Get duplicate_connect.
+
+**Parameters**
+
+``const struct libnvme_ctrl *p``
+  The :c:type:`struct libnvme_ctrl <libnvme_ctrl>` instance to query.
+
+**Return**
+
+The value of the duplicate_connect field.
+
+
+.. c:function:: bool libnvme_ctrl_get_disable_sqflow (const struct libnvme_ctrl *p)
+
+   Get disable_sqflow.
+
+**Parameters**
+
+``const struct libnvme_ctrl *p``
+  The :c:type:`struct libnvme_ctrl <libnvme_ctrl>` instance to query.
+
+**Return**
+
+The value of the disable_sqflow field.
+
+
+.. c:function:: bool libnvme_ctrl_get_hdr_digest (const struct libnvme_ctrl *p)
+
+   Get hdr_digest.
+
+**Parameters**
+
+``const struct libnvme_ctrl *p``
+  The :c:type:`struct libnvme_ctrl <libnvme_ctrl>` instance to query.
+
+**Return**
+
+The value of the hdr_digest field.
+
+
+.. c:function:: bool libnvme_ctrl_get_data_digest (const struct libnvme_ctrl *p)
+
+   Get data_digest.
+
+**Parameters**
+
+``const struct libnvme_ctrl *p``
+  The :c:type:`struct libnvme_ctrl <libnvme_ctrl>` instance to query.
+
+**Return**
+
+The value of the data_digest field.
+
+
+.. c:function:: bool libnvme_ctrl_get_tls (const struct libnvme_ctrl *p)
+
+   Get tls.
+
+**Parameters**
+
+``const struct libnvme_ctrl *p``
+  The :c:type:`struct libnvme_ctrl <libnvme_ctrl>` instance to query.
+
+**Return**
+
+The value of the tls field.
+
+
+.. c:function:: bool libnvme_ctrl_get_concat (const struct libnvme_ctrl *p)
+
+   Get concat.
+
+**Parameters**
+
+``const struct libnvme_ctrl *p``
+  The :c:type:`struct libnvme_ctrl <libnvme_ctrl>` instance to query.
+
+**Return**
+
+The value of the concat field.
+
+
 .. c:function:: const char * libnvme_subsystem_get_name (const struct libnvme_subsystem *p)
 
    Get name.
@@ -1372,48 +716,6 @@ The value of the sysfs_dir field, or NULL if not set.
 The value of the subsysnqn field, or NULL if not set.
 
 
-.. c:function:: const char * libnvme_subsystem_get_model (const struct libnvme_subsystem *p)
-
-   Get model.
-
-**Parameters**
-
-``const struct libnvme_subsystem *p``
-  The :c:type:`struct libnvme_subsystem <libnvme_subsystem>` instance to query.
-
-**Return**
-
-The value of the model field, or NULL if not set.
-
-
-.. c:function:: const char * libnvme_subsystem_get_serial (const struct libnvme_subsystem *p)
-
-   Get serial.
-
-**Parameters**
-
-``const struct libnvme_subsystem *p``
-  The :c:type:`struct libnvme_subsystem <libnvme_subsystem>` instance to query.
-
-**Return**
-
-The value of the serial field, or NULL if not set.
-
-
-.. c:function:: const char * libnvme_subsystem_get_firmware (const struct libnvme_subsystem *p)
-
-   Get firmware.
-
-**Parameters**
-
-``const struct libnvme_subsystem *p``
-  The :c:type:`struct libnvme_subsystem <libnvme_subsystem>` instance to query.
-
-**Return**
-
-The value of the firmware field, or NULL if not set.
-
-
 .. c:function:: const char * libnvme_subsystem_get_subsystype (const struct libnvme_subsystem *p)
 
    Get subsystype.
@@ -1426,60 +728,6 @@ The value of the firmware field, or NULL if not set.
 **Return**
 
 The value of the subsystype field, or NULL if not set.
-
-
-.. c:function:: void libnvme_subsystem_set_application (struct libnvme_subsystem *p, const char *application)
-
-   Set application.
-
-**Parameters**
-
-``struct libnvme_subsystem *p``
-  The :c:type:`struct libnvme_subsystem <libnvme_subsystem>` instance to update.
-
-``const char *application``
-  New string; a copy is stored. Pass NULL to clear.
-
-
-.. c:function:: const char * libnvme_subsystem_get_application (const struct libnvme_subsystem *p)
-
-   Get application.
-
-**Parameters**
-
-``const struct libnvme_subsystem *p``
-  The :c:type:`struct libnvme_subsystem <libnvme_subsystem>` instance to query.
-
-**Return**
-
-The value of the application field, or NULL if not set.
-
-
-.. c:function:: void libnvme_subsystem_set_iopolicy (struct libnvme_subsystem *p, const char *iopolicy)
-
-   Set iopolicy.
-
-**Parameters**
-
-``struct libnvme_subsystem *p``
-  The :c:type:`struct libnvme_subsystem <libnvme_subsystem>` instance to update.
-
-``const char *iopolicy``
-  New string; a copy is stored. Pass NULL to clear.
-
-
-.. c:function:: const char * libnvme_subsystem_get_iopolicy (const struct libnvme_subsystem *p)
-
-   Get iopolicy.
-
-**Parameters**
-
-``const struct libnvme_subsystem *p``
-  The :c:type:`struct libnvme_subsystem <libnvme_subsystem>` instance to query.
-
-**Return**
-
-The value of the iopolicy field, or NULL if not set.
 
 
 .. c:function:: const char * libnvme_host_get_hostnqn (const struct libnvme_host *p)
@@ -1510,22 +758,22 @@ The value of the hostnqn field, or NULL if not set.
 The value of the hostid field, or NULL if not set.
 
 
-.. c:function:: void libnvme_host_set_dhchap_host_key (struct libnvme_host *p, const char *dhchap_host_key)
+.. c:function:: void libnvme_host_set_kxchap_host_key (struct libnvme_host *p, const char *kxchap_host_key)
 
-   Set dhchap_host_key.
+   Set kxchap_host_key.
 
 **Parameters**
 
 ``struct libnvme_host *p``
   The :c:type:`struct libnvme_host <libnvme_host>` instance to update.
 
-``const char *dhchap_host_key``
+``const char *kxchap_host_key``
   New string; a copy is stored. Pass NULL to clear.
 
 
-.. c:function:: const char * libnvme_host_get_dhchap_host_key (const struct libnvme_host *p)
+.. c:function:: const char * libnvme_host_get_kxchap_host_key (const struct libnvme_host *p)
 
-   Get dhchap_host_key.
+   Get kxchap_host_key.
 
 **Parameters**
 
@@ -1534,7 +782,7 @@ The value of the hostid field, or NULL if not set.
 
 **Return**
 
-The value of the dhchap_host_key field, or NULL if not set.
+The value of the kxchap_host_key field, or NULL if not set.
 
 
 .. c:function:: void libnvme_host_set_hostsymname (struct libnvme_host *p, const char *hostsymname)
@@ -1562,33 +810,6 @@ The value of the dhchap_host_key field, or NULL if not set.
 **Return**
 
 The value of the hostsymname field, or NULL if not set.
-
-
-.. c:function:: void libnvme_host_set_pdc_enabled_valid (struct libnvme_host *p, bool pdc_enabled_valid)
-
-   Set pdc_enabled_valid.
-
-**Parameters**
-
-``struct libnvme_host *p``
-  The :c:type:`struct libnvme_host <libnvme_host>` instance to update.
-
-``bool pdc_enabled_valid``
-  Value to assign to the pdc_enabled_valid field.
-
-
-.. c:function:: bool libnvme_host_get_pdc_enabled_valid (const struct libnvme_host *p)
-
-   Get pdc_enabled_valid.
-
-**Parameters**
-
-``const struct libnvme_host *p``
-  The :c:type:`struct libnvme_host <libnvme_host>` instance to query.
-
-**Return**
-
-The value of the pdc_enabled_valid field.
 
 
 .. c:function:: void libnvme_fabric_options_set_cntlid (struct libnvme_fabric_options *p, bool cntlid)
@@ -2399,5 +1620,139 @@ The value of the transport field.
 **Return**
 
 The value of the trsvcid field.
+
+
+.. c:function:: void libnvme_set_dry_run (struct libnvme_global_ctx *p, bool dry_run)
+
+   Set dry_run.
+
+**Parameters**
+
+``struct libnvme_global_ctx *p``
+  The :c:type:`struct libnvme_global_ctx <libnvme_global_ctx>` instance to update.
+
+``bool dry_run``
+  Value to assign to the dry_run field.
+
+
+.. c:function:: bool libnvme_get_dry_run (const struct libnvme_global_ctx *p)
+
+   Get dry_run.
+
+**Parameters**
+
+``const struct libnvme_global_ctx *p``
+  The :c:type:`struct libnvme_global_ctx <libnvme_global_ctx>` instance to query.
+
+**Return**
+
+The value of the dry_run field.
+
+
+.. c:function:: void libnvme_set_force_4k (struct libnvme_global_ctx *p, bool force_4k)
+
+   Set force_4k.
+
+**Parameters**
+
+``struct libnvme_global_ctx *p``
+  The :c:type:`struct libnvme_global_ctx <libnvme_global_ctx>` instance to update.
+
+``bool force_4k``
+  Value to assign to the force_4k field.
+
+
+.. c:function:: bool libnvme_get_force_4k (const struct libnvme_global_ctx *p)
+
+   Get force_4k.
+
+**Parameters**
+
+``const struct libnvme_global_ctx *p``
+  The :c:type:`struct libnvme_global_ctx <libnvme_global_ctx>` instance to query.
+
+**Return**
+
+The value of the force_4k field.
+
+
+.. c:function:: void libnvme_set_mi_probe_enabled (struct libnvme_global_ctx *p, bool mi_probe_enabled)
+
+   Set mi_probe_enabled.
+
+**Parameters**
+
+``struct libnvme_global_ctx *p``
+  The :c:type:`struct libnvme_global_ctx <libnvme_global_ctx>` instance to update.
+
+``bool mi_probe_enabled``
+  Value to assign to the mi_probe_enabled field.
+
+
+.. c:function:: bool libnvme_get_mi_probe_enabled (const struct libnvme_global_ctx *p)
+
+   Get mi_probe_enabled.
+
+**Parameters**
+
+``const struct libnvme_global_ctx *p``
+  The :c:type:`struct libnvme_global_ctx <libnvme_global_ctx>` instance to query.
+
+**Return**
+
+The value of the mi_probe_enabled field.
+
+
+.. c:function:: void libnvme_set_ioctl_probing (struct libnvme_global_ctx *p, bool ioctl_probing)
+
+   Set ioctl_probing.
+
+**Parameters**
+
+``struct libnvme_global_ctx *p``
+  The :c:type:`struct libnvme_global_ctx <libnvme_global_ctx>` instance to update.
+
+``bool ioctl_probing``
+  Value to assign to the ioctl_probing field.
+
+
+.. c:function:: bool libnvme_get_ioctl_probing (const struct libnvme_global_ctx *p)
+
+   Get ioctl_probing.
+
+**Parameters**
+
+``const struct libnvme_global_ctx *p``
+  The :c:type:`struct libnvme_global_ctx <libnvme_global_ctx>` instance to query.
+
+**Return**
+
+The value of the ioctl_probing field.
+
+
+.. c:function:: void libnvme_set_hostnqn (struct libnvme_global_ctx *p, const char *hostnqn)
+
+   Set hostnqn.
+
+**Parameters**
+
+``struct libnvme_global_ctx *p``
+  The :c:type:`struct libnvme_global_ctx <libnvme_global_ctx>` instance to update.
+
+``const char *hostnqn``
+  New string; a copy is stored. Pass NULL to clear.
+
+
+.. c:function:: void libnvme_set_hostid (struct libnvme_global_ctx *p, const char *hostid)
+
+   Set hostid.
+
+**Parameters**
+
+``struct libnvme_global_ctx *p``
+  The :c:type:`struct libnvme_global_ctx <libnvme_global_ctx>` instance to update.
+
+``const char *hostid``
+  New string; a copy is stored. Pass NULL to clear.
 
 

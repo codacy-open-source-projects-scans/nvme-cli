@@ -2,12 +2,12 @@
 .\"     Title: nvme-id-iocs
 .\"    Author: [FIXME: author] [see http://www.docbook.org/tdg5/en/html/author]
 .\" Generator: DocBook XSL Stylesheets vsnapshot <http://docbook.sf.net/>
-.\"      Date: 04/17/2026
+.\"      Date: 09/18/2026
 .\"    Manual: NVMe Manual
 .\"    Source: NVMe
 .\"  Language: English
 .\"
-.TH "NVME\-ID\-IOCS" "1" "04/17/2026" "NVMe" "NVMe Manual"
+.TH "NVME\-ID\-IOCS" "1" "09/18/2026" "NVMe" "NVMe Manual"
 .\" -----------------------------------------------------------------
 .\" * Define some portability stuff
 .\" -----------------------------------------------------------------
@@ -32,25 +32,21 @@ nvme-id-iocs \- Send NVMe Identify I/O Command Set, return result and structure
 .SH "SYNOPSIS"
 .sp
 .nf
-\fInvme id\-iocs\fR <device> [\-\-controller\-id=<cntid> | \-c <cntid>]
-                        [\-\-human\-readable | \-H]
-                        [<global\-options>]
+\fInvme\fR [<global\-options>] \fIid iocs\fR <device>
+                        [\-\-controller\-id=<cntid> | \-c <cntid>]
 .fi
 .SH "DESCRIPTION"
 .sp
 For the NVMe device given, send an identify command and return the Identify I/O Command Set data structure\&.
 .sp
 The <device> parameter is mandatory and may be either the NVMe character device (ex: /dev/nvme0), or a namespace block device (ex: /dev/nvme0n1)\&.
+.sp
+The bare \fInvme id\-iocs\fR form (without a space) still works as a deprecated alias and will be removed in a future major version\&. New scripts should use \fInvme id iocs\fR instead\&.
 .SH "OPTIONS"
 .PP
 \-c <cntid>, \-\-controller\-id=<cntid>
 .RS 4
 Retrieve the identify I/O Command set data structure for the given cntid\&. If this value is not given, cntid will be 0xffff\&.
-.RE
-.PP
-\-H, \-\-human\-readable
-.RS 4
-Display values in a human\-readable format where possible\&. (deprecated, use \-\-verbose)
 .RE
 .SH "GLOBAL OPTIONS"
 .sp
@@ -97,6 +93,8 @@ Set the timeout for the command in milliseconds\&.
 .RS 4
 Increase the level of detail in the output\&. May be specified multiple times to further increase verbosity\&.
 .RE
+.sp
+These options can also be set as machine\-wide defaults in nvme\-cli\&.conf(5)\&. A command\-line flag always overrides the file\&.
 .SH "EXAMPLES"
 .sp
 .RS 4
@@ -113,7 +111,7 @@ Have the program interpret the returned buffer and display the known fields in a
 .RS 4
 .\}
 .nf
-# nvme id\-iocs /dev/nvme0
+# nvme id iocs /dev/nvme0
 .fi
 .if n \{\
 .RE
@@ -134,7 +132,7 @@ show the fields in human readable format
 .RS 4
 .\}
 .nf
-# nvme id\-iocs /dev/nvme0 \-H
+# nvme id iocs /dev/nvme0 \-H
 .fi
 .if n \{\
 .RE

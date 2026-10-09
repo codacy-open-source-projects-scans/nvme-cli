@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
+#include <libnvme.h>
+
 #include "nvme-print.h"
-#include "ocp-print.h"
 #include "ocp-hardware-component-log.h"
+#include "ocp-print.h"
 
 #define ocp_print(name, flags, ...) \
 	do { \
@@ -9,7 +11,7 @@
 		if (ops && ops->name) \
 			ops->name(__VA_ARGS__); \
 		else \
-			fprintf(stderr, "unhandled output format\n"); \
+			nvme_show_error("unhandled output format"); \
 	} while (false)
 
 static struct ocp_print_ops *ocp_print_ops(nvme_print_flags_t flags)
@@ -77,6 +79,24 @@ void ocp_c1_log(struct ocp_error_recovery_log_page *log_data, nvme_print_flags_t
 void ocp_c4_log(struct ocp_device_capabilities_log_page *log_data, nvme_print_flags_t flags)
 {
 	ocp_print(c4_log, flags, log_data);
+}
+
+const char *ocp_c4_fips_140_status(__u16 fips_140_validation)
+{
+	switch (fips_140_validation & C4_FIPS_140_STATUS_MASK) {
+	case 0x0:
+		return "Not FIPS 140 validated and not intended to be";
+	case 0x1:
+		return "Intended to be FIPS 140 validated, not yet submitted";
+	case 0x2:
+		return "Submitted for FIPS 140 validation, not yet validated";
+	case 0x3:
+		return "Interim FIPS 140 validation";
+	case 0x4:
+		return "Full FIPS 140 validation";
+	default:
+		return "Reserved";
+	}
 }
 
 void ocp_c9_log(struct telemetry_str_log_format *log_data, __u8 *log_data_buf,

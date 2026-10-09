@@ -2,12 +2,12 @@
 .\"     Title: nvme-telemetry-log
 .\"    Author: [FIXME: author] [see http://www.docbook.org/tdg5/en/html/author]
 .\" Generator: DocBook XSL Stylesheets vsnapshot <http://docbook.sf.net/>
-.\"      Date: 04/17/2026
+.\"      Date: 09/18/2026
 .\"    Manual: NVMe Manual
 .\"    Source: NVMe
 .\"  Language: English
 .\"
-.TH "NVME\-TELEMETRY\-LOG" "1" "04/17/2026" "NVMe" "NVMe Manual"
+.TH "NVME\-TELEMETRY\-LOG" "1" "09/18/2026" "NVMe" "NVMe Manual"
 .\" -----------------------------------------------------------------
 .\" * Define some portability stuff
 .\" -----------------------------------------------------------------
@@ -28,39 +28,21 @@
 .\" * MAIN CONTENT STARTS HERE *
 .\" -----------------------------------------------------------------
 .SH "NAME"
-nvme-telemetry-log \- Retrieves a Telemetry Host\-Initiated log page from an NVMe device
+nvme-telemetry-log \- Retrieves a Telemetry Host\-Initiated log page from an NVMe device (deprecated)
 .SH "SYNOPSIS"
 .sp
 .nf
-\fInvme telemetry\-log\fR <device> [\-\-output\-file=<file> | \-O <file>]
+\fInvme\fR [<global\-options>] \fItelemetry\-log\fR <device>
+                        [\-\-output\-file=<file> | \-O <file>]
                         [\-\-host\-generate=<gen> | \-g <gen>]
-                        [<global\-options>]
 .fi
 .SH "DESCRIPTION"
 .sp
-Retrieves an Telemetry Host\-Initiated log page from an NVMe device and provides the returned structure\&.
+Deprecated alias for \fBnvme-log-telemetry\fR(1), kept for scripts written against nvme\-cli versions older than 3\&.0\&. Options and behavior are identical; only the top\-level command name is retained\&.
 .sp
-The <device> parameter is mandatory and may be either the NVMe character device (ex: /dev/nvme0), or a namespace block device (ex: /dev/nvme0n1)\&.
+New scripts should use \fInvme log telemetry\fR instead\&. This alias prints a deprecation warning on stderr and may be removed in a future release\&.
 .sp
-On success, the returned log structure will be in raw binary format \fIonly\fR with \-\-output\-file option which is mandatory\&.
-.SH "OPTIONS"
-.PP
-\-O <file>, \-\-output\-file=<file>
-.RS 4
-File name to which raw binary data will be saved to\&.
-.RE
-.PP
-\-g <gen>, \-\-host\-generate=<gen>
-.RS 4
-If set to 1, controller shall capture the Telemetry Host\-Initiated data representing the internal state of the controller at the time the associated Get Log Page command is processed\&. If cleated to 0, controller shall
-\fInot\fR
-update this data\&.
-.RE
-.PP
-\-d <da>, \-\-data\-area=<da>
-.RS 4
-Retrieves the specific data area requested\&. Valid inputs are 1,2,3,4\&. If this option is not specified, the default value is 3, since data area 4 may not be supported\&.
-.RE
+See \fBnvme-log-telemetry\fR(1) for the full option reference\&.
 .SH "GLOBAL OPTIONS"
 .sp
 The following options are defined at the top\-level nvme command and are available to this subcommand:
@@ -106,28 +88,14 @@ Set the timeout for the command in milliseconds\&.
 .RS 4
 Increase the level of detail in the output\&. May be specified multiple times to further increase verbosity\&.
 .RE
+.sp
+These options can also be set as machine\-wide defaults in nvme\-cli\&.conf(5)\&. A command\-line flag always overrides the file\&.
 .SH "EXAMPLES"
 .sp
-.RS 4
-.ie n \{\
-\h'-04'\(bu\h'+03'\c
-.\}
-.el \{\
-.sp -1
-.IP \(bu 2.3
-.\}
-Retrieve Telemetry Host\-Initiated data to telemetry_log\&.bin
-.sp
-.if n \{\
-.RS 4
-.\}
-.nf
-# nvme telemetry\-log /dev/nvme0 \-\-output\-file=telemetry_log\&.bin
-.fi
-.if n \{\
-.RE
-.\}
-.RE
+No Examples
 .SH "NVME"
 .sp
 Part of the nvme\-user suite
+.SH "SEE ALSO"
+.sp
+\fBnvme-log-telemetry\fR(1)

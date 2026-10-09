@@ -1,3 +1,39 @@
+.. _mi-types.h - NVMe-MI wire protocol and messaging types:
+
+**mi-types.h - NVMe-MI wire protocol and messaging types**
+
+
+This file defines the wire protocol types for NVMe Management Interface
+(NVMe-MI) messaging and transport layer. These are the low-level message
+structures used for MCTP/MI communication between a host and NVMe devices.
+
+Scope
+=====
+- MCTP message framing and headers
+- MI request/response message structures
+- MI command opcodes and protocol definitions
+- Admin command protocol over MI transport
+- Control primitives for MI communication
+- Asynchronous Event Messages (AEM)
+- Low-level transport and protocol details
+
+This file is primarily used by the libnvme-mi library implementation and
+is **internal to the MI transport layer**.
+
+Separation from nvme-types-mi.h
+================================
+This file is **separate** from nvme-types-mi.h, which serves a different purpose:
+
+- **mi-types.h** (this file): Wire protocol, messaging, transport layer
+  - Used by: mi.h (MI library internals)
+  - Focus: How messages are sent/received over MCTP
+  - Analogy: TCP/IP headers and framing
+
+- **nvme-types-mi.h**: NVMe-MI data structures from the MI specification
+  - Used by: nvme-types.h (public API), applications
+  - Focus: MI data payloads (controller info, health status, VPD)
+  - Analogy: HTTP request/response bodies
+
 .. c:macro:: NVME_MI_MSGTYPE_NVME
 
 ``NVME_MI_MSGTYPE_NVME ()``
@@ -56,72 +92,6 @@ byte). Not to be confused with the MCTP message type in byte 0.
 
 ``NVME_MI_ROR_RSP``
   response message
-
-
-
-
-.. c:enum:: nvme_mi_resp_status
-
-   values for the response status field
-
-**Constants**
-
-``NVME_MI_RESP_SUCCESS``
-  success
-
-``NVME_MI_RESP_MPR``
-  More Processing Required
-
-``NVME_MI_RESP_INTERNAL_ERR``
-  Internal Error
-
-``NVME_MI_RESP_INVALID_OPCODE``
-  Invalid command opcode
-
-``NVME_MI_RESP_INVALID_PARAM``
-  Invalid command parameter
-
-``NVME_MI_RESP_INVALID_CMD_SIZE``
-  Invalid command size
-
-``NVME_MI_RESP_INVALID_INPUT_SIZE``
-  Invalid command input data size
-
-``NVME_MI_RESP_ACCESS_DENIED``
-  Access Denied
-
-``NVME_MI_RESP_VPD_UPDATES_EXCEEDED``
-  More VPD updates than allowed
-
-``NVME_MI_RESP_PCIE_INACCESSIBLE``
-  PCIe functionality currently unavailable
-
-``NVME_MI_RESP_MEB_SANITIZED``
-  MEB has been cleared due to sanitize
-
-``NVME_MI_RESP_ENC_SERV_FAILURE``
-  Enclosure services process failed
-
-``NVME_MI_RESP_ENC_SERV_XFER_FAILURE``
-  Transfer with enclosure services failed
-
-``NVME_MI_RESP_ENC_FAILURE``
-  Unreoverable enclosure failure
-
-``NVME_MI_RESP_ENC_XFER_REFUSED``
-  Enclosure services transfer refused
-
-``NVME_MI_RESP_ENC_FUNC_UNSUP``
-  Unsupported enclosure services function
-
-``NVME_MI_RESP_ENC_SERV_UNAVAIL``
-  Enclosure services unavailable
-
-``NVME_MI_RESP_ENC_DEGRADED``
-  Noncritical failure detected by enc. services
-
-``NVME_MI_RESP_SANITIZE_IN_PROGRESS``
-  Command prohibited during sanitize
 
 
 
@@ -210,11 +180,65 @@ will define parts of the reserved data, and may add further fields.
 ``nvme_mi_mi_opcode_subsys_health_status_poll``
   Subsystem Health Status Poll
 
+``nvme_mi_mi_opcode_ctrl_health_status_poll``
+  Controller Health Status Poll
+
 ``nvme_mi_mi_opcode_configuration_set``
   MI Configuration Set
 
 ``nvme_mi_mi_opcode_configuration_get``
   MI Configuration Get
+
+``nvme_mi_mi_opcode_vpd_read``
+  VPD Read
+
+``nvme_mi_mi_opcode_vpd_write``
+  VPD Write
+
+``nvme_mi_mi_opcode_reset``
+  Reset
+
+``nvme_mi_mi_opcode_ses_recv``
+  SES Receive
+
+``nvme_mi_mi_opcode_ses_send``
+  SES Send
+
+``nvme_mi_mi_opcode_meb_read``
+  Management Endpoint Buffer Read
+
+``nvme_mi_mi_opcode_meb_write``
+  Management Endpoint Buffer Write
+
+``nvme_mi_mi_opcode_shutdown``
+  Shutdown
+
+``nvme_mi_mi_opcode_pda_read``
+  NVMe-MI PDA Read
+
+``nvme_mi_mi_opcode_pda_write``
+  NVMe-MI PDA Write
+
+``nvme_mi_mi_opcode_pda_write_zeroes``
+  NVMe-MI PDA Write Zeroes
+
+
+
+
+.. c:enum:: nvme_mi_pda_dformat
+
+   NVMe-MI PDA Command - Data Format (DFORMAT)
+
+**Constants**
+
+``nvme_mi_pda_dformat_4kib``
+  4KiB data format
+
+``nvme_mi_pda_dformat_512b``
+  512B data format
+
+``nvme_mi_pda_dformat_byte``
+  Byte Level data format
 
 
 

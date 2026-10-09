@@ -22,15 +22,15 @@
 
 #include <errno.h>
 #include <string.h>
-#include <unistd.h>
 #include <time.h>
+#include <unistd.h>
 
 #include <libnvme.h>
 
-#include "nvme-cmds.h"
-#include "nvme-print.h"
-#include "nvme.h"
+#include <shared/fs-util.h>
+#include <shared/time-util.h>
 
+#include "nvme-print.h"
 #include "wdc-utils.h"
 
 int wdc_UtilsSnprintf(char *buffer, unsigned int sizeOfBuffer, const char *format, ...)
@@ -85,11 +85,7 @@ int wdc_UtilsGetTime(PUtilsTimeInfo timeInfo)
 	timeInfo->second		=  currTimeInfo.tm_sec;
 	timeInfo->msecs			=  0;
 	timeInfo->isDST			=  currTimeInfo.tm_isdst;
-#ifdef HAVE_TM_GMTOFF
-	timeInfo->zone			= -currTimeInfo.tm_gmtoff / 60;
-#else /* HAVE_TM_GMTOFF */
-	timeInfo->zone			= -1 * (timezone / SECONDS_IN_MIN);
-#endif /* HAVE_TM_GMTOFF */
+	timeInfo->zone			= -shr_tm_gmtoff(&currTimeInfo) / 60;
 
 	return WDC_STATUS_SUCCESS;
 }
@@ -102,11 +98,11 @@ int wdc_UtilsCreateDir(const char *path)
 	if (!path)
 		return WDC_STATUS_INVALID_PARAMETER;
 
-	retStatus = mkdir(path, 0x999);
+	retStatus = shr_mkdir(path, 0777);
 	if (retStatus < 0) {
-		if (errno == EEXIST)
+		if (retStatus == -EEXIST)
 			status = WDC_STATUS_DIR_ALREADY_EXISTS;
-		else if (errno == ENOENT)
+		else if (retStatus == -ENOENT)
 			status = WDC_STATUS_PATH_NOT_FOUND;
 		else
 			status = WDC_STATUS_CREATE_DIRECTORY_FAILED;
@@ -173,17 +169,21 @@ bool wdc_CheckUuidListSupport(struct libnvme_transport_handle *hdl,
 			      struct nvme_id_uuid_list *uuid_list)
 {
 	struct nvme_id_ctrl ctrl;
+	struct libnvme_passthru_cmd cmd;
 	int err;
 
 	memset(&ctrl, 0, sizeof(struct nvme_id_ctrl));
-	err = nvme_identify_ctrl(hdl, &ctrl);
+	nvme_init_identify_ctrl(&cmd, &ctrl);
+	err = libnvme_exec_admin_passthru(hdl, &cmd);
 	if (err) {
-		fprintf(stderr, "ERROR: WDC: nvme_identify_ctrl() failed 0x%x\n", err);
+		nvme_show_error("ERROR: WDC: nvme_identify_ctrl() failed 0x%x", err);
 		return false;
 	}
 
 	if ((ctrl.ctratt & NVME_CTRL_CTRATT_UUID_LIST) == NVME_CTRL_CTRATT_UUID_LIST) {
-		err = nvme_identify_uuid_list(hdl, uuid_list);
+		nvme_init_identify_uuid_list(&cmd, uuid_list);
+
+		err = libnvme_exec_admin_passthru(hdl, &cmd);
 		if (!err)
 			return true;
 		else if (err > 0)

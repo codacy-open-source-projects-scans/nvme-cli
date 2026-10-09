@@ -77,17 +77,41 @@ debug:
 
 .PHONY: static
 static:
-	meson setup ${BUILD-DIR} ${MESON_ARGS}
+	meson setup ${BUILD-DIR} ${MESON_ARGS} \
 		--buildtype=release \
-		--wrap-mode=forcefallback \
 		--default-library=static \
+		--wrap-mode=forcefallback \
 		--prefix=/usr \
 		-Dc_link_args="-static" \
 		-Dkeyutils=disabled \
+		-Dlibkmod=disabled \
 		-Dliburing=disabled \
 		-Dpython=disabled \
 		-Dopenssl=disabled \
+		-Dnvme-discoverd=disabled \
+		-Dlibarchive=disabled \
 		-Dtests=false \
 		-Dexamples=false
 
 	meson compile -C ${BUILD-DIR}
+
+CHECKPATCH     := /tmp/checkpatch.pl
+CHECKPATCH_URL := https://raw.githubusercontent.com/torvalds/linux/master/scripts/checkpatch.pl
+BASE ?= master
+
+# make checkpatch              → check all commits on branch vs $(BASE)
+# make checkpatch BASE=HEAD~3  → check last 3 commits only
+.PHONY: checkpatch
+checkpatch:
+	@[ -f ${CHECKPATCH} ] || curl -sSf ${CHECKPATCH_URL} -o ${CHECKPATCH}
+	perl ${CHECKPATCH} --git ${BASE}..HEAD 2>&1 | \
+		perl scripts/checkpatch-filter.pl
+
+# make checkpatch-diff  → check staged/unstaged changes + untracked files
+.PHONY: checkpatch-diff
+checkpatch-diff:
+	@[ -f ${CHECKPATCH} ] || curl -sSf ${CHECKPATCH_URL} -o ${CHECKPATCH}
+	{ git diff HEAD | perl ${CHECKPATCH} - ; \
+	  git ls-files --others --exclude-standard | \
+		xargs -r -I{} perl ${CHECKPATCH} --file {} ; } 2>&1 | \
+		perl scripts/checkpatch-filter.pl

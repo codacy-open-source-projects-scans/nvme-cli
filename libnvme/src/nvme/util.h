@@ -38,7 +38,7 @@
  * @ENVME_CONNECT_CONNREFUSED:	connection refused
  * @ENVME_CONNECT_ADDRNOTAVAIL:	cannot assign requested address
  * @ENVME_CONNECT_IGNORED:	connect attempt is ignored due to configuration
- * @ENVME_CONNECT_NOKEY:	the TLS key is missing
+ * @ENVME_CONNECT_NOKEY:	TLS PSK or KX-HMAC-CHAP secret not available
  */
 enum libnvme_connect_err {
 	ENVME_CONNECT_RESOLVE	= 1000,
@@ -85,6 +85,21 @@ __u8 libnvme_status_to_errno(int status, bool fabrics);
 const char *libnvme_status_to_string(int status, bool fabrics);
 
 /**
+ * libnvme_mi_status_to_string() - return a string representation of the MI
+ * status.
+ * @status: MI response status
+ *
+ * Gives a string description of @status, as per section 4.1.2 of the NVMe-MI
+ * spec. The status value should be of type NVME_STATUS_MI, and extracted
+ * from the return value using nvme_status_get_value().
+ *
+ * Returned string is const, and should not be free()ed.
+ *
+ * Return: A string representing the status value
+ */
+const char *libnvme_mi_status_to_string(int status);
+
+/**
  * libnvme_sanitize_ns_status_to_string() - Returns sanitize ns status string.
  * @sc: Return status code from an sanitize ns command
  *
@@ -119,7 +134,7 @@ libnvme_set_features_status_to_string(__u16 sc)
 		break;
 	case NVME_SC_OVERLAPPING_RANGE:
 		return "Overlapping Range: LBA range type data structure";
-	case NVME_SC_FEAT_IOCS_COMBINATION_REJECTED:
+	case NVME_SC_IOCS_COMBINATION_REJECTED:
 		return "I/O Command Set Combination Rejected";
 	case NVME_SC_INVALID_CONTROLER_DATA_QUEUE:
 		break;
@@ -167,6 +182,23 @@ libnvme_opcode_status_to_string(int status, bool admin, __u8 opcode)
 		return s;
 
 	return libnvme_status_to_string(status, false);
+}
+
+/**
+ * libnvme_status_is_invalid_field() - Checks nvme status if invalid field.
+ * @status: Return status from an nvme command
+ *
+ * Return: true if it is an nvme status invalid field or false if not.
+ */
+static inline bool
+libnvme_status_is_invalid_field(int status)
+{
+	if (status < 0 ||
+	    nvme_status_get_type(status) != NVME_STATUS_TYPE_NVME)
+		return false;
+
+	return nvme_status_code_type(status) == NVME_SCT_GENERIC &&
+	       nvme_status_code(status) == NVME_SC_INVALID_FIELD;
 }
 
 /**
@@ -254,17 +286,9 @@ int libnvme_random_uuid(unsigned char uuid[NVME_UUID_LEN]);
  * @uuid_list:	UUID list returned by identify UUID
  * @uuid:	Binary encoded input UUID
  *
- * Return: The array position where given UUID is present, or -1 on failure
- *  with errno set.
+ * Return: The array position where given UUID is present, or negative
+ * error code otherwise.
  */
 int libnvme_find_uuid(struct nvme_id_uuid_list *uuid_list,
 		const unsigned char uuid[NVME_UUID_LEN]);
 
-/**
- * libnvme_basename - Return the final path component (the one
- * after the last '/')
- * @path: A string containing a filesystem path
- *
- * Return: A pointer into the original null-terminated path string.
- */
-char *libnvme_basename(const char *path);

@@ -2,12 +2,12 @@
 .\"     Title: nvme-error-log
 .\"    Author: [FIXME: author] [see http://www.docbook.org/tdg5/en/html/author]
 .\" Generator: DocBook XSL Stylesheets vsnapshot <http://docbook.sf.net/>
-.\"      Date: 04/17/2026
+.\"      Date: 09/18/2026
 .\"    Manual: NVMe Manual
 .\"    Source: NVMe
 .\"  Language: English
 .\"
-.TH "NVME\-ERROR\-LOG" "1" "04/17/2026" "NVMe" "NVMe Manual"
+.TH "NVME\-ERROR\-LOG" "1" "09/18/2026" "NVMe" "NVMe Manual"
 .\" -----------------------------------------------------------------
 .\" * Define some portability stuff
 .\" -----------------------------------------------------------------
@@ -28,32 +28,29 @@
 .\" * MAIN CONTENT STARTS HERE *
 .\" -----------------------------------------------------------------
 .SH "NAME"
-nvme-error-log \- Send NVME Error log page request, return result and log
+nvme-error-log \- Send NVME Error log page request, return result and log (deprecated)
 .SH "SYNOPSIS"
 .sp
 .nf
-\fInvme error\-log\fR <device> [\-\-log\-entries=<entries> | \-e <entries>]
+\fInvme\fR [<global\-options>] \fIerror\-log\fR <device>
+                        [\-\-log\-entries=<entries> | \-e <entries>]
                         [\-\-raw\-binary | \-b]
-                        [<global\-options>]
+                        [\-\-valid\-entry | \-V]
+                        [\-\-sqid=<sqid> | \-S <sqid>]
+                        [\-\-status=<status> | \-s <status>]
+                        [\-\-lba=<lba> | \-l <lba>]
+                        [\-\-namespace\-id=<nsid> | \-n <nsid>]
+                        [\-\-trtype=<trtype> | \-t <trtype>]
+                        [\-\-csi=<csi> | \-c <csi>]
+                        [\-\-opcode=<opcode> | \-O <opcode>]
 .fi
 .SH "DESCRIPTION"
 .sp
-Retrieves NVMe Error log page from an NVMe device and provides the returned structure\&.
+Deprecated alias for \fBnvme-log-error\fR(1), kept for scripts written against nvme\-cli versions older than 3\&.0\&. Options and behavior are identical; only the top\-level command name is retained\&.
 .sp
-The <device> parameter is mandatory and may be either the NVMe character device (ex: /dev/nvme0), or a namespace block device (ex: /dev/nvme0n1)\&.
+New scripts should use \fInvme log error\fR instead\&. This alias prints a deprecation warning on stderr and may be removed in a future release\&.
 .sp
-On success, the returned error log structure may be returned in one of several ways depending on the option flags; the structure may parsed by the program and printed in a readable format or the raw buffer may be printed to stdout for another program to parse\&.
-.SH "OPTIONS"
-.PP
-\-e <entries>, \-\-log\-entries=<entries>
-.RS 4
-Specifies how many log entries the program should request from the device\&. This must be at least one, and shouldn\(cqt exceed the device\(cqs capabilities\&. Defaults to 64 log entries\&.
-.RE
-.PP
-\-b, \-\-raw\-binary
-.RS 4
-Print the raw error log buffer to stdout\&.
-.RE
+See \fBnvme-log-error\fR(1) for the full option reference\&.
 .SH "GLOBAL OPTIONS"
 .sp
 The following options are defined at the top\-level nvme command and are available to this subcommand:
@@ -99,51 +96,14 @@ Set the timeout for the command in milliseconds\&.
 .RS 4
 Increase the level of detail in the output\&. May be specified multiple times to further increase verbosity\&.
 .RE
+.sp
+These options can also be set as machine\-wide defaults in nvme\-cli\&.conf(5)\&. A command\-line flag always overrides the file\&.
 .SH "EXAMPLES"
 .sp
-.RS 4
-.ie n \{\
-\h'-04'\(bu\h'+03'\c
-.\}
-.el \{\
-.sp -1
-.IP \(bu 2.3
-.\}
-Get the error log and print it in a human readable format:
-.sp
-.if n \{\
-.RS 4
-.\}
-.nf
-# nvme error\-log /dev/nvme0
-.fi
-.if n \{\
-.RE
-.\}
-.RE
-.sp
-.RS 4
-.ie n \{\
-\h'-04'\(bu\h'+03'\c
-.\}
-.el \{\
-.sp -1
-.IP \(bu 2.3
-.\}
-Print the raw output to a file:
-.sp
-.if n \{\
-.RS 4
-.\}
-.nf
-# nvme error\-log /dev/nvme0 \-\-raw\-binary > error_log\&.raw
-.fi
-.if n \{\
-.RE
-.\}
-.sp
-It is probably a bad idea to not redirect stdout when using this mode\&.
-.RE
+No Examples
 .SH "NVME"
 .sp
 Part of the nvme\-user suite
+.SH "SEE ALSO"
+.sp
+\fBnvme-log-error\fR(1)

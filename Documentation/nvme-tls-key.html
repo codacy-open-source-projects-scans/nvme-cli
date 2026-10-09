@@ -740,7 +740,7 @@ nvme-tls-key(1) Manual Page
 <h2>NAME</h2>
 <div class="sectionbody">
 <p>nvme-tls-key -
-   Manage NVMe TLS PSKs
+   Manage NVMe TLS PSKs (deprecated)
 </p>
 </div>
 </div>
@@ -749,12 +749,11 @@ nvme-tls-key(1) Manual Page
 <h2 id="_synopsis">SYNOPSIS</h2>
 <div class="sectionbody">
 <div class="verseblock">
-<pre class="content"><em>nvme tls-key</em> [--keyring=&lt;name&gt; | -k &lt;name&gt;]
+<pre class="content"><em>nvme</em> [&lt;global-options&gt;] <em>tls-key</em> [--keyring=&lt;name&gt; | -k &lt;name&gt;]
                         [--keytype=&lt;type&gt; | -t &lt;type&gt;]
                         [--keyfile=&lt;file&gt; | -f &lt;file&gt;]
                         [--import | -i] [--export | -e]
-                        [--revoke=&lt;description&gt;| -r &lt;description&gt;]
-                        [&lt;global-options&gt;]</pre>
+                        [--revoke=&lt;description&gt; | -r &lt;description&gt;]</pre>
 <div class="attribution">
 </div></div>
 </div>
@@ -762,16 +761,39 @@ nvme-tls-key(1) Manual Page
 <div class="sect1">
 <h2 id="_description">DESCRIPTION</h2>
 <div class="sectionbody">
-<div class="paragraph"><p>Import, export or remove NVMe TLS pre-shared keys (PSKs) from the system
-keystore. When the <em>--export</em> option is given, all NVMe TLS PSKs are
-exported in the form</p></div>
-<div class="paragraph"><p>&lt;descriptions&gt; &lt;psk&gt;</p></div>
-<div class="paragraph"><p>where <em>&lt;description&gt;</em> is the key description from the
-exported key and <em>&lt;psk&gt;</em> is the key data in PSK interchange
-format <em>NVMeTLSkey-1:01:&lt;base64 encoded data&gt;:</em>.
-Each key is exported in a single line.
-When the <em>--import</em> option is given key data is read in the
-same format and imported into the kernel keystore.</p></div>
+<div class="paragraph"><p>Deprecated command kept for scripts written against nvme-cli versions older
+than 3.0. Exactly one of <em>--import</em>, <em>--export</em>, or <em>--revoke</em> must be
+given; based on which mode is selected, this alias translates the command
+into the equivalent new <em>keys</em> plugin subcommand and forwards to it:</p></div>
+<div class="ulist"><ul>
+<li>
+<p>
+<em>--import</em> translates to <a href="nvme-keys-import.html">nvme-keys-import(1)</a>, forwarding
+  <em>--keyring</em> and <em>--keyfile</em>.
+</p>
+</li>
+<li>
+<p>
+<em>--export</em> translates to <a href="nvme-keys-export.html">nvme-keys-export(1)</a>, forwarding
+  <em>--keyring</em> and <em>--keyfile</em>.
+</p>
+</li>
+<li>
+<p>
+<em>--revoke=&lt;description&gt;</em> translates to <a href="nvme-keys-revoke.html">nvme-keys-revoke(1)</a>,
+  forwarding <em>--keyring</em> and <em>--keytype</em>, with <em>&lt;description&gt;</em> passed as
+  <em>--identity</em>.
+</p>
+</li>
+</ul></div>
+<div class="paragraph"><p>Only the options relevant to the selected mode are meaningful; e.g.
+<em>--keytype</em> has no effect with <em>--import</em> or <em>--export</em> since the new
+<em>import</em>/<em>export</em> subcommands no longer take a key type. This command does
+not derive or insert a TLS PSK from a configured PSK&#8201;&#8212;&#8201;use
+<a href="nvme-keys-gen-tls-psk.html">nvme-keys-gen-tls-psk(1)</a> or <a href="nvme-keys-insert-tls-psk.html">nvme-keys-insert-tls-psk(1)</a> for that.</p></div>
+<div class="paragraph"><p>New scripts should call <em>nvme keys import</em>, <em>nvme keys export</em>, or
+<em>nvme keys revoke</em> directly instead. This alias prints a deprecation
+warning on stderr and may be removed in a future release.</p></div>
 </div>
 </div>
 <div class="sect1">
@@ -786,8 +808,8 @@ same format and imported into the kernel keystore.</p></div>
 </dt>
 <dd>
 <p>
-        Name of the keyring into which the <em>retained</em> TLS key should be
-        stored. Default is <em>.nvme</em>.
+        Name of the keyring to import into, export from, or revoke from.
+        Default is <em>.nvme</em>.
 </p>
 </dd>
 <dt class="hdlist1">
@@ -798,7 +820,7 @@ same format and imported into the kernel keystore.</p></div>
 </dt>
 <dd>
 <p>
-        Type of the key for resulting TLS key.
+        Type of the key to revoke. Only used with <em>--revoke</em>.
         Default is <em>psk</em>.
 </p>
 </dd>
@@ -810,8 +832,8 @@ same format and imported into the kernel keystore.</p></div>
 </dt>
 <dd>
 <p>
-        File to read the keys from or write the keys to instead of
-        stdin / stdout.
+        File to read the keys from (<em>--import</em>) or write the keys to
+        (<em>--export</em>) instead of stdin/stdout.
 </p>
 </dd>
 <dt class="hdlist1">
@@ -822,8 +844,7 @@ same format and imported into the kernel keystore.</p></div>
 </dt>
 <dd>
 <p>
-        Read the key data from the file specified by <em>--keyfile</em>
-        or stdin if not present.
+        Import keys in bulk; see <a href="nvme-keys-import.html">nvme-keys-import(1)</a>.
 </p>
 </dd>
 <dt class="hdlist1">
@@ -834,8 +855,7 @@ same format and imported into the kernel keystore.</p></div>
 </dt>
 <dd>
 <p>
-        Write the key data to the file specified by <em>--keyfile</em>
-        or stdout if not present.
+        Export all keys from the keyring; see <a href="nvme-keys-export.html">nvme-keys-export(1)</a>.
 </p>
 </dd>
 <dt class="hdlist1">
@@ -846,7 +866,8 @@ same format and imported into the kernel keystore.</p></div>
 </dt>
 <dd>
 <p>
-        Revoke a key from a keyring.
+        Revoke the key stored under <em>&lt;description&gt;</em> from the keyring; see
+        <a href="nvme-keys-revoke.html">nvme-keys-revoke(1)</a>.
 </p>
 </dd>
 </dl></div>
@@ -926,83 +947,14 @@ and are available to this subcommand:</p></div>
 </p>
 </dd>
 </dl></div>
+<div class="paragraph"><p>These options can also be set as machine-wide defaults in
+nvme-cli.conf(5). A command-line flag always overrides the file.</p></div>
 </div>
 </div>
 <div class="sect1">
 <h2 id="_examples">EXAMPLES</h2>
 <div class="sectionbody">
-<div class="ulist"><ul>
-<li>
-<p>
-Create a new TLS key and insert it directly into the .nvme keyring:
-</p>
-<div class="listingblock">
-<div class="content">
-<pre><code># nvme gen-tls-key -i -n hostnqn0 -c subsys0
-NVMeTLSkey-1:01:/b9tVz2OXJVISnoFgrPAygyS86XYJWkAapQeULns6PMpM8wv:
-Inserted TLS key 26b3260e</code></pre>
-</div></div>
-</li>
-<li>
-<p>
-Export previously created key from the kernel keyring and store it into a file
-</p>
-<div class="listingblock">
-<div class="content">
-<pre><code># nvme tls-key -e -f nvme-tls-keys.txt</code></pre>
-</div></div>
-</li>
-<li>
-<p>
-Export/list all keys from the .nvme keyring using nvme and keyctl
-</p>
-<div class="listingblock">
-<div class="content">
-<pre><code># nvme tls-key --export
-NVMe0R01 hostnqn0 subsys0 NVMeTLSkey-1:01:/b9tVz2OXJVISnoFgrPAygyS86XYJWkAapQeULns6PMpM8wv:
-
-# keyctl show
-Session Keyring
- 573249525 --alswrv      0     0  keyring: _ses
- 353599402 --alswrv      0 65534   \_ keyring: _uid.0
- 475911922 ---lswrv      0     0   \_ keyring: .nvme
- 649274894 --als-rv      0     0       \_ psk: NVMe0R01 hostnqn0 subsys0</code></pre>
-</div></div>
-</li>
-<li>
-<p>
-Revoke a key using the description and verifying with
-keyctl the operation
-</p>
-<div class="listingblock">
-<div class="content">
-<pre><code># nvme tls-key --revoke="NVMe0R01 hostnqn0 subsys0"
-
-# keyctl show
-Session Keyring
- 573249525 --alswrv      0     0  keyring: _ses
- 353599402 --alswrv      0 65534   \_ keyring: _uid.0
- 475911922 ---lswrv      0     0   \_ keyring: .nvme
-649274894: key inaccessible (Key has been revoked)</code></pre>
-</div></div>
-</li>
-<li>
-<p>
-Import back previously generated key from file and verify with keyctl
-</p>
-<div class="listingblock">
-<div class="content">
-<pre><code># nvme tls-key --import -f nvme-tls-keys.txt
-
-# keyctl show
-Session Keyring
- 573249525 --alswrv      0     0  keyring: _ses
- 353599402 --alswrv      0 65534   \_ keyring: _uid.0
- 475911922 ---lswrv      0     0   \_ keyring: .nvme
- 734343968 --als-rv      0     0       \_ psk: NVMe0R01 hostnqn0 subsys0</code></pre>
-</div></div>
-</li>
-</ul></div>
+<div class="paragraph"><p>No Examples</p></div>
 </div>
 </div>
 <div class="sect1">
@@ -1011,12 +963,18 @@ Session Keyring
 <div class="paragraph"><p>Part of the nvme-user suite</p></div>
 </div>
 </div>
+<div class="sect1">
+<h2 id="_see_also">SEE ALSO</h2>
+<div class="sectionbody">
+<div class="paragraph"><p><a href="nvme-keys-import.html">nvme-keys-import(1)</a>, <a href="nvme-keys-export.html">nvme-keys-export(1)</a>, <a href="nvme-keys-revoke.html">nvme-keys-revoke(1)</a></p></div>
+</div>
+</div>
 </div>
 <div id="footnotes"><hr /></div>
 <div id="footer">
 <div id="footer-text">
 Last updated
- 2026-04-17 09:46:00 CEST
+ 2026-09-18 12:15:54 CEST
 </div>
 </div>
 </body>

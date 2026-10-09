@@ -5,6 +5,157 @@
 
 Fabrics-specific definitions.
 
+.. c:function:: char * libnvmf_generate_hostnqn (struct libnvme_global_ctx *ctx)
+
+   Generate a machine specific host nqn
+
+**Parameters**
+
+``struct libnvme_global_ctx *ctx``
+  struct libnvme_global_ctx object
+
+**Return**
+
+An nvm namespace qualified name string based on the machine
+identifier, or NULL if not successful.
+
+
+.. c:function:: char * libnvmf_generate_hostnqn_from_hostid (struct libnvme_global_ctx *ctx, char *hostid)
+
+   Generate a host nqn from host identifier
+
+**Parameters**
+
+``struct libnvme_global_ctx *ctx``
+  struct libnvme_global_ctx object
+
+``char *hostid``
+  Host identifier
+
+**Description**
+
+If **hostid** is NULL, the function generates it based on the machine
+identifier.
+
+**Return**
+
+On success, an NVMe Qualified Name for host identification. This
+name is based on the given host identifier. On failure, NULL.
+
+
+.. c:function:: char * libnvmf_generate_hostid (struct libnvme_global_ctx *ctx)
+
+   Generate a machine specific host identifier
+
+**Parameters**
+
+``struct libnvme_global_ctx *ctx``
+  struct libnvme_global_ctx object
+
+**Return**
+
+On success, an identifier string based on the machine identifier to
+be used as NVMe Host Identifier, or NULL on failure.
+
+
+.. c:function:: char * libnvmf_read_hostnqn (struct libnvme_global_ctx *ctx)
+
+   Get the configured host nvm qualified name
+
+**Parameters**
+
+``struct libnvme_global_ctx *ctx``
+  struct libnvme_global_ctx object
+
+**Description**
+
+Return **ctx**'s hostnqn default if one is set, otherwise read the name
+from $SYSCONFDIR/nvme/hostnqn. $SYSCONFDIR is usually /etc. An empty
+**ctx** default suppresses the file lookup.
+
+This is not the identity a connect uses. See libnvmf_host_get_ids()
+for the full resolution order.
+
+**Return**
+
+The host nqn, or NULL if unsuccessful. If found, the caller
+is responsible to free the string.
+
+
+.. c:function:: char * libnvmf_read_hostid (struct libnvme_global_ctx *ctx)
+
+   Get the configured host identifier
+
+**Parameters**
+
+``struct libnvme_global_ctx *ctx``
+  struct libnvme_global_ctx object
+
+**Description**
+
+Return **ctx**'s hostid default if one is set, otherwise read the
+identifier from $SYSCONFDIR/nvme/hostid. $SYSCONFDIR is usually /etc.
+An empty **ctx** default suppresses the file lookup.
+
+This is not the identity a connect uses. See libnvmf_host_get_ids()
+for the full resolution order.
+
+**Return**
+
+The host identifier, or NULL if unsuccessful. If found, the caller
+        is responsible to free the string.
+
+
+.. c:function:: int libnvmf_host_get_ids (struct libnvme_global_ctx *ctx, const char *hostnqn_arg, const char *hostid_arg, char **hostnqn, char **hostid)
+
+   Retrieve host ids from various sources
+
+**Parameters**
+
+``struct libnvme_global_ctx *ctx``
+  struct libnvme_global_ctx object
+
+``const char *hostnqn_arg``
+  Input hostnqn (command line) argument
+
+``const char *hostid_arg``
+  Input hostid (command line) argument
+
+``char **hostnqn``
+  Output hostnqn; may be NULL if the caller does not need it
+
+``char **hostid``
+  Output hostid; may be NULL if the caller does not need it
+
+**Description**
+
+libnvmf_host_get_ids figures out which hostnqn/hostid is to be used.
+There are several sources where this information can be retrieved.
+
+The order is:
+
+ - Start with hostnqn/hostid given on the command line
+   (**hostnqn_arg**, **hostid_arg**), if any
+ - Otherwise, use the first host already resolved in **ctx**'s host
+   list, if any
+ - Otherwise, use **ctx**'s own hostnqn/hostid default, or
+   /etc/nvme/hostnqn and /etc/nvme/hostid if **ctx** has none
+ - Otherwise, if hostnqn is known but hostid is not, and hostnqn
+   has a "uuid:" component, derive hostid from it
+ - As a last resort, derive a still-missing hostid from DMI or
+   device-tree information (or generate a random one), then build
+   a hostnqn from that hostid if one is still missing
+
+ The function also checks that hostnqn and hostid match, logging a
+ debug warning if not. The Linux NVMe implementation expects a 1:1
+ matching between the IDs.
+
+**Return**
+
+0 on success (**hostnqn** and **hostid** contain valid strings
+ which the caller needs to free), or negative error code otherwise.
+
+
 .. c:function:: const char * libnvmf_trtype_str (__u8 trtype)
 
    Decode TRTYPE field
@@ -176,16 +327,16 @@ log page entry.
 decoded string
 
 
-.. c:function:: int libnvmf_add_ctrl (libnvme_host_t h, libnvme_ctrl_t c)
+.. c:function:: int libnvmf_add_ctrl (struct libnvme_host *h, struct libnvme_ctrl *c)
 
    Connect a controller and update topology
 
 **Parameters**
 
-``libnvme_host_t h``
+``struct libnvme_host *h``
   Host to which the controller should be attached
 
-``libnvme_ctrl_t c``
+``struct libnvme_ctrl *c``
   Controller to be connected
 
 **Description**
@@ -196,16 +347,16 @@ into the topology using **h** as parent.
 
 **Return**
 
-0 on success, or an error code on failure.
+0 on success, negative error code otherwise.
 
 
-.. c:function:: int libnvmf_connect_ctrl (libnvme_ctrl_t c)
+.. c:function:: int libnvmf_connect_ctrl (struct libnvme_ctrl *c)
 
    Connect a controller
 
 **Parameters**
 
-``libnvme_ctrl_t c``
+``struct libnvme_ctrl *c``
   Controller to be connected
 
 **Description**
@@ -215,45 +366,16 @@ Issues a 'connect' command to the NVMe-oF controller.
 
 **Return**
 
-0 on success, or an error code on failure.
+0 on success, negative error code otherwise.
 
 
-.. c:function:: int libnvmf_discovery_args_create (struct libnvmf_discovery_args **argsp)
-
-   Allocate a discovery args object
-
-**Parameters**
-
-``struct libnvmf_discovery_args **argsp``
-  On success, set to the newly allocated object
-
-**Description**
-
-Allocates and initialises a :c:type:`struct libnvmf_discovery_args <libnvmf_discovery_args>` with sensible
-defaults. The caller must release it with libnvmf_discovery_args_free().
-
-**Return**
-
-0 on success, or a negative error code on failure.
-
-
-.. c:function:: void libnvmf_discovery_args_free (struct libnvmf_discovery_args *args)
-
-   Release a discovery args object
-
-**Parameters**
-
-``struct libnvmf_discovery_args *args``
-  Object previously returned by libnvmf_discovery_args_create()
-
-
-.. c:function:: int libnvmf_get_discovery_log (libnvme_ctrl_t ctrl, const struct libnvmf_discovery_args *args, struct nvmf_discovery_log **logp)
+.. c:function:: int libnvmf_get_discovery_log (struct libnvme_ctrl *ctrl, const struct libnvmf_discovery_args *args, struct nvmf_discovery_log **logp)
 
    Fetch the NVMe-oF discovery log page
 
 **Parameters**
 
-``libnvme_ctrl_t ctrl``
+``struct libnvme_ctrl *ctrl``
   Discovery controller
 
 ``const struct libnvmf_discovery_args *args``
@@ -269,16 +391,16 @@ generation-counter atomicity, and normalises each log entry.
 
 **Return**
 
-0 on success, or a negative error code on failure.
+0 on success, negative error code otherwise.
 
 
-.. c:function:: bool libnvmf_is_registration_supported (libnvme_ctrl_t c)
+.. c:function:: bool libnvmf_is_registration_supported (struct libnvme_ctrl *c)
 
    check whether registration can be performed.
 
 **Parameters**
 
-``libnvme_ctrl_t c``
+``struct libnvme_ctrl *c``
   Controller instance
 
 **Description**
@@ -295,13 +417,13 @@ true if controller supports explicit registration. false
 otherwise.
 
 
-.. c:function:: int libnvmf_register_ctrl (libnvme_ctrl_t c, enum nvmf_dim_tas tas, __u32 *result)
+.. c:function:: int libnvmf_register_ctrl (struct libnvme_ctrl *c, enum nvmf_dim_tas tas, __u32 *result)
 
    Perform registration task with a DC
 
 **Parameters**
 
-``libnvme_ctrl_t c``
+``struct libnvme_ctrl *c``
   Controller instance
 
 ``enum nvmf_dim_tas tas``
@@ -319,7 +441,7 @@ tasks are supported: register, deregister, and registration update.
 
 **Return**
 
-0 on success, or an error code on failure.
+0 on success, negative error code otherwise.
 
 
 .. c:function:: int libnvmf_uri_parse (const char *str, struct libnvmf_uri **uri)
@@ -343,7 +465,7 @@ Supported URI elements looks as follows:
 
 **Return**
 
-0 on success, or a negative error code on failure.
+0 on success, negative error code otherwise.
 
 
 .. c:function:: void libnvmf_uri_free (struct libnvmf_uri *uri)
@@ -392,16 +514,16 @@ Allocated string with default trsvcid, or NULL on failure.
   Global context
 
 ``bool (*decide_retry)(struct libnvmf_context *fctx, int err, void *user_data)``
-  Callback to decide if a retry should be attempted
+  Hook to decide if a retry should be attempted
 
 ``void (*connected)(struct libnvmf_context *fctx, struct libnvme_ctrl *c, void *user_data)``
-  Callback invoked when a connection is established
+  Hook invoked when a connection is established
 
 ``void (*already_connected)(struct libnvmf_context *fctx, struct libnvme_host *host, const char *subsysnqn, const char *transport, const char *traddr, const char *trsvcid, void *user_data)``
-  Callback invoked if already connected
+  Hook invoked if already connected
 
 ``void *user_data``
-  User data passed to callbacks
+  User data passed to hooks
 
 ``struct libnvmf_context **fctxp``
   Pointer to store the created context
@@ -413,7 +535,7 @@ operations.
 
 **Return**
 
-0 on success, or a negative error code on failure.
+0 on success, negative error code otherwise.
 
 
 .. c:function:: void libnvmf_context_free (struct libnvmf_context *fctx)
@@ -433,58 +555,25 @@ been previously created with libnvmf_context_create().
 After this call, **fctx** must not be used.
 
 
-.. c:function:: int libnvmf_context_set_discovery_cbs (struct libnvmf_context *fctx, void (*discovery_log)(struct libnvmf_context *fctx, bool connect, struct nvmf_discovery_log *log, uint64_t numrec, void *user_data), int (*parser_init)(struct libnvmf_context *fctx, void *user_data), void (*parser_cleanup)(struct libnvmf_context *fctx, void *user_data), int (*parser_next_line)(struct libnvmf_context *fctx, void *user_data))
+.. c:function:: int libnvmf_context_set_discovery_hooks (struct libnvmf_context *fctx, void (*discovery_log)(struct libnvmf_context *fctx, const struct nvmf_discovery_log *log, uint64_t numrec, void *user_data))
 
-   Set discovery callbacks for context
-
-**Parameters**
-
-``struct libnvmf_context *fctx``
-  Fabrics context
-
-``void (*discovery_log)(struct libnvmf_context *fctx, bool connect, struct nvmf_discovery_log *log, uint64_t numrec, void *user_data)``
-  Callback for discovery log events
-
-``int (*parser_init)(struct libnvmf_context *fctx, void *user_data)``
-  Callback to initialize parser
-
-``void (*parser_cleanup)(struct libnvmf_context *fctx, void *user_data)``
-  Callback to cleanup parser
-
-``int (*parser_next_line)(struct libnvmf_context *fctx, void *user_data)``
-  Callback to parse next line
-
-**Description**
-
-Sets the callbacks used during discovery operations for the given context.
-
-**Return**
-
-0 on success, or a negative error code on failure.
-
-
-.. c:function:: int libnvmf_context_set_discovery_defaults (struct libnvmf_context *fctx, int max_discovery_retries, int keep_alive_timeout)
-
-   Set default discovery parameters
+   Set discovery hooks for context
 
 **Parameters**
 
 ``struct libnvmf_context *fctx``
   Fabrics context
 
-``int max_discovery_retries``
-  Maximum number of discovery retries
-
-``int keep_alive_timeout``
-  Keep-alive timeout in seconds
+``void (*discovery_log)(struct libnvmf_context *fctx, const struct nvmf_discovery_log *log, uint64_t numrec, void *user_data)``
+  Hook for discovery log events
 
 **Description**
 
-Sets default values for discovery retries and keep-alive timeout.
+Sets the hooks used during discovery operations for the given context.
 
 **Return**
 
-0 on success, or a negative error code on failure.
+0 on success, negative error code otherwise.
 
 
 .. c:function:: int libnvmf_context_set_connection (struct libnvmf_context *fctx, const char *subsysnqn, const char *transport, const char *traddr, const char *trsvcid, const char *host_traddr, const char *host_iface)
@@ -520,7 +609,7 @@ Sets the connection parameters for the context.
 
 **Return**
 
-0 on success, or a negative error code on failure.
+0 on success, negative error code otherwise.
 
 
 .. c:function:: int libnvmf_context_set_hostnqn (struct libnvmf_context *fctx, const char *hostnqn, const char *hostid)
@@ -544,7 +633,70 @@ Sets the host NQN and host ID for the context.
 
 **Return**
 
-0 on success, or a negative error code on failure.
+0 on success, negative error code otherwise.
+
+
+.. c:function:: int libnvmf_context_set_persistent (struct libnvmf_context *fctx, const char *persistent)
+
+   Set the discovery controller persistence mode
+
+**Parameters**
+
+``struct libnvmf_context *fctx``
+  Fabrics context
+
+``const char *persistent``
+  One of "no", "auto", "force" (case-insensitive)
+
+**Description**
+
+"auto" persists a Discovery Log Page entry's connection only where that
+entry's own EPCSD flag (see :c:type:`enum nvmf_disc_eflags <nvmf_disc_eflags>`) reports support for
+it; "force" persists regardless of what EPCSD reports; "no" never
+persists.
+
+**Return**
+
+0 on success, -EINVAL if **fctx** is NULL or **persistent** matches
+none of the accepted values.
+
+
+.. c:function:: const char * libnvmf_context_get_persistent (const struct libnvmf_context *fctx)
+
+   Get the discovery controller persistence mode
+
+**Parameters**
+
+``const struct libnvmf_context *fctx``
+  Fabrics context
+
+**Return**
+
+"no", "auto", or "force" if explicitly configured; NULL if not
+(behaves the same as "no" when applied to a live connection, or if
+**fctx** is NULL).
+
+
+.. c:function:: int libnvmf_context_set_connection_from_tid (struct libnvmf_context *fctx, const struct libnvmf_tid *tid)
+
+   Set connection and identity from a TID
+
+**Parameters**
+
+``struct libnvmf_context *fctx``
+  Fabrics context
+
+``const struct libnvmf_tid *tid``
+  Transport ID to copy from
+
+**Description**
+
+Equivalent to libnvmf_context_set_connection() followed by
+libnvmf_context_set_hostnqn(), reading every field from **tid**.
+
+**Return**
+
+0 on success, -EINVAL if **fctx** or **tid** is NULL.
 
 
 .. c:function:: int libnvmf_context_set_crypto (struct libnvmf_context *fctx, const char *hostkey, const char *ctrlkey, const char *keyring, const char *tls_key, const char *tls_key_identity)
@@ -577,28 +729,7 @@ Sets cryptographic and TLS parameters for the context.
 
 **Return**
 
-0 on success, or a negative error code on failure.
-
-
-.. c:function:: int libnvmf_context_set_persistent (struct libnvmf_context *fctx, bool persistent)
-
-   Set persistence for context
-
-**Parameters**
-
-``struct libnvmf_context *fctx``
-  Fabrics context
-
-``bool persistent``
-  Whether to enable persistent connections
-
-**Description**
-
-Sets whether the context should use persistent connections.
-
-**Return**
-
-0 on success, or a negative error code on failure.
+0 on success, negative error code otherwise.
 
 
 .. c:function:: int libnvmf_context_set_device (struct libnvmf_context *fctx, const char *device)
@@ -619,40 +750,188 @@ Sets the device to be used by the context.
 
 **Return**
 
-0 on success, or a negative error code on failure.
+0 on success, negative error code otherwise.
 
 
-.. c:function:: struct libnvme_fabrics_config * libnvmf_context_get_fabrics_config (struct libnvmf_context *fctx)
+.. c:function:: int libnvmf_context_set_devid_file (struct libnvmf_context *fctx, const char *devid_file)
 
-   Fabrics configuration of a fabrics context
+   Set devid file for context
 
 **Parameters**
 
 ``struct libnvmf_context *fctx``
   Fabrics context
 
+``const char *devid_file``
+  Path to the output file
+
+**Description**
+
+Configure a file that libnvmf_connect() uses to record the
+kernel-assigned device name (for example, "nvme0").
+
+If the controller is already connected, the existing device name is
+written. Otherwise, the device name is written after the controller is
+connected.
+
+The output file is created before attempting the connection. If the
+file cannot be created, for example because the parent directory does
+not exist, libnvmf_connect() fails without attempting the connection.
+
+This is intended for applications that need to identify the device
+associated with a connection, for example to disconnect it later.
+
 **Return**
 
-Fabrics configuration of **fctx**
+0 on success, negative error code otherwise.
 
 
-.. c:function:: struct libnvme_fabrics_config * libnvmf_ctrl_get_fabrics_config (libnvme_ctrl_t c)
+.. c:function:: int libnvmf_context_set_io_queues (struct libnvmf_context *fctx, int nr_io_queues, int nr_write_queues, int nr_poll_queues, int queue_size, bool disable_sqflow)
 
-   Fabrics configuration of a controller
+   Set I/O queue topology for context
 
 **Parameters**
 
-``libnvme_ctrl_t c``
-  Controller instance
+``struct libnvmf_context *fctx``
+  Fabrics context
+
+``int nr_io_queues``
+  Number of I/O queues
+
+``int nr_write_queues``
+  Number of write-only queues
+
+``int nr_poll_queues``
+  Number of polling queues
+
+``int queue_size``
+  Number of entries per I/O queue (SQSIZE in Connect command)
+
+``bool disable_sqflow``
+  Disable SQ flow control negotiation
+
+**Description**
+
+Convenience setter for the five parameters that together define the I/O
+queue structure used when establishing a controller connection. All five
+feed directly into the Connect command at queue creation time.
+**nr_write_queues** and **nr_poll_queues** are additive: total I/O queues is
+**nr_io_queues** + **nr_write_queues** + **nr_poll_queues**.
+
+Individual libnvmf_context_set_nr_io_queues(), _set_nr_write_queues(),
+_set_nr_poll_queues(), _set_queue_size(), and _set_disable_sqflow()
+accessors are also available when only a subset needs to change.
 
 **Return**
 
-Fabrics configuration of **c**
+0 on success, negative error code otherwise.
 
 
-.. c:function:: int libnvmf_discovery (struct libnvme_global_ctx *ctx, struct libnvmf_context *fctx, bool connect, bool force)
+.. c:function:: int libnvmf_context_set_reconnect_policy (struct libnvmf_context *fctx, int ctrl_loss_tmo, int reconnect_delay, int fast_io_fail_tmo)
 
-   Perform fabrics discovery
+   Set reconnect policy for context
+
+**Parameters**
+
+``struct libnvmf_context *fctx``
+  Fabrics context
+
+``int ctrl_loss_tmo``
+  Controller loss timeout in seconds; negative means retry
+  indefinitely
+
+``int reconnect_delay``
+  Delay between reconnect attempts in seconds
+
+``int fast_io_fail_tmo``
+  Fast I/O fail timeout in seconds; negative disables it;
+  must not exceed **ctrl_loss_tmo**
+
+**Description**
+
+Convenience setter for the three coupled reconnect policy parameters.
+**ctrl_loss_tmo** and **reconnect_delay** are coupled: the kernel derives the
+maximum reconnect attempt count from their ratio. **fast_io_fail_tmo**
+controls how quickly outstanding I/O is failed while reconnection is in
+progress.
+
+Individual libnvmf_context_set_ctrl_loss_tmo(), _set_reconnect_delay(),
+and _set_fast_io_fail_tmo() accessors are also available when only a
+subset needs to change.
+
+**Return**
+
+0 on success, negative error code otherwise.
+
+
+.. c:function:: int libnvmf_get_owner_from_tid (struct libnvme_global_ctx *ctx, const struct libnvmf_tid *tid, char **owner)
+
+   Get the registry owner of a transport ID
+
+**Parameters**
+
+``struct libnvme_global_ctx *ctx``
+  Global context
+
+``const struct libnvmf_tid *tid``
+  Transport ID identifying the connection to check
+
+``char **owner``
+  Returned owner, NULL if no matching controller exists or it is
+  unowned
+
+**Description**
+
+Resolves the controller, if any, matching **tid** and reports its registry
+owner. Does not connect, disconnect, or otherwise modify controller
+state.
+
+When a matching owned controller exists, **owner** is set to a newly
+allocated string that the caller must free(). Otherwise, **owner** is set
+to NULL. A negative errno return indicates the lookup failed; it is
+never used to report that no owner exists.
+
+See also: libnvme_set_owner() (lib.h) to declare an orchestrator's own
+identity, and libnvmf_registry_retrieve() (registry.h) to read a live
+controller's registry entry by device name rather than by TID.
+
+**Return**
+
+0 on success (check **owner**), negative errno on failure.
+
+
+.. c:function:: int libnvmf_get_owner_from_fctx (struct libnvme_global_ctx *ctx, struct libnvmf_context *fctx, char **owner)
+
+   Get the registry owner of a fabrics context
+
+**Parameters**
+
+``struct libnvme_global_ctx *ctx``
+  Global context
+
+``struct libnvmf_context *fctx``
+  Fabrics context describing the connection to check
+
+``char **owner``
+  Returned owner, NULL if no matching controller exists or it is
+  unowned
+
+**Description**
+
+Convenience wrapper around libnvmf_get_owner_from_tid() for callers that
+already have a libnvmf_context rather than a bare TID. If **fctx** names an
+explicit device, its registry entry is checked directly. Otherwise, a
+controller is resolved from **fctx**'s connection parameters. The **owner**
+contract is identical to libnvmf_get_owner_from_tid().
+
+**Return**
+
+0 on success (check **owner**), negative errno on failure.
+
+
+.. c:function:: int libnvmf_discover (struct libnvme_global_ctx *ctx, struct libnvmf_context *fctx)
+
+   Discover fabrics subsystems
 
 **Parameters**
 
@@ -661,12 +940,6 @@ Fabrics configuration of **c**
 
 ``struct libnvmf_context *fctx``
   Fabrics context
-
-``bool connect``
-  Whether to connect discovered subsystems
-
-``bool force``
-  Force discovery even if already connected
 
 **Description**
 
@@ -674,39 +947,12 @@ Performs discovery for fabrics subsystems and optionally connects.
 
 **Return**
 
-0 on success, or a negative error code on failure.
+0 on success, negative error code otherwise.
 
 
-.. c:function:: int libnvmf_discovery_config_json (struct libnvme_global_ctx *ctx, struct libnvmf_context *fctx, bool connect, bool force)
+.. c:function:: int libnvmf_discover_nbft (struct libnvme_global_ctx *ctx, struct libnvmf_context *fctx)
 
-   Perform discovery using JSON config
-
-**Parameters**
-
-``struct libnvme_global_ctx *ctx``
-  Global context
-
-``struct libnvmf_context *fctx``
-  Fabrics context
-
-``bool connect``
-  Whether to connect discovered subsystems
-
-``bool force``
-  Force discovery even if already connected
-
-**Description**
-
-Performs discovery using a JSON configuration.
-
-**Return**
-
-0 on success, or a negative error code on failure.
-
-
-.. c:function:: int libnvmf_discovery_config_file (struct libnvme_global_ctx *ctx, struct libnvmf_context *fctx, bool connect, bool force)
-
-   Perform discovery using config file
+   Discover fabrics subsystems using NBFT
 
 **Parameters**
 
@@ -716,49 +962,16 @@ Performs discovery using a JSON configuration.
 ``struct libnvmf_context *fctx``
   Fabrics context
 
-``bool connect``
-  Whether to connect discovered subsystems
-
-``bool force``
-  Force discovery even if already connected
-
 **Description**
 
-Performs discovery using a configuration file.
+Performs discovery using the NBFT tables found at **fctx**'s nbft_path.
 
 **Return**
 
-0 on success, or a negative error code on failure.
+0 on success, negative error code otherwise.
 
 
-.. c:function:: int libnvmf_discovery_nbft (struct libnvme_global_ctx *ctx, struct libnvmf_context *fctx, bool connect, char *nbft_path)
-
-   Perform discovery using NBFT
-
-**Parameters**
-
-``struct libnvme_global_ctx *ctx``
-  Global context
-
-``struct libnvmf_context *fctx``
-  Fabrics context
-
-``bool connect``
-  Whether to connect discovered subsystems
-
-``char *nbft_path``
-  Path to NBFT file
-
-**Description**
-
-Performs discovery using the specified NBFT file.
-
-**Return**
-
-0 on success, or a negative error code on failure.
-
-
-.. c:function:: int libnvmf_create_ctrl (struct libnvme_global_ctx *ctx, struct libnvmf_context *fctx, libnvme_ctrl_t *c)
+.. c:function:: int libnvmf_create_ctrl (struct libnvme_global_ctx *ctx, struct libnvmf_context *fctx, struct libnvme_ctrl **c)
 
    Allocate an unconnected NVMe controller
 
@@ -770,16 +983,19 @@ Performs discovery using the specified NBFT file.
 ``struct libnvmf_context *fctx``
   Fabrics context
 
-``libnvme_ctrl_t *c``
-  **libnvme_ctrl_t** object to return
+``struct libnvme_ctrl **c``
+  :c:type:`struct libnvme_ctrl <libnvme_ctrl>` object to return
 
 **Description**
 
 Creates an unconnected controller to be used for libnvme_add_ctrl().
+The controller carries over **fctx**'s connection parameters together with
+its authentication and transport encryption settings (kxchap keys,
+keyring, TLS key and TLS key identity).
 
 **Return**
 
-0 on success or negative error code otherwise
+0 on success, negative error code otherwise.
 
 
 .. c:function:: int libnvmf_connect (struct libnvme_global_ctx *ctx, struct libnvmf_context *fctx)
@@ -800,16 +1016,16 @@ Connects to the fabrics subsystem using the provided context.
 
 **Return**
 
-0 on success, or a negative error code on failure.
+0 on success, negative error code otherwise.
 
 
-.. c:function:: int libnvmf_disconnect_ctrl (libnvme_ctrl_t c)
+.. c:function:: int libnvmf_disconnect_ctrl (struct libnvme_ctrl *c)
 
    Disconnect a controller
 
 **Parameters**
 
-``libnvme_ctrl_t c``
+``struct libnvme_ctrl *c``
   Controller instance
 
 **Description**
@@ -819,49 +1035,6 @@ Issues a 'disconnect' fabrics command to **c**
 **Return**
 
 0 on success, -1 on failure.
-
-
-.. c:function:: int libnvmf_connect_config_json (struct libnvme_global_ctx *ctx, struct libnvmf_context *fctx)
-
-   Connect using JSON config
-
-**Parameters**
-
-``struct libnvme_global_ctx *ctx``
-  Global context
-
-``struct libnvmf_context *fctx``
-  Fabrics context
-
-**Description**
-
-Connects to the fabrics subsystem using a JSON configuration.
-
-**Return**
-
-0 on success, or a negative error code on failure.
-
-
-.. c:function:: int libnvmf_config_modify (struct libnvme_global_ctx *ctx, struct libnvmf_context *fctx)
-
-   Modify and update the configurtion
-
-**Parameters**
-
-``struct libnvme_global_ctx *ctx``
-  Global context
-
-``struct libnvmf_context *fctx``
-  Fabrics context
-
-**Description**
-
-Update the current configuration by adding the crypto
-information.
-
-**Return**
-
-0 on success, or a negative error code on failure.
 
 
 .. c:function:: int libnvmf_nbft_read_files (struct libnvme_global_ctx *ctx, char *path, struct nbft_file_entry **head)
@@ -885,7 +1058,7 @@ Reads NBFT files from the specified path and populates a linked list.
 
 **Return**
 
-0 on success, or a negative error code on failure.
+0 on success, negative error code otherwise.
 
 
 .. c:function:: void libnvmf_nbft_free (struct libnvme_global_ctx *ctx, struct nbft_file_entry *head)

@@ -5,63 +5,11 @@
  *          Wei Zhang <wzhang@fb.com>,
  *          Venkat Ramesh <venkatraghavan@fb.com>
  */
-#undef CMD_INC_FILE
-#define CMD_INC_FILE plugins/ocp/ocp-nvme
-
-#if !defined(OCP_NVME) || defined(CMD_HEADER_MULTI_READ)
-#define OCP_NVME
-
-#define OCP_PLUGIN_VERSION   "3.0.0"
-#include "cmd.h"
-
-PLUGIN(NAME("ocp", "OCP cloud SSD extensions", OCP_PLUGIN_VERSION),
-	COMMAND_LIST(
-		ENTRY("smart-add-log", "Retrieve extended SMART Information", smart_add_log)
-		ENTRY("latency-monitor-log", "Get Latency Monitor Log Page", ocp_latency_monitor_log)
-		ENTRY("set-latency-monitor-feature", "Set Latency Monitor feature", ocp_set_latency_monitor_feature)
-		ENTRY("internal-log", "Retrieve and save internal device telemetry log", ocp_telemetry_log)
-		ENTRY("clear-fw-activate-history", "Clear firmware update history log", clear_fw_update_history)
-		ENTRY("eol-plp-failure-mode", "Define EOL or PLP circuitry failure mode.", eol_plp_failure_mode)
-		ENTRY("clear-pcie-correctable-errors", "Clear PCIe correctable error counters", clear_pcie_correctable_error_counters)
-		ENTRY("fw-activate-history", "Get firmware activation history log", fw_activation_history_log)
-		ENTRY("unsupported-reqs-log", "Get Unsupported Requirements Log Page", ocp_unsupported_requirements_log)
-		ENTRY("error-recovery-log", "Retrieve Error Recovery Log Page", ocp_error_recovery_log)
-		ENTRY("device-capability-log", "Get Device capabilities Requirements Log Page", ocp_device_capabilities_log)
-		ENTRY("set-dssd-power-state-feature", "Set DSSD Power State feature", set_dssd_power_state_feature)
-		ENTRY("get-dssd-power-state-feature", "Get DSSD Power State feature", get_dssd_power_state_feature)
-		ENTRY("set-plp-health-check-interval", "Set PLP Health Check Interval", set_plp_health_check_interval)
-		ENTRY("get-plp-health-check-interval", "Get PLP Health Check Interval", get_plp_health_check_interval)
-		ENTRY("telemetry-string-log", "Retrieve Telemetry string Log Page", ocp_telemetry_str_log_format)
-		ENTRY("set-telemetry-profile", "Set Telemetry Profile Feature", ocp_set_telemetry_profile_feature)
-		ENTRY("set-dssd-async-event-config", "Set DSSD Async Event Config", set_dssd_async_event_config)
-		ENTRY("get-dssd-async-event-config", "Get DSSD Async Event Config", get_dssd_async_event_config)
-		ENTRY("tcg-configuration-log", "Retrieve TCG Configuration Log Page", ocp_tcg_configuration_log)
-		ENTRY("get-error-injection", "Return set of error injection", get_error_injection)
-		ENTRY("set-error-injection", "Inject error conditions", set_error_injection)
-		ENTRY("get-enable-ieee1667-silo", "return set of enable IEEE1667 silo",
-		      get_enable_ieee1667_silo)
-		ENTRY("set-enable-ieee1667-silo", "enable IEEE1667 silo", set_enable_ieee1667_silo)
-		ENTRY("hardware-component-log", "retrieve hardware component log", hwcomp_log)
-		ENTRY("get-latency-monitor", "Get Latency Monitor Feature",
-		      ocp_get_latency_monitor_feature)
-		ENTRY("get-clear-pcie-correctable-errors", "Clear PCIe correctable error counters",
-		      get_clear_pcie_correctable_error_counters)
-		ENTRY("get-telemetry-profile", "Get Telemetry Profile Feature",
-		      ocp_get_telemetry_profile_feature)
-		ENTRY("persistent-event-log", "Retrieve Persistent Event Log with OCP events",
-		      ocp_get_persistent_event_log)
-		ENTRY("get-idle-wakeup-time", "Get Idle Wake Up Time Config",
-		      ocp_get_idle_wakeup_time_config_feature)
-	)
-);
-
-#endif
-
-#include "define_cmd.h"
-
 #ifndef OCP_NVME_H
 #define OCP_NVME_H
-#include "common.h"
+#include <stddef.h>
+
+#include <shared/compiler-attributes-util.h>
 
 struct __packed ssd_latency_monitor_log {
 	__u8	feature_status;			/* 0x00 */
@@ -186,7 +134,7 @@ struct __packed ocp_error_recovery_log_page {
  * @fused_operation_support:			Fused Operation Support
  * @min_valid_dssd_pwr_state:			Minimum Valid DSSD Power State
  * @dssd_pwr_state_desc:				DSSD Power State Descriptors
- * @vendor_specific_command_timeout:	Vendor Specific Command Timeout
+ * @fips_140_validation:				FIPS 140 Validation (version 2 up)
  * @reserved:							Reserved
  * @log_page_version:					Log Page Version
  * @log_page_guid:						Log Page GUID
@@ -201,10 +149,18 @@ struct __packed ocp_device_capabilities_log_page {
 	__le16  fused_operation_support;
 	__le16  min_valid_dssd_pwr_state;
 	__u8    dssd_pwr_state_desc[128];
-	__u8    reserved[3934];
+	__le16  fips_140_validation;
+	__u8    reserved[3932];
 	__le16  log_page_version;
 	__u8    log_page_guid[GUID_LEN];
 };
+
+_Static_assert(sizeof(struct ocp_device_capabilities_log_page) == 4096,
+	"ocp_device_capabilities_log_page is not 4096 bytes");
+_Static_assert(offsetof(struct ocp_device_capabilities_log_page, log_page_version) == 4078,
+	"log_page_version is not at byte 4078");
+
+#define C4_FIPS_140_STATUS_MASK		0xf
 
 /*
  * struct tcg_configuration_log - TCG Configuration Log Page Structure

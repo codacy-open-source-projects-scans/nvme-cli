@@ -9,11 +9,11 @@ return result
 SYNOPSIS
 --------
 [verse]
-'nvme sndk vs-smart-add-log' <device> [--interval=<NUM>, -i <NUM>]
+'nvme' [<global-options>] 'sndk vs-smart-add-log' <device>
+			[--interval=<NUM>, -i <NUM>]
 			[--log-page-version=<NUM>, -l <NUM>]
 			[--log-page-mask=<LIST>, -p <LIST>]
 			[--namespace-id=<nsid> | -n <nsid>]
-			[<global-options>]
 
 DESCRIPTION
 -----------
@@ -44,7 +44,7 @@ OPTIONS
 -p <LIST>::
 --log-page-mask=<LIST>::
 	Supply a comma separated list of desired log pages to display.
-	The possible values are 0xc0, 0xc1, 0xca, 0xd0.
+	The possible values are 0xc0, 0xc1, 0xca.
 	Note: Not all pages are supported on all drives.
 	The default is to display all supported log pages.
 

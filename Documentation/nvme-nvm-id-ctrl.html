@@ -740,7 +740,7 @@ nvme-nvm-id-ctrl(1) Manual Page
 <h2>NAME</h2>
 <div class="sectionbody">
 <p>nvme-nvm-id-ctrl -
-   Send NVMe Identify Controller, return NVM command set structure
+   Send NVMe Identify Controller, return NVM command set structure (deprecated)
 </p>
 </div>
 </div>
@@ -749,8 +749,7 @@ nvme-nvm-id-ctrl(1) Manual Page
 <h2 id="_synopsis">SYNOPSIS</h2>
 <div class="sectionbody">
 <div class="verseblock">
-<pre class="content"><em>nvme nvm-id-ctrl</em> &lt;device&gt;
-                        [&lt;global-options&gt;]</pre>
+<pre class="content"><em>nvme</em> [&lt;global-options&gt;] <em>nvm-id-ctrl</em> &lt;device&gt;</pre>
 <div class="attribution">
 </div></div>
 </div>
@@ -758,17 +757,12 @@ nvme-nvm-id-ctrl(1) Manual Page
 <div class="sect1">
 <h2 id="_description">DESCRIPTION</h2>
 <div class="sectionbody">
-<div class="paragraph"><p>For the NVMe device given, sends the NVM command set&#8217;s identify controller
-command and provides the result and returned structure.</p></div>
-<div class="paragraph"><p>The &lt;device&gt; parameter is mandatory and may be either the NVMe character
-device (ex: /dev/nvme0), or a namespace block device (ex: /dev/nvme0n1).</p></div>
-<div class="paragraph"><p>On success, the data structure returned by the device will be decoded and
-displayed in one of several ways.</p></div>
-</div>
-</div>
-<div class="sect1">
-<h2 id="_options">OPTIONS</h2>
-<div class="sectionbody">
+<div class="paragraph"><p>Deprecated alias for <a href="nvme-id-nvm-ctrl.html">nvme-id-nvm-ctrl(1)</a>, kept for scripts written
+against nvme-cli versions older than 3.0. Options and behavior are
+identical; only the top-level command name is retained.</p></div>
+<div class="paragraph"><p>New scripts should use <em>nvme id nvm-ctrl</em> instead. This alias prints a
+deprecation warning on stderr and may be removed in a future release.</p></div>
+<div class="paragraph"><p>See <a href="nvme-id-nvm-ctrl.html">nvme-id-nvm-ctrl(1)</a> for the full option reference.</p></div>
 </div>
 </div>
 <div class="sect1">
@@ -845,38 +839,26 @@ and are available to this subcommand:</p></div>
 </p>
 </dd>
 </dl></div>
+<div class="paragraph"><p>These options can also be set as machine-wide defaults in
+nvme-cli.conf(5). A command-line flag always overrides the file.</p></div>
 </div>
 </div>
 <div class="sect1">
 <h2 id="_examples">EXAMPLES</h2>
 <div class="sectionbody">
-<div class="ulist"><ul>
-<li>
-<p>
-Has the program interpret the returned buffer and display the known
-fields in a human readable format:
-</p>
-<div class="listingblock">
-<div class="content">
-<pre><code># nvme nvm-id-ctrl /dev/nvme0</code></pre>
-</div></div>
-</li>
-<li>
-<p>
-Show the output in json format
-</p>
-<div class="listingblock">
-<div class="content">
-<pre><code># nvme nvm-id-ctrl /dev/nvme0 -o json</code></pre>
-</div></div>
-</li>
-</ul></div>
+<div class="paragraph"><p>No Examples</p></div>
 </div>
 </div>
 <div class="sect1">
 <h2 id="_nvme">NVME</h2>
 <div class="sectionbody">
-<div class="paragraph"><p>Part of nvme-cli</p></div>
+<div class="paragraph"><p>Part of the nvme-user suite</p></div>
+</div>
+</div>
+<div class="sect1">
+<h2 id="_see_also">SEE ALSO</h2>
+<div class="sectionbody">
+<div class="paragraph"><p><a href="nvme-id-nvm-ctrl.html">nvme-id-nvm-ctrl(1)</a></p></div>
 </div>
 </div>
 </div>
@@ -884,7 +866,7 @@ Show the output in json format
 <div id="footer">
 <div id="footer-text">
 Last updated
- 2026-04-17 09:46:00 CEST
+ 2026-09-18 12:15:54 CEST
 </div>
 </div>
 </body>

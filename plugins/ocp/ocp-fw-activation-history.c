@@ -8,12 +8,16 @@
 #include <errno.h>
 #include <stdio.h>
 
-#include "common.h"
+#include <libnvme.h>
+
+#include "cleanup.h"
+#include "global-ctx.h"
 #include "nvme-print.h"
 #include "ocp-fw-activation-history.h"
 #include "ocp-nvme.h"
 #include "ocp-print.h"
 #include "ocp-utils.h"
+#include "plugin.h"
 
 static const unsigned char ocp_fw_activation_history_guid[GUID_LEN] = {
 	0x6D, 0x79, 0x9a, 0x76,
@@ -53,13 +57,13 @@ int ocp_fw_activation_history_log(int argc, char **argv, struct command *acmd,
 				       NVME_LOG_CDW14_UUID_MASK);
 	err = libnvme_get_log(hdl, &cmd, false, NVME_LOG_PAGE_PDU_SIZE);
 	if (err)
-		nvme_show_status(err);
+		nvme_show_err(err, "Failed to fetch the log from drive");
 
 	int guid_cmp_res = memcmp(fw_history.log_page_guid, ocp_fw_activation_history_guid,
 				  sizeof(ocp_fw_activation_history_guid));
 
 	if (!err && guid_cmp_res) {
-		fprintf(stderr,
+		nvme_show_error(
 			"Error: Unexpected data. Log page guid does not match with expected.\n");
 		err = -EINVAL;
 	}
@@ -70,7 +74,7 @@ int ocp_fw_activation_history_log(int argc, char **argv, struct command *acmd,
 		err = validate_output_format(nvme_args.output_format,
 			&print_flag);
 		if (err < 0) {
-			fprintf(stderr, "Error: Invalid output format.\n");
+			nvme_show_error("Error: Invalid output format.");
 			return err;
 		}
 

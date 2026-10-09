@@ -15,29 +15,26 @@
  *   Author:  Zou Ming<zouming.zouming@huawei.com>,
  *				Yang Feng <philip.yang@huawei.com>
  */
-#include <stdio.h>
-#include <string.h>
-#include <stdlib.h>
-#include <inttypes.h>
-#include <errno.h>
-#include <limits.h>
-#include <fcntl.h>
-#include <unistd.h>
 #include <dirent.h>
-
-#include <sys/stat.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <inttypes.h>
+#include <limits.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
 
 #include <libnvme.h>
 
-#include "common.h"
-#include "nvme-cmds.h"
-#include "nvme.h"
+#include <ccan/endian/endian.h>
+#include <shared/compiler-attributes-util.h>
+#include <shared/suffix-util.h>
+
+#include "cleanup.h"
+#include "global-ctx.h"
+#include "nvme-print.h"
 #include "plugin.h"
-
-#include "util/suffix.h"
-
-#define CREATE_CMD
-#include "huawei-nvme.h"
 
 #define HW_SSD_PCI_VENDOR_ID 0x19E5
 #define ARRAY_NAME_LEN 80
@@ -69,13 +66,14 @@ struct huawei_list_element_len {
 static int huawei_get_nvme_info(struct libnvme_transport_handle *hdl,
 				struct huawei_list_item *item, const char *node)
 {
-	struct stat nvme_stat_info;
+	struct libnvme_passthru_cmd cmd;
 	int err;
 	int len;
 
 	memset(item, 0, sizeof(*item));
 
-	err = nvme_identify_ctrl(hdl, &item->ctrl);
+	nvme_init_identify_ctrl(&cmd, &item->ctrl);
+	err = libnvme_exec_admin_passthru(hdl, &cmd);
 	if (err)
 		return err;
 
@@ -88,17 +86,16 @@ static int huawei_get_nvme_info(struct libnvme_transport_handle *hdl,
 
 	item->huawei_device = true;
 	err = libnvme_get_nsid(hdl, &item->nsid);
-	err = nvme_identify_ns(hdl, item->nsid, &item->ns);
 	if (err)
 		return err;
-
-	err = fstat(libnvme_transport_handle_get_fd(hdl), &nvme_stat_info);
-	if (err < 0)
+	nvme_init_identify_ns(&cmd, item->nsid, &item->ns);
+	err = libnvme_exec_admin_passthru(hdl, &cmd);
+	if (err)
 		return err;
 
 	strncpy(item->node, node, sizeof(item->node));
 	item->node[sizeof(item->node) - 1] = '\0';
-	item->block = S_ISBLK(nvme_stat_info.st_mode);
+	item->block = libnvme_transport_handle_is_ns(hdl);
 
 	if (item->ns.vs[0] == 0) {
 		len = snprintf(item->ns_name, NS_NAME_LEN, "%s", "----");
@@ -144,10 +141,23 @@ static void huawei_json_print_list_items(struct huawei_list_item *list_items,
 	char formatter[128] = { 0 };
 	int index, i = 0;
 
+	if (!list_items)
+		return;
+
 	root = json_create_object();
+	if (!root)
+		return;
+
 	devices = json_create_array();
+	if (!devices) {
+		json_free_object(root);
+		return;
+	}
+
 	for (i = 0; i < len; i++) {
 		device_attrs = json_create_object();
+		if (!device_attrs)
+			continue;
 
 		json_object_add_value_string(device_attrs,
 						 "DevicePath",
@@ -216,8 +226,8 @@ static void huawei_print_list_item(struct huawei_list_item *list_item,
 	double nsze       = le64_to_cpu(list_item->ns.nsze) * lba;
 	double nuse       = le64_to_cpu(list_item->ns.nuse) * lba;
 
-	const char *s_suffix = suffix_si_get(&nsze);
-	const char *u_suffix = suffix_si_get(&nuse);
+	const char *s_suffix = shr_suffix_si_get(&nsze);
+	const char *u_suffix = shr_suffix_si_get(&nuse);
 
 	char usage[128];
 	char nguid_buf[2 * sizeof(list_item->ns.nguid) + 1];
@@ -293,25 +303,36 @@ static void huawei_print_list_items(struct huawei_list_item *list_items, unsigne
 		huawei_print_list_item(&list_items[i], element_len);
 }
 
+static int filter_namespace(const struct dirent *d)
+{
+	int i, n;
+
+	if (d->d_name[0] == '.')
+		return 0;
+
+	if (strstr(d->d_name, "nvme"))
+		if (sscanf(d->d_name, "nvme%dn%d", &i, &n) == 2)
+			return 1;
+
+	return 0;
+}
+
 static int huawei_list(int argc, char **argv, struct command *acmd,
 		       struct plugin *plugin)
 {
-	__cleanup_nvme_global_ctx struct libnvme_global_ctx *ctx =
-		libnvme_create_global_ctx(stdout, LIBNVME_DEFAULT_LOGLEVEL);
+	const char *desc = "Retrieve basic information for the given huawei device";
+	__cleanup_nvme_global_ctx struct libnvme_global_ctx *ctx = NULL;
 	char path[264];
 	struct dirent **devices;
 	struct huawei_list_item *list_items;
-	unsigned int i, n, ret;
+	unsigned int i, n;
 	unsigned int huawei_num = 0;
 	nvme_print_flags_t fmt;
-	const char *desc = "Retrieve basic information for the given huawei device";
+	int ret;
 
 	NVME_ARGS(opts);
 
-	if (!ctx)
-		return -ENOMEM;
-
-	ret = argconfig_parse(argc, argv, desc, opts);
+	ret = parse_args(argc, argv, desc, opts);
 	if (ret)
 		return ret;
 
@@ -319,13 +340,17 @@ static int huawei_list(int argc, char **argv, struct command *acmd,
 	if (ret < 0 || (fmt != JSON && fmt != NORMAL))
 		return ret;
 
-	n = scandir("/dev", &devices, libnvme_filter_namespace, alphasort);
+	ret = nvme_create_global_ctx(&ctx);
+	if (ret)
+		return ret;
+
+	n = scandir("/dev", &devices, filter_namespace, alphasort);
 	if (n <= 0)
 		return n;
 
 	list_items = calloc(n, sizeof(*list_items));
 	if (!list_items) {
-		fprintf(stderr, "can not allocate controller list payload\n");
+		nvme_show_error("can not allocate controller list payload");
 		ret = ENOMEM;
 		goto out_free_devices;
 	}
@@ -334,9 +359,9 @@ static int huawei_list(int argc, char **argv, struct command *acmd,
 		__cleanup_nvme_transport_handle struct libnvme_transport_handle *hdl = NULL;
 
 		snprintf(path, sizeof(path), "/dev/%s", devices[i]->d_name);
-		ret = libnvme_open(ctx, path, &hdl);
+		ret = libnvme_open(ctx, path, O_RDONLY, &hdl);
 		if (ret) {
-			fprintf(stderr, "Cannot open device %s: %s\n",
+			nvme_show_error("Cannot open device %s: %s",
 				path, libnvme_strerror(-ret));
 			continue;
 		}
@@ -380,4 +405,35 @@ static void huawei_do_id_ctrl(__u8 *vs, struct json_object *root)
 static int huawei_id_ctrl(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
 	return __id_ctrl(argc, argv, acmd, plugin, huawei_do_id_ctrl);
+}
+
+static struct command huawei_list_cmd = {
+	.name = "list",
+	.help = "List all Huawei NVMe devices and namespaces on machine",
+	.fn = huawei_list,
+	.no_device = true,
+};
+
+static struct command huawei_id_ctrl_cmd = {
+	.name = "id-ctrl",
+	.help = "Huawei identify controller",
+	.fn = huawei_id_ctrl,
+};
+
+static struct command *commands[] = {
+	&huawei_list_cmd,
+	&huawei_id_ctrl_cmd,
+	NULL,
+};
+
+static struct plugin plugin = {
+	.name = "huawei",
+	.desc = "Huawei vendor specific extensions",
+	.version = NVME_VERSION,
+};
+
+static void __shr_constructor register_plugin(void)
+{
+	plugin_add_group(&plugin, NULL, commands);
+	register_extension(&plugin);
 }

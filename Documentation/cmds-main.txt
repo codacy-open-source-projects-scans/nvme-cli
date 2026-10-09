@@ -169,6 +169,21 @@ linknvme:nvme-disconnect[1]::
 linknvme:nvme-disconnect-all[1]::
 	Disconnect from all NVMe-over-Fabrics subsystems
 
+linknvme:nvme-config-convert[1]::
+	Convert a legacy NVMe-oF configuration to the INI format
+
+linknvme:nvme-config-create[1]::
+	Create an NVMe-oF connection entry in the INI configuration
+
+linknvme:nvme-config-validate[1]::
+	Validate an NVMe-oF INI connection configuration file
+
+linknvme:nvme-config-show[1]::
+	Show the resolved NVMe-oF INI connection configuration
+
+linknvme:nvme-config-status[1]::
+	Report legacy config.json/discovery.conf conversion status
+
 linknvme:nvme-get-property[1]::
 	Reads and shows NVMe-over-Fabrics controller property
 
@@ -185,10 +200,10 @@ linknvme:nvme-capacity-mgmt[1]::
 	Capacity Management Command
 
 linknvme:nvme-check-dhchap-key[1]::
-	Generate NVMeoF DH-HMAC-CHAP host key
+	Check a host DH-HMAC-CHAP secret (deprecated, see nvme-keys-check-kxchap-secret)
 
 linknvme:nvme-check-tls-key[1]::
-	Validate NVMeoF TLS PSK
+	Check a NVMe TLS PSK (deprecated, see nvme-keys-check-tls-psk)
 
 linknvme:nvme-cmdset-ind-id-ns[1]::
 	I/O Command Set Independent Identify Namespace
@@ -200,13 +215,13 @@ linknvme:nvme-fid-support-effects-log[1]::
 	Retrieve FID Support and Effects log
 
 linknvme:nvme-gen-dhchap-key[1]::
-	Generate NVMeoF DH-HMAC-CHAP host key
+	Generate a host DH-HMAC-CHAP secret (deprecated, see nvme-keys-gen-kxchap-secret)
 
 linknvme:nvme-gen-hostnqn[1]::
 	Generate NVMeoF host NQN
 
 linknvme:nvme-gen-tls-key[1]::
-	Generate NVMeoF TLS PSK
+	Generate a NVMe TLS PSK (deprecated, see nvme-keys-gen-tls-psk)
 
 linknvme:nvme-get-lba-status[1]::
 	Get LBA Status command
@@ -250,8 +265,26 @@ linknvme:nvme-primary-ctrl-caps[1]::
 linknvme:nvme-reset[1]::
 	Resets the controller
 
-linknvme:nvme-rpmb[1]::
-	Replay Protection Memory Block commands
+linknvme:nvme-rpmb-info[1]::
+	Print RPMB support information for the controller
+
+linknvme:nvme-rpmb-program-key[1]::
+	Program the RPMB authentication key
+
+linknvme:nvme-rpmb-read-counter[1]::
+	Read the RPMB write counter
+
+linknvme:nvme-rpmb-read-data[1]::
+	Read authenticated data from an RPMB target
+
+linknvme:nvme-rpmb-write-data[1]::
+	Write authenticated data to an RPMB target
+
+linknvme:nvme-rpmb-read-config[1]::
+	Read the RPMB device configuration block
+
+linknvme:nvme-rpmb-write-config[1]::
+	Write the RPMB device configuration block
 
 linknvme:nvme-sanitize-log[1]::
 	Retrieve sanitize log
@@ -267,6 +300,9 @@ linknvme:nvme-subsystem-reset[1]::
 
 linknvme:nvme-supported-log-pages[1]::
 	Retrieve the Supported Log pages details
+
+linknvme:nvme-tls-key[1]::
+	Manage NVMe TLS PSKs (deprecated, see nvme-keys-import/export/revoke)
 
 linknvme:nvme-verify[1]::
 	verify command

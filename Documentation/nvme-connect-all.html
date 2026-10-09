@@ -749,13 +749,17 @@ nvme-connect-all(1) Manual Page
 <h2 id="_synopsis">SYNOPSIS</h2>
 <div class="sectionbody">
 <div class="verseblock">
-<pre class="content"><em>nvme connect-all</em>
+<pre class="content"><em>nvme</em> [&lt;global-options&gt;] <em>connect-all</em>
                         [--raw=&lt;filename&gt; | -r &lt;filename&gt;]
                         [--device=&lt;device&gt; | -d &lt;device&gt;]
                         [--config=&lt;filename&gt; | -J &lt;cfg&gt;]
-                        [--persistent | -p] [--quiet]
-                        [--dump-config | -O] [--nbft] [--no-nbft]
-                        [--nbft-path=&lt;STR&gt;] [--context=&lt;STR&gt;]
+                        [--persistent[=&lt;no|auto|force&gt;] | -p]
+                        [--quiet]
+                        [--no-reuse]
+                        [--nbft]
+                        [--no-nbft]
+                        [--nbft-path=&lt;STR&gt;]
+                        [--owner=&lt;NAME&gt;]
                         [&lt;fabrics-options&gt;]
                         [&lt;global-options&gt;]</pre>
 <div class="attribution">
@@ -828,13 +832,44 @@ background.</p></div>
 -p
 </dt>
 <dt class="hdlist1">
---persistent
+--persistent[=&lt;no|auto|force&gt;]
 </dt>
 <dd>
 <p>
-        Don&#8217;t remove the discovery controller after retrieving the discovery
-        log page.
+        Keep the discovery controller connected after retrieving the
+        discovery log page, instead of disconnecting once it&#8217;s done.
+        Because the value is optional, it must be attached directly to
+        the option: --persistent=force for the long form, -pforce for
+        the short form. A value given as a separate argument (--persistent
+        force, -p force) is silently NOT applied&#8201;&#8212;&#8201;it&#8217;s dropped, and
+        --persistent/-p is treated as if given bare (mode "auto"), with
+        no error.
 </p>
+<div class="openblock">
+<div class="content">
+<div class="ulist"><ul>
+<li>
+<p>
+<em>no</em> (the default when the option is omitted entirely): never persist.
+</p>
+</li>
+<li>
+<p>
+<em>auto</em> (the default when --persistent is given with no value): persist
+  a Discovery Log Page entry&#8217;s connection only where that entry&#8217;s own
+  EPCSD (Explicit Persistent Connection Support for Discovery) flag
+  reports support for it; degrade to non-persistent, with a log message,
+  for entries that don&#8217;t.
+</p>
+</li>
+<li>
+<p>
+<em>force</em>: persist regardless of what EPCSD reports, for a target whose
+  self-reported EPCSD cannot be trusted.
+</p>
+</li>
+</ul></div>
+</div></div>
 </dd>
 <dt class="hdlist1">
 --quiet
@@ -845,14 +880,11 @@ background.</p></div>
 </p>
 </dd>
 <dt class="hdlist1">
--O
-</dt>
-<dt class="hdlist1">
---dump-config
+--no-reuse
 </dt>
 <dd>
 <p>
-        Print out resulting JSON configuration file to stdout.
+        Always create a new connection, never reuse an existing one.
 </p>
 </dd>
 <dt class="hdlist1">
@@ -880,12 +912,18 @@ background.</p></div>
 </p>
 </dd>
 <dt class="hdlist1">
---context &lt;STR&gt;
+--owner=&lt;NAME&gt;
 </dt>
 <dd>
 <p>
-        Set the execution context to &lt;STR&gt;. This allows to coordinate
-        the management of the global resources.
+        Record NAME as the owner of connected controllers in the NVMe
+        ownership registry, so other orchestrators (and nvme-disconnect-all)
+        leave them alone.  See nvme-disconnect-all(1).  When --nbft is also
+        given, --owner takes precedence over its default owner of <em>nbft</em>.
+        An empty NAME (--owner=) removes the registry entries instead,
+        leaving the controllers unowned.
+        Without --owner, a controller that was already connected keeps
+        the entry it has.
 </p>
 </dd>
 </dl></div>
@@ -933,12 +971,37 @@ background.</p></div>
 -C &lt;secret&gt;
 </dt>
 <dt class="hdlist1">
+--kxchap-ctrl-secret=&lt;secret&gt;
+</dt>
+<dd>
+<p>
+        Controller authentication secret for bi-directional authentication.
+        If not specified, bi-directional authentication is not attempted.
+</p>
+</dd>
+<dt class="hdlist1">
+-S &lt;secret&gt;
+</dt>
+<dt class="hdlist1">
+--kxchap-secret=&lt;secret&gt;
+</dt>
+<dd>
+<p>
+        Host authentication secret (KX-HMAC-CHAP). Must be provided in ASCII
+        format as defined in the NVMe specification.
+</p>
+</dd>
+<dt class="hdlist1">
+-C &lt;secret&gt;
+</dt>
+<dt class="hdlist1">
 --dhchap-ctrl-secret=&lt;secret&gt;
 </dt>
 <dd>
 <p>
         Controller authentication secret for bi-directional authentication.
         If not specified, bi-directional authentication is not attempted.
+        (deprecated, see --kxchap-ctrl-secret)
 </p>
 </dd>
 <dt class="hdlist1">
@@ -951,6 +1014,7 @@ background.</p></div>
 <p>
         Host authentication secret (DH-HMAC-CHAP). Must be provided in ASCII
         format as defined in the NVMe specification.
+        (deprecated, see --kxchap-secret)
 </p>
 </dd>
 <dt class="hdlist1">
@@ -1294,6 +1358,8 @@ and are available to this subcommand:</p></div>
 </p>
 </dd>
 </dl></div>
+<div class="paragraph"><p>These options can also be set as machine-wide defaults in
+nvme-cli.conf(5). A command-line flag always overrides the file.</p></div>
 </div>
 </div>
 <div class="sect1">
@@ -1368,7 +1434,7 @@ nvme-connect(1)</p></div>
 <div id="footer">
 <div id="footer-text">
 Last updated
- 2026-04-17 09:46:00 CEST
+ 2026-09-18 12:15:54 CEST
 </div>
 </div>
 </body>

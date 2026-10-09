@@ -19,7 +19,7 @@
 #include <sys/types.h>
 #include <sys/uio.h>
 
-#if HAVE_LINUX_MCTP_H
+#if NVME_HAVE_LINUX_MCTP_H
 #include <linux/mctp.h>
 #else
 #include "nvme/mi-mctp-compat.h"
@@ -27,6 +27,12 @@
 
 #include <ccan/endian/endian.h>
 
+#include <shared/compiler-attributes-util.h>
+
+#include <libnvme.h>
+#include <libnvme-mi.h>
+
+#include "private.h"
 #include "private-mi.h"
 
 #ifdef CONFIG_DBUS
@@ -36,13 +42,6 @@
 #define MCTP_DBUS_IFACE "au.com.codeconstruct.MCTP1"
 #define MCTP_DBUS_IFACE_ENDPOINT "xyz.openbmc_project.MCTP.Endpoint"
 #endif
-
-#include <libnvme.h>
-#include <libnvme-mi.h>
-
-#include "private.h"
-#include "compiler-attributes.h"
-
 
 #if !defined(AF_MCTP)
 #define AF_MCTP 45
@@ -197,7 +196,7 @@ struct libnvme_mi_msg_resp_mpr {
 	struct nvme_mi_msg_hdr hdr;
 	__u8	status;
 	__u8	rsvd0;
-	__u16	mprt;
+	__le16	mprt;
 };
 
 /* Check if this response was a More Processing Required response; if so,
@@ -240,7 +239,7 @@ static bool libnvme_mi_mctp_resp_is_mpr(void *buf, size_t len,
 		return false;
 
 	if (mpr_time)
-		*mpr_time = cpu_to_le16(msg->mprt) * 100;
+		*mpr_time = (unsigned int)le16_to_cpu(msg->mprt) * 100;
 
 	return true;
 }
@@ -654,7 +653,7 @@ static const struct libnvme_mi_transport libnvme_mi_transport_mctp = {
 	.aem_purge = libnvme_mi_mctp_aem_purge,
 };
 
-int libnvme_mi_aem_open(libnvme_mi_ep_t ep)
+int libnvme_mi_aem_open(struct libnvme_mi_ep *ep)
 {
 	struct libnvme_mi_transport_mctp *mctp;
 
@@ -677,8 +676,8 @@ int libnvme_mi_aem_open(libnvme_mi_ep_t ep)
 	return 0;
 }
 
-__public libnvme_mi_ep_t libnvme_mi_open_mctp(struct libnvme_global_ctx *ctx,
-			       unsigned int netid, __u8 eid)
+__shr_public struct libnvme_mi_ep *libnvme_mi_open_mctp(
+		struct libnvme_global_ctx *ctx, unsigned int netid, __u8 eid)
 {
 	struct libnvme_mi_transport_mctp *mctp;
 	struct libnvme_mi_ep *ep;
@@ -751,7 +750,7 @@ err_close_ep:
 
 static int libnvme_mi_mctp_add(struct libnvme_global_ctx *ctx, unsigned int netid, __u8 eid)
 {
-	libnvme_mi_ep_t ep = NULL;
+	struct libnvme_mi_ep *ep = NULL;
 
 	/* ensure we don't already have an endpoint with the same net/eid. if
 	 * we do, just skip, no need to re-add. */
@@ -947,7 +946,7 @@ static int handle_mctp_obj(struct libnvme_global_ctx *ctx, DBusMessageIter *obj)
 	return 0;
 }
 
-__public struct libnvme_global_ctx *libnvme_mi_scan_mctp(void)
+__shr_public struct libnvme_global_ctx *libnvme_mi_scan_mctp(void)
 {
 	DBusMessage *msg, *resp = NULL;
 	DBusConnection *bus = NULL;
@@ -957,7 +956,7 @@ __public struct libnvme_global_ctx *libnvme_mi_scan_mctp(void)
 	dbus_bool_t drc;
 	DBusError berr;
 
-	ctx = libnvme_create_global_ctx(NULL, LIBNVME_DEFAULT_LOGLEVEL);
+	ctx = libnvme_create_global_ctx();
 	if (!ctx) {
 		errno = ENOMEM;
 		return NULL;
@@ -1041,7 +1040,7 @@ out:
 
 #else /* CONFIG_DBUS */
 
-__public struct libnvme_global_ctx *libnvme_mi_scan_mctp(void)
+__shr_public struct libnvme_global_ctx *libnvme_mi_scan_mctp(void)
 {
 	return NULL;
 }

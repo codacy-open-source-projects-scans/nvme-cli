@@ -10,7 +10,7 @@ if want_libnvme
         if openssl_dep.type_name() != 'internal'
             # Check for a bug in the EVP_PKEY_CTX_add1_hkdf_info implementation
             res = cc.run(
-                files('test/hkdf_add1.c'),
+                files('tests/hkdf_add1.c'),
                 dependencies: [openssl_dep],
                 name: 'check hkdf_add1'
             )
@@ -33,12 +33,23 @@ if want_libnvme
     libnvme_srcroot = meson.current_source_dir() # needed by tools/generator
     subdir('tools/generator')  # generate code needed by src below
     subdir('src')              # declares: libnvme_dep
-    subdir('libnvme')
+    subdir('libnvme3')
     if want_tests
-        subdir('test')
+        subdir('tests')
     endif
     if want_examples
         subdir('examples')
+    endif
+
+    if want_fabrics
+        configure_file(
+            input:         'sysfiles/udev/rules.d/70-nvmf-registry.rules.in',
+            output:        '70-nvmf-registry.rules',
+            configuration: substs,
+            install:       true,
+            install_dir:   udevrulesdir,
+            install_tag:   'nvmf',
+        )
     endif
 
     subdir('doc')
@@ -48,7 +59,7 @@ else
         # When prefix points to a standard location, meson can use
         # standard methods (e.g. pkg-config) to find the library.
         libnvme_dep = dependency(
-            'libnvme',
+            libnvme_api_name,
             version: '>=@0@'.format(libnvme_so_version),
             required: want_nvme,
         )
@@ -56,10 +67,9 @@ else
         # When prefix points to a non-standard location
         # let's ask the C compiler to find the library for us.
         libnvme_dep = cc.find_library(
-            'nvme',
+            libnvme_link_name,
             dirs: prefixdir / get_option('libdir'),
             required: want_nvme,
         )
     endif
 endif
-

@@ -1,14 +1,18 @@
-.. c:function:: struct libnvme_global_ctx * libnvme_create_global_ctx (FILE *fp, int log_level)
+.. c:function:: struct libnvme_global_ctx * libnvme_create_global_ctx (void)
 
    Initialize global context object
 
 **Parameters**
 
-``FILE *fp``
-  File descriptor for logging messages
+``void``
+  no arguments
 
-``int log_level``
-  Logging level to use
+**Description**
+
+
+Creates a global context with default settings: logging to stderr at
+LIBNVME_DEFAULT_LOGLEVEL.  Use libnvme_set_logging_file() and
+libnvme_set_logging_level() to adjust these after creation.
 
 **Return**
 
@@ -27,6 +31,82 @@ Initialized :c:type:`struct libnvme_global_ctx <libnvme_global_ctx>` object
 **Description**
 
 Free an :c:type:`struct libnvme_global_ctx <libnvme_global_ctx>` object and all attached objects
+
+
+.. c:function:: int libnvme_set_owner (struct libnvme_global_ctx *ctx, const char *owner)
+
+   Set the orchestrator identity for the registry
+
+**Parameters**
+
+``struct libnvme_global_ctx *ctx``
+  :c:type:`struct libnvme_global_ctx <libnvme_global_ctx>` object
+
+``const char *owner``
+  Orchestrator identity string (e.g. "stas", "nbft").
+
+**Description**
+
+Records the orchestrator identity used when claiming registry ownership of
+connections made through **ctx**.  A later call overwrites the previous value;
+treating the identity as immutable is a policy decision left to the caller.
+A process that does not participate in the registry simply never calls this.
+
+This is the supported way to record the registry owner;
+libnvme_create_global_ctx() deliberately takes no owner parameter.
+
+See also: libnvmf_get_owner_from_tid() and libnvmf_get_owner_from_fctx()
+(fabrics.h) to look up who owns a candidate connection before connecting
+it, and libnvmf_registry_retrieve() (registry.h) to read a live
+controller's registry entry directly.
+
+**Return**
+
+0 on success, -EINVAL or -ENOMEM on error.
+
+
+.. c:function:: int libnvme_set_test_base_dir (struct libnvme_global_ctx *ctx, const char *path)
+
+   Reroot libnvme's on-disk files for testing
+
+**Parameters**
+
+``struct libnvme_global_ctx *ctx``
+  :c:type:`struct libnvme_global_ctx <libnvme_global_ctx>` object
+
+``const char *path``
+  Sandbox directory under /tmp, or NULL to restore defaults
+
+**Description**
+
+Redirects the files libnvme reads and writes (the exclusion list, the
+ownership registry, ...) under **path** instead of their production locations,
+so a test can run against a throwaway directory.  For safety **path** must be
+confined to /tmp and contain no ".." component; anything else is rejected.
+Passing NULL clears a previously set override.
+
+**Return**
+
+0 on success, -EINVAL if **ctx** is NULL or **path** is not a valid
+sandbox path, -ENOMEM on allocation failure.
+
+
+.. c:function:: int libnvme_set_test_sysfs_dir (struct libnvme_global_ctx *ctx, const char *path)
+
+   Set libnvme's lookup sysfs path for testing
+
+**Parameters**
+
+``struct libnvme_global_ctx *ctx``
+  :c:type:`struct libnvme_global_ctx <libnvme_global_ctx>` object
+
+``const char *path``
+  Directory with sysfs or NULL to restore defaults
+
+**Return**
+
+0 on success, -EINVAL if **ctx** is NULL, -ENOMEM on allocation
+failure.
 
 
 .. c:function:: void libnvme_set_logging_level (struct libnvme_global_ctx *ctx, int log_level, bool log_pid, bool log_tstamp)
@@ -78,7 +158,25 @@ Retrieves current values of logging variables.
 current log level value or LIBNVME_DEFAULT_LOGLEVEL if not initialized.
 
 
-.. c:function:: int libnvme_open (struct libnvme_global_ctx *ctx, const char *name, struct libnvme_transport_handle **hdl)
+.. c:function:: void libnvme_set_logging_file (struct libnvme_global_ctx *ctx, FILE *fp)
+
+   Set the log output file for the global context
+
+**Parameters**
+
+``struct libnvme_global_ctx *ctx``
+  struct libnvme_global_ctx object
+
+``FILE *fp``
+  File stream to write log messages to, or NULL to use stderr
+
+**Description**
+
+Sets the file descriptor used for log output.  Passing NULL reverts to the
+default (stderr).
+
+
+.. c:function:: int libnvme_open (struct libnvme_global_ctx *ctx, const char *name, int flags, struct libnvme_transport_handle **hdl)
 
    Open an nvme controller or namespace device
 
@@ -90,6 +188,10 @@ current log level value or LIBNVME_DEFAULT_LOGLEVEL if not initialized.
 ``const char *name``
   The basename of the device to open
 
+``int flags``
+  Flags to pass to the underlying open(2) call, e.g. O_RDONLY
+  or O_RDONLY | O_EXCL
+
 ``struct libnvme_transport_handle **hdl``
   Transport handle to return
 
@@ -100,7 +202,7 @@ match linux conventions.
 
 **Return**
 
-0 on success or negative error code otherwise
+0 on success, negative error code otherwise.
 
 
 .. c:function:: void libnvme_close (struct libnvme_transport_handle *hdl)
@@ -113,7 +215,7 @@ match linux conventions.
   Transport handle
 
 
-.. c:function:: int libnvme_transport_handle_get_fd (struct libnvme_transport_handle *hdl)
+.. c:function:: libnvme_fd_t libnvme_transport_handle_get_fd (struct libnvme_transport_handle *hdl)
 
    Return file descriptor from the transport handle
 
@@ -129,7 +231,28 @@ libnvme_transport_handle_get_fd will return a valid file descriptor.
 
 **Return**
 
-File descriptor for an IOCTL based transport handle, otherwise -1.
+File descriptor for an IOCTL based transport handle,
+otherwise LIBNVME_INVALID_FD.
+
+
+.. c:function:: struct libnvme_mi_ep * libnvme_transport_handle_get_mi_ep (struct libnvme_transport_handle *hdl)
+
+   get the MI endpoint from a transport handle
+
+**Parameters**
+
+``struct libnvme_transport_handle *hdl``
+  transport handle
+
+**Description**
+
+Retrieve the MI endpoint associated with this transport handle. Only valid
+for MI-type transport handles (check with libnvme_transport_handle_is_mi
+first).
+
+**Return**
+
+the MI endpoint, or NULL if the handle is not an MI handle.
 
 
 .. c:function:: const char * libnvme_transport_handle_get_name (struct libnvme_transport_handle *hdl)
@@ -143,7 +266,7 @@ File descriptor for an IOCTL based transport handle, otherwise -1.
 
 **Return**
 
-Device file name, otherwise -1.
+Device file name, otherwise NULL.
 
 
 .. c:function:: bool libnvme_transport_handle_is_ctrl (struct libnvme_transport_handle *hdl)
@@ -293,60 +416,23 @@ default behavior (no retries).
 None.
 
 
-.. c:function:: void libnvme_set_probe_enabled (struct libnvme_global_ctx *ctx, bool enabled)
+.. c:function:: void libnvme_transport_handle_set_timeout (struct libnvme_transport_handle *hdl, __u32 timeout_ms)
 
-   enable/disable the probe for new MI endpoints
-
-**Parameters**
-
-``struct libnvme_global_ctx *ctx``
-  :c:type:`struct libnvme_global_ctx <libnvme_global_ctx>` object
-
-``bool enabled``
-  whether to probe new endpoints
-
-**Description**
-
-Controls whether newly-created endpoints are probed for quirks on creation.
-Defaults to enabled, which results in some initial messaging with the
-endpoint to determine model-specific details.
-
-
-.. c:function:: void libnvme_set_dry_run (struct libnvme_global_ctx *ctx, bool enable)
-
-   Set global dry run state
+   Set the default command timeout
 
 **Parameters**
 
-``struct libnvme_global_ctx *ctx``
-  struct libnvme_global_ctx object
+``struct libnvme_transport_handle *hdl``
+  Transport handle to configure
 
-``bool enable``
-  Enable/disable dry run state
-
-**Description**
-
-When dry_run is enabled, any IOCTL commands send via the passthru
-interface won't be executed.
-
-
-.. c:function:: void libnvme_set_ioctl_probing (struct libnvme_global_ctx *ctx, bool enable)
-
-   Enable/disable 64-bit IOCTL probing
-
-**Parameters**
-
-``struct libnvme_global_ctx *ctx``
-  struct libnvme_global_ctx object
-
-``bool enable``
-  Enable/disable 64-bit IOCTL probing
+``__u32 timeout_ms``
+  Timeout in milliseconds. A value of 0 means use the kernel
+  default (NVME_DEFAULT_IOCTL_TIMEOUT).
 
 **Description**
 
-When IOCTL probing is enabled, a 64-bit IOCTL command is issued to
-figure out if the passthru interface supports it.
-
-IOCTL probing is enabled per default.
+Sets a default timeout that is applied to every passthrough command
+submitted through **hdl** when the command's own timeout_ms field is 0.
+Commands that set a non-zero timeout_ms override this default.
 
 

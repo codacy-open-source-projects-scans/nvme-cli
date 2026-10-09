@@ -14,16 +14,15 @@
 
 project(
     'nvme-cli', ['c'],
-    meson_version: '>= 0.62.0',
+    meson_version: '>= 1.0.0',
     license: [
         'GPL-2.0-only',         # nvme-cli
         'LGPL-2.1-or-later',    # libnvme
     ],
-    version: '3.0-a.5',
+    version: '3.1',
     default_options: [
-        'c_std=gnu99',
+        'c_std=gnu11',
         'buildtype=debugoptimized',
-        'prefix=/usr/local',
         'warning_level=1',
         'sysconfdir=etc',
         'wrap_mode=nofallback',
@@ -52,16 +51,23 @@ host_system = host_machine.system()
 # dependencies are present. Also, -Dpython=enabled forces -Dlibnvme=enabled.
 want_nvme = get_option('nvme').disabled() == false
 want_libnvme = get_option('libnvme').disabled() == false
-want_fabrics = get_option('fabrics').disabled() == false and host_system != 'windows'
-want_mi = get_option('mi').disabled() == false and host_system != 'windows'
+want_fabrics = get_option('fabrics').disabled() == false and host_system == 'linux'
+want_mi = get_option('mi').disabled() == false and host_system == 'linux'
+want_sed = get_option('sed').disabled() == false
+want_top = get_option('top').disabled() == false and host_system == 'linux'
+want_discoverd = get_option('nvme-discoverd').disabled() == false and want_fabrics and host_system == 'linux'
+want_keysd = get_option('nvme-keysd').disabled() == false and want_fabrics and host_system == 'linux'
+want_deprecated_cmds = get_option('deprecated-cmds').disabled() == false
 want_json_c = get_option('json-c').disabled() == false
-want_libkmod = get_option('libkmod').disabled() == false and host_system != 'windows'
-want_tests = get_option('tests') and host_system != 'windows'
-want_examples = get_option('examples') and host_system != 'windows'
+want_libkmod = get_option('libkmod').disabled() == false and host_system == 'linux'
+want_tests = get_option('tests')
+want_ioctl_tests = want_tests and get_option('ioctl-tests')
+want_examples = get_option('examples') and host_system == 'linux'
 want_docs = get_option('docs')
 want_docs_build = get_option('docs-build')
 
 is_static = get_option('default_library') == 'static'
+is_cross = meson.is_cross_build()
 
 feature_python = get_option('python')
 if not want_fabrics or feature_python.disabled()
@@ -72,36 +78,45 @@ else
         want_libnvme = true
     endif
 
-    python3 = import('python').find_installation('python3')
-    py3_dep = python3.dependency(required: feature_python.enabled())
-    swig = find_program('swig', required: feature_python.enabled())
-    header_found = cc.has_header('Python.h', dependencies: py3_dep, required: feature_python.enabled())
-    want_python = want_libnvme and py3_dep.found() and swig.found() and header_found
+    python3 = import('python').find_installation(
+        'python3',
+        required: feature_python.enabled()
+    )
+
+    if python3.found()
+        py3_dep = python3.dependency(required: feature_python.enabled())
+        swig = find_program('swig', required: feature_python.enabled())
+        header_found = cc.has_header(
+            'Python.h',
+            dependencies: py3_dep,
+            required: feature_python.enabled()
+        )
+    else
+        py3_dep = dependency('', required: false)
+        swig = disabler()
+        header_found = false
+    endif
+
+    want_python = (
+        want_libnvme and
+        py3_dep.found() and
+        swig.found() and
+        header_found
+    )
 endif
 
-
-# Determine the libnvme.so version number from the project version. The version
-# for libnvme.so has to be a 3 digit number such as 3.0.1. We expect the project
-# version to be composed of 2 or 3 digits after stripping trailing identifiers
-# such as "-rc.*". If the project version is composed of only two digits, then
-# we append '.0' to it.
-ver = meson.project_version()
-ver_digits = ver.split('-')[0]
-ver_digits = ver_digits.split('.dev')[0]
-num_digits = ver_digits.split('.').length()
-if num_digits < 2 or num_digits > 3
-    error('Invalid version: ', meson.project_version())
-elif num_digits == 3
-    libnvme_so_version = ver_digits
-else
-    libnvme_so_version = ver_digits + '.0'
-endif
+# Bump this only when making an ABI-incompatible change.
+libnvme_so_version = '1.0.0'
 
 # For PyPI builds, use only the major version (e.g., '3' instead of '3.0.0').
 # This avoids the need for symbolic links which pip/wheel doesn't preserve.
 if get_option('pypi')
     libnvme_so_version = libnvme_so_version.split('.')[0]
 endif
+
+libnvme_so_major = libnvme_so_version.split('.')[0]
+libnvme_api_name = 'libnvme3'
+libnvme_link_name = 'nvme3'
 
 ################################################################################
 prefixdir      = get_option('prefix')
@@ -113,7 +128,10 @@ udevrulesdir   = join_paths(prefixdir, get_option('udevrulesdir'))
 dracutrulesdir = join_paths(prefixdir, get_option('dracutrulesdir'))
 systemddir     = join_paths(prefixdir, get_option('systemddir'))
 nmdispatchdir  = join_paths(prefixdir, get_option('nmdispatchdir'))
-rundir         = join_paths(prefixdir, get_option('rundir'))
+
+# /run's location is fixed by the FHS -- unlike the dirs above, it must
+# never scale with --prefix.
+rundir         = get_option('rundir')
 
 std_prefix = prefixdir == '/usr' or prefixdir == '/usr/local'
 
@@ -123,29 +141,53 @@ requires = ''
 
 version_tag = get_option('version-tag')
 if version_tag != ''
-    conf.set('GIT_VERSION', '"@0@"'.format(version_tag))
+    git_version = version_tag
 else
-    # Find the path to bash and use it so we don't pick up the WSL bash in Windows.
-    bash_prog = find_program('bash', required: true)
-    r = run_command(
-        bash_prog,
-        files('scripts/meson-vcs-tag.sh'),
-        meson.current_source_dir(),
-        meson.project_version(),
-        check: true,
-    )
-    conf.set('GIT_VERSION', '"@0@"'.format(r.stdout().strip()))
+    git_version = meson.project_version()
+
+    git = find_program('git', required: false)
+    if git.found() and fs.exists(meson.current_source_dir() / '.git')
+        r = run_command(
+            git,
+            '-C', meson.current_source_dir(),
+            'describe',
+            '--abbrev=7',
+            '--dirty=+',
+            check: false,
+        )
+
+        if r.returncode() == 0
+            git_version = r.stdout().strip().replace('^v', '')
+        endif
+    endif
 endif
+conf.set('GIT_VERSION', '"@0@"'.format(git_version))
 
 conf.set('SYSCONFDIR', '"@0@"'.format(sysconfdir))
 conf.set('RUNDIR', '"@0@"'.format(rundir))
 
 conf.set('CONFIG_FABRICS', want_fabrics, description: 'Is fabrics enabled')
 conf.set('CONFIG_MI', want_mi, description: 'Is MI enabled')
+conf.set('CONFIG_SED', want_sed, description: 'Is SED enabled')
+conf.set('CONFIG_LOOPBACK', want_ioctl_tests,
+    description: 'Is the ioctl loopback test transport enabled')
+conf.set('CONFIG_TOP', want_top, description: 'Is nvme top enabled')
+conf.set('CONFIG_DEPRECATED_CMDS', want_deprecated_cmds,
+    description: 'Deprecated commands enabled')
 
 if host_system == 'windows'
     kernel32_dep = cc.find_library('kernel32', required: true)
+    bcrypt_dep = cc.find_library('bcrypt', required: true)
+    setupapi_dep = cc.find_library('setupapi', required: true)
+    cfgmgr32_dep = cc.find_library('cfgmgr32', required: true)
+    winpthread_dep = cc.find_library('winpthread', required: true)
 endif
+
+conf.set10(
+    'NVME_HAVE_BCRYPT',
+    cc.find_library('bcrypt', required: false).found(),
+    description: 'Is bcrypt availabe'
+)
 
 # Check for libjson-c availability
 if not want_json_c
@@ -169,11 +211,9 @@ conf.set('CONFIG_JSONC', json_c_dep.found(), description: 'Is json-c available?'
 conf.set('NVME_VERSION', '"@0@"'.format(meson.project_version()))
 conf.set('LIBNVME_VERSION', '"@0@"'.format(meson.project_version()))
 
-conf.set10('DEFAULT_PDC_ENABLED', get_option('pdc-enabled'))
-
 # local (cross-compilable) implementations of ccan configure steps
 conf.set10(
-    'HAVE_BUILTIN_TYPES_COMPATIBLE_P',
+    'NVME_HAVE_BUILTIN_TYPES_COMPATIBLE_P',
     cc.compiles(
         '''int main(void) {
                return __builtin_types_compatible_p(int, long);
@@ -197,7 +237,7 @@ conf.set10(
     description: 'Is typeof available?'
 )
 conf.set10(
-    'HAVE_BYTESWAP_H',
+    'NVME_HAVE_BYTESWAP_H',
     cc.compiles(
         '''#include <byteswap.h>''',
         name: 'byteswap.h'
@@ -205,7 +245,7 @@ conf.set10(
     description: 'Is byteswap.h include-able?'
 )
 conf.set10(
-    'HAVE_BSWAP_64',
+    'NVME_HAVE_BSWAP_64',
     cc.links(
         '''#include <byteswap.h>
             int main(void) {
@@ -227,7 +267,7 @@ conf.set10(
     description: 'Building for big-endian'
 )
 conf.set10(
-    'HAVE_ISBLANK',
+    'NVME_HAVE_ISBLANK',
     cc.links(
         '''#include <ctype.h>
            int main(int argc, char **argv) {
@@ -239,7 +279,7 @@ conf.set10(
     description: 'Is isblank() available?'
 )
 conf.set10(
-    'HAVE_SYS_RANDOM',
+    'NVME_HAVE_SYS_RANDOM',
     cc.compiles(
         '''#include <sys/random.h>''',
         name: 'sys/random.h'
@@ -252,7 +292,7 @@ conf.set10(
     description: 'Is compiler warning about unused static line function?'
 )
 conf.set10(
-    'HAVE_SED_OPAL',
+    'NVME_HAVE_SED_OPAL',
     cc.compiles(
         '''#include <linux/sed-opal.h>''',
         name: 'linux/sed-opal.h'
@@ -261,7 +301,7 @@ conf.set10(
     description: 'Is linux/sed-opal.h include-able?'
 )
 conf.set10(
-    'HAVE_KEY_TYPE',
+    'NVME_HAVE_KEY_TYPE',
     cc.compiles(
         '''
             #include <linux/sed-opal.h>
@@ -275,7 +315,7 @@ conf.set10(
     description: 'Does struct opal_key have a key_type field?'
 )
 conf.set(
-    'HAVE_TM_GMTOFF',
+    'NVME_HAVE_TM_GMTOFF',
     cc.compiles(
         '''
             #include <time.h>
@@ -288,9 +328,24 @@ conf.set(
     ),
     description: 'Does struct tm have a tm_gmtoff field?'
 )
+conf.set('HAVE_STRSEP',
+    cc.compiles(
+        '''
+            #include <string.h>
+
+            int main(void) {
+                char *s = NULL;
+                char *p = strsep(&s, ",");
+                return p != NULL;
+            }
+        ''',
+        name: 'strsep'
+    ),
+    description: 'Is strsep available?'
+)
 
 if cc.has_function_attribute('fallthrough')
-    conf.set('fallthrough', '__attribute__((__fallthrough__))')
+    conf.set('fallthrough', '__attribute__((fallthrough))')
 else
     conf.set('fallthrough', 'do {} while (0) /* fallthrough */')
 endif
@@ -308,9 +363,9 @@ if not want_libkmod
 else
     libkmod_dep = dependency('libkmod', required: get_option('libkmod'))
 endif
-conf.set('HAVE_LIBKMOD', libkmod_dep.found(), description: 'Is libkmod available?')
+conf.set('NVME_HAVE_LIBKMOD', libkmod_dep.found(), description: 'Is libkmod available?')
 
-if not want_fabrics or get_option('openssl').disabled()
+if host_system != 'linux' or get_option('openssl').disabled()
     openssl_dep = dependency('', required: false)
 else
     openssl_dep = dependency(
@@ -346,6 +401,60 @@ else
 endif
 conf.set('CONFIG_KEYUTILS', keyutils_dep.found(), description: 'Is libkeyutils available?')
 
+if get_option('libarchive').disabled()
+    libarchive_dep = dependency('', required: false)
+else
+    libarchive_dep = dependency('libarchive', required: get_option('libarchive'))
+endif
+conf.set('CONFIG_LIBARCHIVE', libarchive_dep.found(), description: 'Is libarchive available?')
+
+if not want_discoverd and not want_keysd
+    libsystemd_dep = dependency('', required: false)
+else
+    # v253 for Type=notify-reload (nvme-discoverd.service, nvme-keysd.service).
+    libsystemd_dep = dependency('libsystemd', version: '>=253',
+                                 required: get_option('nvme-discoverd').enabled() or
+                                           get_option('nvme-keysd').enabled())
+endif
+want_discoverd = want_discoverd and libsystemd_dep.found()
+want_keysd = want_keysd and libsystemd_dep.found()
+
+# nvme-keysd decrypts credentials through sd_varlink (libsystemd v257).
+if want_keysd and libsystemd_dep.version().version_compare('<257')
+    if get_option('nvme-keysd').enabled()
+        error('nvme-keysd requires libsystemd >=257')
+    endif
+    want_keysd = false
+endif
+
+# nvme-keysd derives the PSKs (OpenSSL) and writes the keyring (libkeyutils).
+if want_keysd and not (openssl_dep.found() and keyutils_dep.found())
+    if get_option('nvme-keysd').enabled()
+        error('nvme-keysd requires OpenSSL and libkeyutils')
+    endif
+    want_keysd = false
+endif
+conf.set('CONFIG_DISCOVERD', want_discoverd, description: 'Is nvme-discoverd enabled')
+conf.set('CONFIG_KEYSD', want_keysd, description: 'Is nvme-keysd enabled')
+
+# -Dnvmf-autoconnect=auto builds the legacy autoconnect only when
+# nvme-discoverd is not built.
+nvmf_autoconnect_opt = get_option('nvmf-autoconnect')
+want_nvmf_autoconnect = (
+    nvmf_autoconnect_opt.enabled() or
+    (nvmf_autoconnect_opt.auto() and want_fabrics and not want_discoverd)
+)
+
+# mDNS needs the sd_varlink client API (libsystemd v257) and the
+# BrowseServices method of systemd-resolved (v258).
+want_mdns = false
+if want_discoverd and not get_option('mdns').disabled()
+    want_mdns = libsystemd_dep.version().version_compare('>=258')
+    if get_option('mdns').enabled() and not want_mdns
+        error('mdns requires libsystemd >=258')
+    endif
+endif
+
 if not want_mi or get_option('libdbus').disabled()
     libdbus_dep = dependency('', required: false)
 else
@@ -378,7 +487,7 @@ conf.set10(
     description: 'Can we use a statement as an expression?'
 )
 conf.set10(
-    'HAVE_LINUX_MCTP_H',
+    'NVME_HAVE_LINUX_MCTP_H',
     cc.compiles(
         '''#include <linux/mctp.h>''',
         name: 'linux/mctp.h'
@@ -401,7 +510,7 @@ if not is_static
     )
 endif
 conf.set(
-    'HAVE_NETDB',
+    'NVME_HAVE_NETDB',
     have_netdb,
     description: 'Is network address and service translation available'
 )
@@ -409,7 +518,7 @@ conf.set(
 threads_dep = dependency('threads', required: true)
 dl_dep = dependency('dl', required: false)
 conf.set(
-    'HAVE_LIBC_DLSYM',
+    'NVME_HAVE_LIBC_DLSYM',
     cc.has_function('dlsym', dependencies: dl_dep),
     description: 'Is dlsym function present',
 )
@@ -417,6 +526,59 @@ conf.set(
 conf.set('NVME_HAVE_SENDFILE', cc.has_function('sendfile'))
 
 conf.set('NVME_HAVE_MMAP', cc.has_function('mmap'))
+
+conf.set10(
+    'NVME_HAVE_REALLOCARRAY',
+    cc.has_function(
+       'reallocarray',
+       prefix : '#include <stdlib.h>',
+       args : '-D_GNU_SOURCE'),
+    description: 'Is reallocarray available',
+)
+
+conf.set10(
+    'NVME_HAVE_ENODATA',
+    cc.has_header_symbol('errno.h', 'ENODATA'),
+    description: 'Does errno.h define ENODATA',
+)
+
+conf.set10(
+    'NVME_HAVE_SIGACTION',
+    cc.has_function(
+        'sigaction',
+        prefix : '#include <signal.h>'),
+    description: 'Is sigaction available',
+)
+
+conf.set10(
+    'HAVE_STORAGE_REINITIALIZE_MEDIA',
+    host_system == 'windows' and cc.compiles(
+        '''
+            #include <winioctl.h>
+            int main(void) {
+                struct STORAGE_REINITIALIZE_MEDIA media;
+
+                return (int)sizeof(media);
+            }
+        ''',
+        name: 'STORAGE_REINITIALIZE_MEDIA'
+    ),
+    description: 'Does winioctl.h define struct STORAGE_REINITIALIZE_MEDIA'
+)
+
+conf.set(
+    'NVME_HAVE_INT128',
+    cc.compiles(
+        '''
+            int main(void) {
+                __int128 v;
+                v = 1;
+            }
+        ''',
+        name: 'int128'
+    ),
+    description: 'Is __int128 available?'
+)
 
 project_config_file = 'nvme-config.h'
 nvme_config_h = configure_file(output: project_config_file, configuration: conf)
@@ -452,7 +614,7 @@ add_project_arguments(
 # which only supports relative paths, while the libnvme include path is
 # absolute.
 if not want_libnvme and not std_prefix
-    libnvme_hdr_location = prefixdir / get_option('includedir')
+    libnvme_hdr_location = prefixdir / get_option('includedir') / libnvme_api_name
     message(
         'Using non-standard libnvme headers location: ',
         libnvme_hdr_location
@@ -466,6 +628,16 @@ endif
 libtype = get_option('default_library')
 if libtype == 'static'
     requires = ''
+endif
+
+if host_system == 'windows'
+    add_project_arguments(
+        [
+            '-DNOMINMAX',   # don't include Windows min/max definitions
+            '-D_POSIX_THREAD_SAFE_FUNCTIONS',   # enables gmtime_r support
+        ],
+        language : 'c',
+    )
 endif
 
 substs = configuration_data()
@@ -482,59 +654,34 @@ substs.set('SBINDIR', sbindir)
 substs.set('SYSCONFDIR', sysconfdir)
 substs.set('SYSTEMDDIR', systemddir)
 substs.set('SYSTEMCTL', get_option('systemctl'))
+# mDNS uses systemd-resolved, so nvme-discoverd must start after it.
+substs.set('DISCOVERD_AFTER_RESOLVED',
+           want_mdns ? 'After=systemd-resolved.service' : '')
 substs.set('PREFIX', prefixdir)
 substs.set('URL', 'https://github.com/linux-nvme/nvme-cli/')
-substs.set('VERSION_MAJOR', libnvme_so_version.split('.')[0])
+substs.set('LIBNVME_API_NAME', libnvme_api_name)
+substs.set('LIBNVME_SO_VERSION', libnvme_so_major)
 
 
 ################################################################################
 doc_tgts = []
 
 subdir('ccan')      # declares: ccan_dep
+subdir('shared')    # declares: shared_dep
 subdir('libnvme')   # declares: libnvme_dep
 
 if want_nvme
     subdir('plugins')   # declares: plugin_sources
-    subdir('util')      # declares: util_sources
-
-    sources = []
-    if host_system == 'windows'
-        sources += [
-            'nvme-dummy.c', # Dummy source file for Windows port bring up.
-        ]
-    else
-        sources += [
-            'libnvme-wrap.c',
-            'logging.c',
-            'nvme-cmds.c',
-            'nvme-models.c',
-            'nvme-print-binary.c',
-            'nvme-print-stdout.c',
-            'nvme-print.c',
-            'nvme-rpmb.c',
-            'nvme.c',
-            'plugin.c',
-        ]
-
-        if json_c_dep.found()
-            sources += [
-                'nvme-print-json.c',
-            ]
-        endif
-    endif
-
-    if want_fabrics
-        sources += 'fabrics.c'
-    endif
+    subdir('src')       # declares: sources
 
     sources += plugin_sources
-    sources += util_sources
 
     link_args_list = []
     link_deps = [
         config_dep,
         ccan_dep,
         libnvme_dep,
+        shared_dep,
         json_c_dep,
         libkmod_dep,
     ]
@@ -542,25 +689,74 @@ if want_nvme
     if host_system == 'windows'
         link_deps += [
             kernel32_dep,
+            bcrypt_dep,
         ]
+
+        if is_static
+            # Keep these MinGW runtime dependencies in-process to avoid
+            # requiring extra DLLs in PATH for static Windows builds.
+            link_args_list += ['-Wl,-Bstatic']
+            if json_c_dep.found()
+                link_args_list += ['-ljson-c']
+            endif
+            link_args_list += ['-lwinpthread', '-Wl,-Bdynamic']
+        else
+            link_deps += [winpthread_dep]
+        endif
     else
         link_args_list = ['-ldl']
     endif
 
-    executable(
+    nvme_exe = executable(
         'nvme',
         sources,
+        include_directories: 'src',
         dependencies: link_deps,
         link_args: link_args_list,
         install: true,
         install_dir: sbindir,
     )
 
-    if host_system != 'windows'
-        subdir('unit')
+    if host_system == 'windows' and want_libnvme and (not is_static)
+        # Copy libnvme DLL next to nvme.exe so it can be found at
+        # runtime without modifying PATH.
+        cp = find_program('cp')
+        custom_target('copy-libnvme-dll',
+            input: libnvme,
+            output: fs.name(libnvme.full_path()),
+            command: [cp, '@INPUT@', '@OUTPUT@'],
+            depends: [libnvme, nvme_exe],
+            build_by_default: true,
+        )
     endif
-    if get_option('nvme-tests')
-        subdir('tests')
+
+    if get_option('e2e-tests')
+        # A standalone copy of the e2e runner, placed next to the 'nvme'
+        # binary in the build root so it can be invoked directly -- e.g.
+        # './.build/nvme-cli-e2e --controller=... ...' -- entirely
+        # independent of 'meson test'.
+        cp = find_program('cp')
+        custom_target('nvme-cli-e2e',
+            input: files('tests/nvme-cli-e2e'),
+            output: 'nvme-cli-e2e',
+            command: [cp, '@INPUT@', '@OUTPUT@'],
+            build_by_default: true,
+            install: false,
+        )
+    endif
+
+    subdir('tests')
+
+    if want_discoverd or want_keysd
+        subdir('daemon-util')
+    endif
+
+    if want_discoverd
+        subdir('discoverd')
+    endif
+
+    if want_keysd
+        subdir('keysd')
     endif
 
     configure_file(
@@ -569,91 +765,119 @@ if want_nvme
         configuration: substs,
     )
 
-    disc = configure_file(
-        input: 'etc/discovery.conf.in',
-        output: 'discovery.conf',
+    configure_file(
+        input: 'etc/nvme-fabrics.conf.sample.in',
+        output: 'nvme-fabrics.conf.sample',
         configuration: substs,
         install: true,
         install_dir: join_paths(sysconfdir, 'nvme'),
+        install_tag: 'nvmf',
     )
 
-    dracut_files = [
-        '70-nvmf-autoconnect.conf',
-    ]
+    if want_nvmf_autoconnect
+        dracut_files = [
+            '70-nvmf-autoconnect.conf',
+        ]
 
-    foreach file : dracut_files
-        configure_file(
-            input: 'nvmf-autoconnect/dracut-conf/' + file + '.in',
-            output: file,
-            configuration: substs,
-            install: true,
-            install_dir: dracutrulesdir,
-        )
-    endforeach
+        foreach file : dracut_files
+            configure_file(
+                input: 'nvmf-autoconnect/dracut-conf/' + file + '.in',
+                output: file,
+                configuration: substs,
+                install: true,
+                install_dir: dracutrulesdir,
+                install_tag: 'nvmf-autoconnect',
+            )
+        endforeach
 
-    systemd_files = [
-        'nvmefc-boot-connections.service',
-        'nvmf-autoconnect.service',
-        'nvmf-connect-nbft.service',
-        'nvmf-connect.target',
-        'nvmf-connect@.service',
-    ]
+        systemd_files = [
+            'nvmefc-boot-connections.service',
+            'nvmf-autoconnect.service',
+            'nvmf-connect-nbft.service',
+            'nvmf-connect.target',
+            'nvmf-connect@.service',
+        ]
 
-    foreach file : systemd_files
-        configure_file(
-            input: 'nvmf-autoconnect/systemd/' + file + '.in',
-            output: file,
-            configuration: substs,
-            install: true,
-            install_dir: systemddir,
-        )
-    endforeach
+        foreach file : systemd_files
+            configure_file(
+                input: 'nvmf-autoconnect/systemd/' + file + '.in',
+                output: file,
+                configuration: substs,
+                install: true,
+                install_dir: systemddir,
+                install_tag: 'nvmf-autoconnect',
+            )
+        endforeach
+    endif
 
-    udev_files = [
-        '65-persistent-net-nbft.rules',
-        '70-nvmf-autoconnect.rules',
-        '70-nvmf-keys.rules',
-        '71-nvmf-hpe.rules',
-        '71-nvmf-netapp.rules',
-        '71-nvmf-vastdata.rules',
-    ]
+    # These rules provision keys and tune vendor devices; kept regardless of
+    # which NVMe-oF autoconnect mechanism (if any) is in use.
+    udev_files = {
+        '65-persistent-net-nbft.rules': 'nvmf',
+        '70-nvmf-keys.rules':           'nvmf-autoconnect',
+        '71-nvmf-hpe.rules':            'nvmf',
+        '71-nvmf-netapp.rules':         'nvmf',
+        '71-nvmf-vastdata.rules':       'nvmf',
+    }
+    if want_nvmf_autoconnect
+        udev_files += {'70-nvmf-autoconnect.rules': 'nvmf-autoconnect'}
+    endif
 
-    foreach file : udev_files
+    foreach file, tag : udev_files
         configure_file(
             input: 'nvmf-autoconnect/udev-rules/' + file + '.in',
             output: file,
             configuration: substs,
             install: true,
-            install_dir: udevrulesdir
+            install_dir: udevrulesdir,
+            install_tag: tag,
         )
     endforeach
 
-    nm_dispatcher_files = [
-        '80-nvmf-connect-nbft.sh'
-    ]
+    if want_nvmf_autoconnect
+        nm_dispatcher_files = [
+            '80-nvmf-connect-nbft.sh'
+        ]
 
-    foreach file : nm_dispatcher_files
-        configure_file(
-            input: 'nvmf-autoconnect/nm-dispatcher/' + file + '.in',
-            output: file,
-            configuration: substs,
-            install: true,
-            install_mode: 'rwxr-xr-x',
-            install_dir: nmdispatchdir
-        )
-    endforeach
+        foreach file : nm_dispatcher_files
+            configure_file(
+                input: 'nvmf-autoconnect/nm-dispatcher/' + file + '.in',
+                output: file,
+                configuration: substs,
+                install: true,
+                install_mode: 'rwxr-xr-x',
+                install_dir: nmdispatchdir,
+                install_tag: 'nvmf-autoconnect',
+            )
+        endforeach
+    endif
 
-    install_data(
-        'completions/bash-nvme-completion.sh',
-        rename: 'nvme',
-        install_dir: datadir / 'bash-completion/completions',
-    )
-    install_data(
-        'completions/_nvme',
-        install_dir: datadir / 'zsh/site-functions',
-    )
+    subdir('completions')
 
     subdir('Documentation')
+endif
+
+if host_system == 'linux'
+    valgrind_cmd = [
+        'valgrind',
+        '--leak-check=full',
+        '--show-leak-kinds=all',
+        '--error-exitcode=1',
+        '--suppressions=' + meson.current_source_dir() / 'valgrind.supp',
+    ]
+    python3_supp = '/usr/lib/valgrind/python3.supp'
+    if fs.is_file(python3_supp)
+        valgrind_cmd += ['--suppressions=' + python3_supp]
+    endif
+
+    add_test_setup('valgrind',
+        exe_wrapper: valgrind_cmd,
+        timeout_multiplier: 5,
+    )
+
+    add_test_setup('asanubsan',
+        timeout_multiplier: 2,
+    )
 endif
 
 if doc_tgts.length() == 0
@@ -666,6 +890,19 @@ if doc_tgts.length() == 0
 endif
 
 alias_target('docs', doc_tgts)
+
+# Every installed file needs an install tag; see Documentation/BUILDING.md.
+py3_prog = find_program('python3', required: false)
+if want_tests and py3_prog.found()
+    test(
+        'nvme-cli - install-tags',
+        py3_prog,
+        args: [
+            files('scripts/check-install-tags.py'),
+            meson.project_build_root(),
+        ],
+    )
+endif
 
 
 ################################################################################
@@ -688,14 +925,19 @@ dep_dict = {
     'json-c':           json_c_dep.found(),
     'OpenSSL':          openssl_dep.found(),
     'keyutils':         keyutils_dep.found(),
+    'libarchive':       libarchive_dep.found(),
     'libdbus':          libdbus_dep.found(),
     'python3':          py3_dep.found(),
     'liburing':         liburing_dep.found(),
     'libkmod':          libkmod_dep.found(),
+    'libsystemd':       libsystemd_dep.found(),
 }
 if host_system == 'windows'
     dep_dict += {
         'kernel32':     kernel32_dep.found(),
+        'bcrypt':       bcrypt_dep.found(),
+        'setupapi':     setupapi_dep.found(),
+        'cfgmgr32':     cfgmgr32_dep.found(),
     }
 endif
 summary(dep_dict, section: 'Dependencies', bool_yn: true)
@@ -704,13 +946,30 @@ wanted_dict = {
     'nvme':             want_nvme,
     'libnvme':          want_libnvme,
     'fabrics':          want_fabrics,
+    'nvme-discoverd':   want_discoverd,
+    'mdns':             want_mdns,
+    'nvme-keysd':       want_keysd,
+    'nvmf-autoconnect': want_nvmf_autoconnect,
+    'deprecated-cmds':  want_deprecated_cmds,
     'python bindings ': want_python,
     'build docs':       want_docs_build,
 }
 summary(wanted_dict, section: 'Features to build', bool_yn: true)
 
+if want_nvme
+    plugin_dict = {
+        'core':      ', '.join(core_plugins),
+        'vendor':    ', '.join(vendor_plugins),
+        'disabled':  ', '.join(disabled_plugins),
+    }
+    summary(plugin_dict, section: 'Plugins')
+endif
+
+c_args = get_option('c_args')
+c_link_args = get_option('c_link_args')
 conf_dict = {
     'git version':      conf.get('GIT_VERSION'),
-    'pdc enabled':      get_option('pdc-enabled'),
+    'CFLAGS':           c_args.length() > 0 ? ' '.join(c_args) : '(none)',
+    'LDFLAGS':          c_link_args.length() > 0 ? ' '.join(c_link_args) : '(none)',
 }
 summary(conf_dict, section: 'Configuration', bool_yn: true)

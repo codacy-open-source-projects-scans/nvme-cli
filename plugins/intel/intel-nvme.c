@@ -1,21 +1,24 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-#include <fcntl.h>
 #include <errno.h>
+#include <fcntl.h>
+#include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
-#include <inttypes.h>
 
 #include <libnvme.h>
 
-#include "common.h"
+#include <ccan/endian/endian.h>
+#include <ccan/minmax/minmax.h>
+#include <shared/compiler-attributes-util.h>
+#include <shared/fs-util.h>
+#include <shared/parse-util.h>
+
+#include "cleanup.h"
+#include "global-ctx.h"
 #include "nvme-cmds.h"
 #include "nvme-print.h"
-#include "nvme.h"
 #include "plugin.h"
-
-#define CREATE_CMD
-#include "intel-nvme.h"
 
 struct __packed nvme_additional_smart_log_item {
 	__u8			key;
@@ -256,6 +259,7 @@ show_intel_smart_log_jsn(struct nvme_additional_smart_log *smart,
 	json_object_add_value_object(root, "Device stats", dev_stats);
 
 	json_print_object(root, NULL);
+	printf("\n");
 	json_free_object(root);
 }
 
@@ -787,6 +791,7 @@ static void json_lat_stats_3_0(struct intel_lat_stats *stats, int write)
 	json_lat_stats_linear(stats, bucket_list, 388, 391, 4, 32, true);
 
 	json_print_object(root, NULL);
+	printf("\n");
 	json_free_object(root);
 }
 
@@ -814,6 +819,7 @@ static void json_lat_stats_4_0(struct intel_lat_stats *stats, int write)
 			end ? POSINF : NOINF, stats->data[i]);
 	}
 	json_print_object(root, NULL);
+	printf("\n");
 	json_free_object(root);
 }
 
@@ -891,6 +897,7 @@ static void json_lat_stats_v1000_0(struct optane_lat_stats *stats, int write)
 	json_object_add_value_uint(subroot, "value in us", stats->data[8]);
 
 	json_print_object(root, NULL);
+	printf("\n");
 	json_free_object(root);
 
 }
@@ -944,7 +951,7 @@ static void json_lat_stats(int write)
 			json_lat_stats_4_0(&stats, write);
 			break;
 		default:
-			printf("Unsupported minor revision (%u.%u)\n",
+			nvme_show_error("Unsupported minor revision (%u.%u)",
 				stats.maj, stats.min);
 			break;
 		}
@@ -955,13 +962,13 @@ static void json_lat_stats(int write)
 			json_lat_stats_v1000_0(&v1000_stats, write);
 			break;
 		default:
-			printf("Unsupported minor revision (%u.%u)\n",
+			nvme_show_error("Unsupported minor revision (%u.%u)",
 				stats.maj, stats.min);
 			break;
 		}
 		break;
 	default:
-		printf("Unsupported revision (%u.%u)\n",
+		nvme_show_error("Unsupported revision (%u.%u)",
 			stats.maj, stats.min);
 		break;
 	}
@@ -1004,7 +1011,7 @@ static void show_lat_stats(int write)
 			show_lat_stats_4_0(&stats);
 			break;
 		default:
-			printf("Unsupported minor revision (%u.%u)\n",
+			nvme_show_error("Unsupported minor revision (%u.%u)",
 				stats.maj, stats.min);
 			break;
 		}
@@ -1015,13 +1022,13 @@ static void show_lat_stats(int write)
 			show_lat_stats_v1000_0(&v1000_stats, write);
 			break;
 		default:
-			printf("Unsupported minor revision (%u.%u)\n",
+			nvme_show_error("Unsupported minor revision (%u.%u)",
 				stats.maj, stats.min);
 			break;
 		}
 		break;
 	default:
-		printf("Unsupported revision (%u.%u)\n",
+		nvme_show_error("Unsupported revision (%u.%u)",
 				stats.maj, stats.min);
 		break;
 	}
@@ -1087,7 +1094,7 @@ static int get_lat_stats_log(int argc, char **argv, struct command *acmd, struct
 				0, thresholds, sizeof(thresholds),
 				&result);
 		if (err) {
-			fprintf(stderr, "Querying thresholds failed. ");
+			nvme_show_error("Querying thresholds failed. ");
 			nvme_show_status(err);
 			return err;
 		}
@@ -1234,9 +1241,9 @@ static int read_entire_cmd(struct libnvme_passthru_cmd *cmd, int total_size,
 
 	dword_tfer = min(max_tfer, total_size);
 	while (total_size > 0) {
-		err = libnvme_submit_admin_passthru(hdl, cmd);
+		err = libnvme_exec_admin_passthru(hdl, cmd);
 		if (err) {
-			fprintf(stderr,
+			nvme_show_error(
 				"failed on cmd.data_len %u cmd.cdw13 %u cmd.cdw12 %x cmd.cdw10 %u err %x remaining size %d\n",
 				cmd->data_len, cmd->cdw13, cmd->cdw12,
 				cmd->cdw10, err, total_size);
@@ -1246,7 +1253,7 @@ static int read_entire_cmd(struct libnvme_passthru_cmd *cmd, int total_size,
 		if (out_fd > 0) {
 			err = write(out_fd, buf, cmd->data_len);
 			if (err < 0) {
-				perror("write failure");
+				nvme_show_perror("write failure");
 				goto out;
 			}
 			err = 0;
@@ -1278,16 +1285,18 @@ static int read_header(struct libnvme_passthru_cmd *cmd, __u8 *buf,
 	cmd->cdw10 = 0x400;
 	cmd->cdw12 = dw12;
 	cmd->data_len = 0x1000;
-	cmd->addr = (unsigned long)(void *)buf;
+	cmd->addr = (uintptr_t)(void *)buf;
 	return read_entire_cmd(cmd, 0x400, 0x400, -1, hdl, buf);
 }
 
 static int setup_file(char *f, char *file, struct libnvme_transport_handle *hdl, int type)
 {
 	struct nvme_id_ctrl ctrl;
+	struct libnvme_passthru_cmd cmd;
 	int err = 0, i = sizeof(ctrl.sn) - 1;
 
-	err = nvme_identify_ctrl(hdl, &ctrl);
+	nvme_init_identify_ctrl(&cmd, &ctrl);
+	err = libnvme_exec_admin_passthru(hdl, &cmd);
 	if (err)
 		return err;
 
@@ -1319,7 +1328,7 @@ static int get_internal_log_old(__u8 *buf, int output,
 
 	err = write(output, buf, 0x1000);
 	if (err < 0) {
-		perror("write failure");
+		nvme_show_perror("write failure");
 		goto out;
 	}
 	intel->size -= 0x400;
@@ -1343,10 +1352,10 @@ static int get_internal_log(int argc, char **argv, struct command *acmd,
 	int err, output, i, j, count = 0, core_num = 1;
 	struct libnvme_passthru_cmd cmd;
 	struct intel_cd_log cdlog;
-	struct intel_vu_log *intel = malloc(sizeof(struct intel_vu_log));
 	struct intel_vu_nlog *intel_nlog = (struct intel_vu_nlog *)buf;
-	struct intel_assert_dump *ad = (struct intel_assert_dump *) intel->reserved;
-	struct intel_event_header *ehdr = (struct intel_event_header *)intel->reserved;
+	struct intel_assert_dump *ad;
+	struct intel_event_header *ehdr;
+	__cleanup_free struct intel_vu_log *intel = NULL;
 	__cleanup_nvme_global_ctx struct libnvme_global_ctx *ctx = NULL;
 	__cleanup_nvme_transport_handle struct libnvme_transport_handle *hdl = NULL;
 
@@ -1379,14 +1388,19 @@ static int get_internal_log(int argc, char **argv, struct command *acmd,
 		OPT_INT("region",        'r', &cfg.core,         core),
 		OPT_INT("nlognum",       'm', &cfg.lnum,         nlognum),
 		OPT_UINT("namespace-id", 'n', &cfg.namespace_id, namespace_id),
-		OPT_FILE("output-file",  'o', &cfg.file,         file),
-		OPT_FLAG("verbose-nlog", 'v', &cfg.verbose,      verbose));
+		OPT_FILE("output-file",  'O', &cfg.file,         file),
+		OPT_FLAG("verbose-nlog", 'V', &cfg.verbose,      verbose));
 
 	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
-	if (err) {
-		free(intel);
+	if (err)
 		return err;
-	}
+
+	intel = malloc(sizeof(*intel));
+	if (!intel)
+		return -ENOMEM;
+
+	ad = (struct intel_assert_dump *)intel->reserved;
+	ehdr = (struct intel_event_header *)intel->reserved;
 
 	if (cfg.log > 2 || cfg.core > 4 || cfg.lnum > 255) {
 		err = -EINVAL;
@@ -1406,7 +1420,7 @@ static int get_internal_log(int argc, char **argv, struct command *acmd,
 	cdlog.u.fields.selectCore = cfg.core < 0 ? 0 : cfg.core;
 	cdlog.u.fields.selectNlog = cfg.lnum < 0 ? 0 : cfg.lnum;
 
-	output = open(cfg.file, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+	output = shr_open_rawdata(cfg.file, O_WRONLY | O_CREAT | O_TRUNC, 0666);
 	if (output < 0) {
 		err = output;
 		goto out_free;
@@ -1421,7 +1435,7 @@ static int get_internal_log(int argc, char **argv, struct command *acmd,
 	/* for 1.1 Fultondales will use old nlog, but current assert/event */
 	if ((intel->ver.major < 1 && intel->ver.minor < 1) ||
 	    (intel->ver.major <= 1 && intel->ver.minor <= 1 && cfg.log == 0)) {
-		cmd.addr = (unsigned long)(void *)buf;
+		cmd.addr = (uintptr_t)(void *)buf;
 		err = get_internal_log_old(buf, output, hdl, &cmd);
 		goto out;
 	}
@@ -1434,7 +1448,7 @@ static int get_internal_log(int argc, char **argv, struct command *acmd,
 
 		err = write_header(buf, output, 0x1000);
 		if (err) {
-			perror("write failure");
+			nvme_show_perror("write failure");
 			goto out;
 		}
 
@@ -1511,16 +1525,12 @@ static int get_internal_log(int argc, char **argv, struct command *acmd,
 	}
 	err = 0;
 out:
-	if (err > 0) {
-		nvme_show_status(err);
-	} else if (err < 0) {
-		perror("intel log");
-		err = EIO;
-	} else
-		printf("Successfully wrote log to %s\n", cfg.file);
+	if (err)
+		nvme_show_err(err, "intel log");
+	else
+		nvme_show_verbose_result("Successfully wrote log to %s", cfg.file);
 	close(output);
 out_free:
-	free(intel);
 	return err;
 }
 
@@ -1571,7 +1581,7 @@ static int enable_lat_stats_tracking(int argc, char **argv,
 	enum Option option = None;
 
 	if (cfg.enable && cfg.disable)
-		printf("Cannot enable and disable simultaneously.");
+		nvme_show_error("Cannot enable and disable simultaneously.");
 	else if (cfg.enable || cfg.disable)
 		option = cfg.enable;
 
@@ -1587,7 +1597,7 @@ static int enable_lat_stats_tracking(int argc, char **argv,
 				"Latency Statistics Tracking (FID 0x%X) is currently (%"PRIu64").\n",
 				fid, (uint64_t)result);
 		} else {
-			printf("Could not read feature id 0xE2.\n");
+			nvme_show_error("Could not read feature id 0xE2.");
 			return err;
 		}
 		break;
@@ -1595,18 +1605,15 @@ static int enable_lat_stats_tracking(int argc, char **argv,
 	case False:
 		err = nvme_set_features(hdl, nsid, fid, sv, option, cdw12, 0, 0, 0, buf,
 				data_len, &result);
-		if (err > 0) {
-			nvme_show_status(err);
-		} else if (err < 0) {
-			perror("Enable latency tracking");
-			fprintf(stderr, "Command failed while parsing.\n");
+		if (err) {
+			nvme_show_err(err, "Enable latency tracking");
 		} else {
-			printf("Successfully set enable bit for FID (0x%X) to %i.\n",
+			nvme_show_verbose_result("Successfully set enable bit for FID (0x%X) to %i.",
 				fid, option);
 		}
 		break;
 	default:
-		printf("%d not supported.\n", option);
+		nvme_show_error("%d not supported.", option);
 		return -EINVAL;
 	}
 	return err;
@@ -1655,7 +1662,7 @@ static int set_lat_stats_thresholds(int argc, char **argv,
 	err = nvme_get_log_simple(hdl, 0xc2,
 				  media_version, sizeof(media_version));
 	if (err) {
-		fprintf(stderr, "Querying media version failed. ");
+		nvme_show_error("Querying media version failed. ");
 		nvme_show_status(err);
 		goto close_dev;
 	}
@@ -1663,11 +1670,11 @@ static int set_lat_stats_thresholds(int argc, char **argv,
 	if (media_version[0] == 1000) {
 		int thresholds[OPTANE_V1000_BUCKET_LEN] = {0};
 
-		num = argconfig_parse_comma_sep_array(cfg.bucket_thresholds,
+		num = shr_parse_csv_int(cfg.bucket_thresholds,
 						      thresholds,
 						      sizeof(thresholds));
 		if (num == -1) {
-			fprintf(stderr, "ERROR: Bucket list is malformed\n");
+			nvme_show_error("ERROR: Bucket list is malformed");
 			goto close_dev;
 
 		}
@@ -1675,17 +1682,85 @@ static int set_lat_stats_thresholds(int argc, char **argv,
 		err = nvme_set_features(hdl, nsid, fid, sv, cfg.write ? 0x1 : 0x0, cdw12,
 				0, 0, 0, thresholds, sizeof(thresholds), &result);
 
-		if (err > 0) {
-			nvme_show_status(err);
-		} else if (err < 0) {
-			perror("Enable latency tracking");
-			fprintf(stderr, "Command failed while parsing.\n");
-		}
+		if (err)
+			nvme_show_err(err, "Enable latency tracking");
 	} else {
-		fprintf(stderr, "Unsupported command\n");
+		nvme_show_error("Unsupported command");
 	}
 
 close_dev:
 	return err;
+}
+
+static struct command id_ctrl_cmd = {
+	.name = "id-ctrl",
+	.help = "Send NVMe Identify Controller",
+	.fn = id_ctrl,
+};
+
+static struct command get_internal_log_cmd = {
+	.name = "internal-log",
+	.help = "Retrieve Intel internal firmware log, save it",
+	.fn = get_internal_log,
+};
+
+static struct command get_lat_stats_log_cmd = {
+	.name = "lat-stats",
+	.help = "Retrieve Intel IO Latency Statistics log, show it",
+	.fn = get_lat_stats_log,
+};
+
+static struct command set_lat_stats_thresholds_cmd = {
+	.name = "set-bucket-thresholds",
+	.help = "Set Latency Stats Bucket Values, save it",
+	.fn = set_lat_stats_thresholds,
+};
+
+static struct command enable_lat_stats_tracking_cmd = {
+	.name = "lat-stats-tracking",
+	.help = "Enable and disable Latency Statistics logging.",
+	.fn = enable_lat_stats_tracking,
+};
+
+static struct command get_market_log_cmd = {
+	.name = "market-name",
+	.help = "Retrieve Intel Marketing Name log, show it",
+	.fn = get_market_log,
+};
+
+static struct command get_additional_smart_log_cmd = {
+	.name = "smart-log-add",
+	.help = "Retrieve Intel SMART Log, show it",
+	.fn = get_additional_smart_log,
+};
+
+static struct command get_temp_stats_log_cmd = {
+	.name = "temp-stats",
+	.help = "Retrieve Intel Temperature Statistics log, show it",
+	.fn = get_temp_stats_log,
+};
+
+static struct command *commands[] = {
+	&id_ctrl_cmd,
+	&get_internal_log_cmd,
+	&get_lat_stats_log_cmd,
+	&set_lat_stats_thresholds_cmd,
+	&enable_lat_stats_tracking_cmd,
+	&get_market_log_cmd,
+	&get_additional_smart_log_cmd,
+	&get_temp_stats_log_cmd,
+	NULL,
+};
+
+static struct plugin plugin = {
+	.name = "intel",
+	.desc = "Intel vendor specific extensions",
+	.version = NVME_VERSION,
+};
+
+static void __shr_constructor register_plugin(void)
+{
+	plugin_add_group(&plugin, NULL, commands);
+	register_extension(&plugin);
 }
 

@@ -6,7 +6,7 @@ Example script for nvme discovery
 
 import sys
 import pprint
-from libnvme import nvme
+from libnvme3 import nvme
 
 def disc_supp_str(dlp_supp_opts):
     d = {
@@ -16,23 +16,23 @@ def disc_supp_str(dlp_supp_opts):
     }
     return [txt for msk, txt in d.items() if dlp_supp_opts & msk]
 
-def discover(host, ctrl, iteration):
+def discover(ctx, host, ctrl, iteration):
     # Only 8 levels of indirection are supported
     if iteration > 8:
         return
 
     try:
         ctrl.connect(host)
-    except Exception as e:
+    except nvme.ConnectError as e:
         print(f'Failed to connect: {e}')
         return
 
     print(f'{ctrl.name} connected to {ctrl.subsystem}')
 
-    slp = ctrl.supported_log_pages()
     try:
+        slp = ctrl.get_supported_log_pages()
         dlp_supp_opts = slp[nvme.NVME_LOG_LID_DISCOVERY] >> 16
-    except (TypeError, IndexError):
+    except (nvme.NvmeError, IndexError, TypeError):
         dlp_supp_opts = 0
 
     print(f"LID {nvme.NVME_LOG_LID_DISCOVERY}h (Discovery), supports: {disc_supp_str(dlp_supp_opts)}")
@@ -40,7 +40,7 @@ def discover(host, ctrl, iteration):
     try:
         lsp = nvme.NVMF_LOG_DISC_LSP_PLEO if dlp_supp_opts & nvme.NVMF_LOG_DISC_LID_PLEOS else 0
         disc_log = ctrl.discover(lsp=lsp)
-    except Exception as e:
+    except nvme.DiscoverError as e:
         print(f'Failed to discover: {e}')
         return
 
@@ -51,19 +51,25 @@ def discover(host, ctrl, iteration):
         if dlpe['subtype'] == 'discovery' and dlpe['subnqn'] == nvme.NVME_DISC_SUBSYS_NAME:
             continue
         print(f'{iteration}: {dlpe["subtype"]} {dlpe["subnqn"]}')
-        with nvme.ctrl(root, subsysnqn=dlpe['subnqn'], transport=dlpe['trtype'], traddr=dlpe['traddr'], trsvcid=dlpe['trsvcid']) as new_ctrl:
-            discover(host, new_ctrl, iteration + 1)
+        with nvme.Ctrl(ctx, subsysnqn=dlpe['subnqn'], transport=dlpe['trtype'], traddr=dlpe['traddr'], trsvcid=dlpe['trsvcid']) as new_ctrl:
+            discover(ctx, host, new_ctrl, iteration + 1)
 
-root = nvme.root()
-host = nvme.host(root)
+ctx = nvme.GlobalCtx()
 
+# scan_topology() is optional. It parses sysfs and builds a tree of the
+# Host, Subsystem and Ctrl objects that already exist. With that tree in
+# place, the controller created below inherits configuration from a peer
+# controller on the same subsystem.
+ctx.scan_topology()
+
+host = nvme.Host(ctx)
 subsysnqn = nvme.NVME_DISC_SUBSYS_NAME
 transport = 'tcp'
 traddr = '127.0.0.1'
 trsvcid = '4420'
 
-with nvme.ctrl(root, subsysnqn=subsysnqn, transport=transport, traddr=traddr, trsvcid=trsvcid) as ctrl:
-    discover(host, ctrl, 0)
+with nvme.Ctrl(ctx, subsysnqn=subsysnqn, transport=transport, traddr=traddr, trsvcid=trsvcid) as ctrl:
+    discover(ctx, host, ctrl, 0)
 
 for s in host.subsystems():
     for c in s.controllers():

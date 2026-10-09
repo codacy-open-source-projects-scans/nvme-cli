@@ -1,22 +1,23 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-#include <fcntl.h>
 #include <errno.h>
+#include <fcntl.h>
+#include <inttypes.h>
+#include <stdbool.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
-#include <stddef.h>
-#include <inttypes.h>
-#include <stdbool.h>
 
 #include <libnvme.h>
 
+#include <shared/compiler-attributes-util.h>
+#include <shared/fs-util.h>
+
+#include "cleanup.h"
+#include "global-ctx.h"
 #include "nvme-cmds.h"
 #include "nvme-print.h"
-#include "nvme.h"
 #include "plugin.h"
-
-#define CREATE_CMD
-#include "toshiba-nvme.h"
 
 static const __u32 OP_SCT_STATUS = 0xE0;
 static const __u32 OP_SCT_COMMAND_TRANSFER = 0xE0;
@@ -59,34 +60,32 @@ static int nvme_sct_op(struct libnvme_transport_handle *hdl, __u32 opcode,
 		.data_len	= data_len,
 		.addr		= (__u64)(uintptr_t)data,
 	};
-	return libnvme_submit_admin_passthru(hdl, &cmd);
+	return libnvme_exec_admin_passthru(hdl, &cmd);
 }
 
 static int nvme_get_sct_status(struct libnvme_transport_handle *hdl, __u32 device_mask)
 {
 	int err;
-	void *data = NULL;
+	__cleanup_libnvme_free void *data = NULL;
 	size_t data_len = 512;
 	unsigned char *status;
 	__u32 supported = 0;
 
-	if (posix_memalign(&data, getpagesize(), data_len))
+	data = libnvme_alloc(data_len);
+	if (!data)
 		return -ENOMEM;
 
-	memset(data, 0, data_len);
 	err = nvme_sct_op(hdl, OP_SCT_STATUS, DW10_SCT_STATUS_COMMAND, DW11_SCT_STATUS_COMMAND, data, data_len);
 	if (err) {
-		fprintf(stderr, "%s: SCT status failed :%d\n", __func__, err);
-		goto end;
+		nvme_show_error("%s: SCT status failed :%d", __func__, err);
+		return err;
 	}
 
 	status = data;
 	if (status[0] != 1U) {
 		/* Eek, wrong version in status header */
-		fprintf(stderr, "%s: unexpected value in SCT status[0]:(%x)\n", __func__, status[0]);
-		err = -1;
-		errno = EINVAL;
-		goto end;
+		nvme_show_error("%s: unexpected value in SCT status[0]:(%x)", __func__, status[0]);
+		return -EINVAL;
 	}
 
 	/* Check if device is supported */
@@ -103,21 +102,18 @@ static int nvme_get_sct_status(struct libnvme_transport_handle *hdl, __u32 devic
 		};
 
 		if (!supported) {
-			fprintf(stderr, "%s: command unsupported on this device: (0x%x)\n", __func__, status[1]);
-			err = -1;
-			errno = EINVAL;
-			goto end;
+			nvme_show_error("%s: command unsupported on this device: (0x%x)", __func__, status[1]);
+			return -EINVAL;
 		}
 	}
-end:
-	free(data);
-	return err;
+
+	return 0;
 }
 
 static int nvme_sct_command_transfer_log(struct libnvme_transport_handle *hdl, bool current)
 {
 	int err;
-	void *data = NULL;
+	__cleanup_libnvme_free void *data = NULL;
 	size_t data_len = 512;
 	__u16 function_code, action_code = INTERNAL_LOG_ACTION_CODE;
 
@@ -126,15 +122,14 @@ static int nvme_sct_command_transfer_log(struct libnvme_transport_handle *hdl, b
 	else
 		function_code = SAVED_LOG_FUNCTION_CODE;
 
-	if (posix_memalign(&data, getpagesize(), data_len))
+	data = libnvme_alloc(data_len);
+	if (!data)
 		return -ENOMEM;
 
-	memset(data, 0, data_len);
 	memcpy(data, &action_code, sizeof(action_code));
 	memcpy(data + 2, &function_code, sizeof(function_code));
 
 	err = nvme_sct_op(hdl, OP_SCT_COMMAND_TRANSFER, DW10_SCT_COMMAND_TRANSFER, DW11_SCT_COMMAND_TRANSFER, data, data_len);
-	free(data);
 	return err;
 }
 
@@ -202,7 +197,7 @@ static int nvme_get_internal_log(struct libnvme_transport_handle *hdl,
 {
 	int err;
 	int o_fd = -1;
-	void *page_data = NULL;
+	__cleanup_libnvme_free void *page_data = NULL;
 	const size_t page_sector_len = 32;
 	const size_t page_data_len = page_sector_len * 512; /* 32 sectors per page */
 	uint32_t *area1_last_page;
@@ -222,20 +217,20 @@ static int nvme_get_internal_log(struct libnvme_transport_handle *hdl,
 
 	err = nvme_sct_command_transfer_log(hdl, current);
 	if (err) {
-		fprintf(stderr, "%s: SCT command transfer failed\n", __func__);
+		nvme_show_error("%s: SCT command transfer failed", __func__);
 		goto end;
 	}
 
-	if (posix_memalign(&page_data, getpagesize(), max_pages * page_data_len)) {
+	page_data = libnvme_alloc(max_pages * page_data_len);
+	if (!page_data) {
 		err = ENOMEM;
 		goto end;
 	}
-	memset(page_data, 0, max_pages * page_data_len);
 
 	/* Read the header to get the last log page - offsets 8->11, 12->15, 16->19 */
 	err = nvme_sct_data_transfer(hdl, page_data, page_data_len, 0);
 	if (err) {
-		fprintf(stderr, "%s: SCT data transfer failed, page 0\n", __func__);
+		nvme_show_error("%s: SCT data transfer failed, page 0", __func__);
 		goto end;
 	}
 
@@ -258,15 +253,15 @@ static int nvme_get_internal_log(struct libnvme_transport_handle *hdl,
 		d(page_data, page_data_len, 16, 1);
 	} else {
 		progress_runner(progress);
-		o_fd = open(filename, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+		o_fd = shr_open_rawdata(filename, O_WRONLY | O_CREAT | O_TRUNC, 0666);
 		if (o_fd < 0) {
-			fprintf(stderr, "%s: couldn't output file %s\n", __func__, filename);
+			nvme_show_error("%s: couldn't output file %s", __func__, filename);
 			err = -EINVAL;
 			goto end;
 		}
 		err = d_raw_to_fd(page_data, page_data_len, o_fd);
 		if (err) {
-			fprintf(stderr, "%s: couldn't write all data to output file\n", __func__);
+			nvme_show_error("%s: couldn't write all data to output file", __func__);
 			goto end;
 		}
 	}
@@ -281,7 +276,7 @@ static int nvme_get_internal_log(struct libnvme_transport_handle *hdl,
 					     pages_chunk * page_data_len,
 					     i * page_sector_len);
 		if (err) {
-			fprintf(stderr, "%s: SCT data transfer command failed\n", __func__);
+			nvme_show_error("%s: SCT data transfer command failed", __func__);
 			goto end;
 		}
 
@@ -296,7 +291,7 @@ static int nvme_get_internal_log(struct libnvme_transport_handle *hdl,
 			progress_runner(progress);
 			err = d_raw_to_fd(page_data, pages_chunk * page_data_len, o_fd);
 			if (err) {
-				fprintf(stderr, "%s: couldn't write all data to output file\n",
+				nvme_show_error("%s: couldn't write all data to output file",
 					__func__);
 				goto end;
 			}
@@ -308,13 +303,12 @@ static int nvme_get_internal_log(struct libnvme_transport_handle *hdl,
 	fprintf(stdout, "\n");
 	err = nvme_get_sct_status(hdl, MASK_IGNORE);
 	if (err) {
-		fprintf(stderr, "%s: bad SCT status\n", __func__);
+		nvme_show_error("%s: bad SCT status", __func__);
 		goto end;
 	}
 end:
 	if (o_fd >= 0)
 		close(o_fd);
-	free(page_data);
 	return err;
 }
 
@@ -366,52 +360,49 @@ static int nvme_get_vendor_log(struct libnvme_transport_handle *hdl,
 			       const char *const filename)
 {
 	int err;
-	void *log = NULL;
+	__cleanup_libnvme_free void *log = NULL;
+	struct libnvme_passthru_cmd cmd;
 	size_t log_len = 512;
 
-	if (posix_memalign(&log, getpagesize(), log_len)) {
-		err = ENOMEM;
-		goto end;
-	}
+	log = libnvme_alloc(log_len);
+	if (!log)
+		return -ENOMEM;
 
 	/* Check device supported */
 	err = nvme_get_sct_status(hdl, MASK_0 | MASK_1);
 	if (err)
-		goto end;
-	err = nvme_get_nsid_log(hdl, namespace_id, false, log_page,
-				log, log_len);
+		return err;
+
+	nvme_init_get_log(&cmd, namespace_id, log_page, NVME_CSI_NVM, log, log_len);
+	err = libnvme_get_log(hdl, &cmd, false, NVME_LOG_PAGE_PDU_SIZE);
 	if (err) {
-		fprintf(stderr, "%s: couldn't get log 0x%x\n", __func__,
+		nvme_show_error("%s: couldn't get log 0x%x", __func__,
 			log_page);
-		goto end;
+		return err;
 	}
 	if (filename) {
-		int o_fd = open(filename, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+		int o_fd = shr_open_rawdata(filename, O_WRONLY | O_CREAT | O_TRUNC, 0666);
 
 		if (o_fd < 0) {
-			fprintf(stderr, "%s: couldn't output file %s\n",
+			nvme_show_error("%s: couldn't output file %s",
 				__func__, filename);
-			err = -EINVAL;
-			goto end;
+			return -EINVAL;
 		}
 		err = d_raw_to_fd(log, log_len, o_fd);
 		if (err) {
-			fprintf(stderr, "%s: couldn't write all data to output file %s\n",
+			nvme_show_error("%s: couldn't write all data to output file %s",
 				__func__, filename);
 			/* Attempt following close */
 		}
-		if (close(o_fd)) {
-			err = errno;
-			goto end;
-		}
+		if (close(o_fd))
+			return -errno;
 	} else {
 		if (log_page == 0xc0)
 			default_show_vendor_log_c0(hdl, namespace_id, log);
 		else
 			d(log, log_len, 16, 1);
 	}
-end:
-	free(log);
+
 	return err;
 }
 
@@ -439,17 +430,17 @@ static int vendor_log(int argc, char **argv, struct command *acmd, struct plugin
 
 	NVME_ARGS(opts,
 		OPT_UINT("namespace-id", 'n', &cfg.namespace_id, namespace),
-		OPT_FILE("output-file",  'o', &cfg.output_file,  output_file),
+		OPT_FILE("output-file",  'O', &cfg.output_file,  output_file),
 		OPT_UINT("log",          'l', &cfg.log,          log));
 
 	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err) {
-		fprintf(stderr, "%s: failed to parse arguments\n", __func__);
+		nvme_show_error("%s: failed to parse arguments", __func__);
 		return -EINVAL;
 	}
 
 	if ((cfg.log != 0xC0) && (cfg.log != 0xCA)) {
-		fprintf(stderr, "%s: invalid log page 0x%x - should be 0xC0 or 0xCA\n", __func__, cfg.log);
+		nvme_show_error("%s: invalid log page 0x%x - should be 0xC0 or 0xCA", __func__, cfg.log);
 		err = -EINVAL;
 		goto end;
 	}
@@ -457,7 +448,7 @@ static int vendor_log(int argc, char **argv, struct command *acmd, struct plugin
 	err = nvme_get_vendor_log(hdl, cfg.namespace_id, cfg.log,
 				  cfg.output_file);
 	if (err)
-		fprintf(stderr, "%s: couldn't get vendor log 0x%x\n", __func__, cfg.log);
+		nvme_show_error("%s: couldn't get vendor log 0x%x", __func__, cfg.log);
 end:
 	if (err > 0)
 		nvme_show_status(err);
@@ -485,12 +476,12 @@ static int internal_log(int argc, char **argv, struct command *acmd, struct plug
 	};
 
 	NVME_ARGS(opts,
-		OPT_FILE("output-file", 'o', &cfg.output_file, output_file),
+		OPT_FILE("output-file", 'O', &cfg.output_file, output_file),
 		OPT_FLAG("prev-log", 'p', &cfg.prev_log, prev_log));
 
 	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err) {
-		fprintf(stderr, "%s: failed to parse arguments\n", __func__);
+		nvme_show_error("%s: failed to parse arguments", __func__);
 		return -EINVAL;
 	}
 
@@ -502,7 +493,7 @@ static int internal_log(int argc, char **argv, struct command *acmd, struct plug
 	err = nvme_get_internal_log_file(hdl, cfg.output_file,
 					 !cfg.prev_log);
 	if (err < 0)
-		fprintf(stderr, "%s: couldn't get fw log\n", __func__);
+		nvme_show_error("%s: couldn't get fw log", __func__);
 	if (err > 0)
 		nvme_show_status(err);
 
@@ -527,7 +518,7 @@ static int clear_correctable_errors(int argc, char **argv, struct command *acmd,
 
 	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err) {
-		fprintf(stderr, "%s: failed to parse arguments\n", __func__);
+		nvme_show_error("%s: failed to parse arguments", __func__);
 		return -EINVAL;
 	}
 
@@ -539,11 +530,48 @@ static int clear_correctable_errors(int argc, char **argv, struct command *acmd,
 	err = nvme_set_features(hdl, namespace_id, feature_id, save, value, cdw12,
 			0, 0, 0, NULL, 0, &result);
 	if (err)
-		fprintf(stderr, "%s: couldn't clear PCIe correctable errors\n",
+		nvme_show_error("%s: couldn't clear PCIe correctable errors",
 			__func__);
 end:
 	if (err > 0)
 		nvme_show_status(err);
 
 	return err;
+}
+
+static struct command vendor_log_cmd = {
+	.name = "vs-smart-add-log",
+	.help = "Extended SMART information",
+	.fn = vendor_log,
+};
+
+static struct command internal_log_cmd = {
+	.name = "vs-internal-log",
+	.help = "Get Internal Log",
+	.fn = internal_log,
+};
+
+static struct command clear_correctable_errors_cmd = {
+	.name = "clear-pcie-correctable-errors",
+	.help = "Clear PCIe correctable error count",
+	.fn = clear_correctable_errors,
+};
+
+static struct command *commands[] = {
+	&vendor_log_cmd,
+	&internal_log_cmd,
+	&clear_correctable_errors_cmd,
+	NULL,
+};
+
+static struct plugin plugin = {
+	.name = "toshiba",
+	.desc = "Toshiba NVME plugin",
+	.version = NVME_VERSION,
+};
+
+static void __shr_constructor register_plugin(void)
+{
+	plugin_add_group(&plugin, NULL, commands);
+	register_extension(&plugin);
 }

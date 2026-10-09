@@ -4,12 +4,11 @@
  *
  * Author: leonardo.da.cunha@solidigm.com
  */
-#include "common.h"
-#include "telemetry-log.h"
-#include "util/json.h"
 #include "config.h"
 #include "data-area.h"
+#include "nvme-json.h"
 #include "skht.h"
+#include "telemetry-log.h"
 
 #define TRACKER_CHUNK_SIZE 4096
 #define MAX_ARGS 31
@@ -52,7 +51,7 @@ static struct json_object *get_tracker_entry_info(struct json_object *config, ui
 	// Convert tracker_id to string for JSON key lookup
 	snprintf(tracker_id_str, sizeof(tracker_id_str), "%u", tracker_id);
 
-	// Navigate through JSON hierarchy
+	// Navigate through JSON hierarchy or skip if any level is missing
 	if (!json_object_object_get_ex(config, "Tracker", &tracker_obj))
 		return NULL;
 
@@ -86,7 +85,7 @@ static uint32_t get_struct_size_from_config(struct json_object *struct_def)
 	uint32_t size_bits = 0;
 
 	if (!struct_def) {
-		SOLIDIGM_LOG_WARNING("Cannot get size from NULL structure definition");
+		SOLIDIGM_LOG_WARNING("Warning: NULL structure definition");
 		return 0;
 	}
 
@@ -97,7 +96,7 @@ static uint32_t get_struct_size_from_config(struct json_object *struct_def)
 		return size_bits / 8;
 	}
 
-	SOLIDIGM_LOG_WARNING("Structure definition missing 'sizeBit' property");
+	SOLIDIGM_LOG_WARNING("Warning: 'sizeBit' property missing");
 	return 0;
 }
 
@@ -115,16 +114,24 @@ static void parse_tracker_chunk_json(const struct telemetry_log *tl, uint32_t ch
 	struct json_object *metadata_obj = NULL;
 	struct json_object *config = tl->configuration;
 
-	// Get structure definitions from the config - all are required for dynamic parsing
 	if (!sldm_config_get_struct_by_key_version(config,
-		"ablist_context_t", SKT_VER_MAJOR, SKT_VER_MINOR, &ablist_context_def) ||
-		!sldm_config_get_struct_by_key_version(config,
-		"ablist_entry_t", SKT_VER_MAJOR, SKT_VER_MINOR, &ablist_entry_def) ||
-		!sldm_config_get_struct_by_key_version(config,
-		"tracker_entry_t", SKT_VER_MAJOR, SKT_VER_MINOR, &tracker_entry_def)) {
+		"ablist_context_t", SKT_VER_MAJOR, SKT_VER_MINOR,
+		&ablist_context_def)) {
+		SOLIDIGM_LOG_WARNING("Warning: ablist_context_t missing");
+		return;
+	}
 
-		SOLIDIGM_LOG_WARNING(
-			"Required structure definitions missing from config");
+	if (!sldm_config_get_struct_by_key_version(config,
+		"ablist_entry_t", SKT_VER_MAJOR, SKT_VER_MINOR,
+		&ablist_entry_def)) {
+		SOLIDIGM_LOG_WARNING("Warning: ablist_entry_t object missing");
+		return;
+	}
+
+	if (!sldm_config_get_struct_by_key_version(config,
+		"tracker_entry_t", SKT_VER_MAJOR, SKT_VER_MINOR,
+		&tracker_entry_def)) {
+		SOLIDIGM_LOG_WARNING("Warning: tracker_entry_t object missing");
 		return;
 	}
 
@@ -134,7 +141,7 @@ static void parse_tracker_chunk_json(const struct telemetry_log *tl, uint32_t ch
 
 	if (sldm_telemetry_structure_parse(tl, ablist_context_def, chunk_offset * 8,
 				     ctx_obj, metadata_obj) != 0) {
-		SOLIDIGM_LOG_WARNING("Failed to parse ablist_context_t using dynamic parsing");
+		SOLIDIGM_LOG_WARNING("Warning: ablist_context_t parse failed");
 		json_object_put(ctx_obj);
 		json_object_put(metadata_obj);
 		return;
@@ -153,22 +160,22 @@ static void parse_tracker_chunk_json(const struct telemetry_log *tl, uint32_t ch
 			signature = (uint32_t) json_object_get_int64(sig_obj);
 		else
 			SOLIDIGM_LOG_WARNING(
-				"Failed to find 'signature' field in ablist_context_t");
+				"Warning: ablist_context_t.signature missing");
 
 		if (json_object_object_get_ex(ablist_context_obj, "data_start_offset",
 					    &start_offset_obj))
 			data_start_offset = json_object_get_int(start_offset_obj);
 		else
 			SOLIDIGM_LOG_WARNING(
-				"Failed to find 'data_start_offset' field in ablist_context_t");
+			"Warning: ablist_context_t.data_start_offset missing");
 
 		if (json_object_object_get_ex(ablist_context_obj, "entry_count", &count_obj))
 			entry_count = json_object_get_int(count_obj);
 		else
 			SOLIDIGM_LOG_WARNING(
-				"Failed to find 'entry_count' field in ablist_context_t");
+				"Warning: ablist_context_t.entry_count missing");
 	} else {
-		SOLIDIGM_LOG_WARNING("Nested 'ablist_context_t' object not found in parsed data");
+		SOLIDIGM_LOG_WARNING("Warning: ablist_context_t not found");
 		json_object_put(ctx_obj);
 		json_object_put(metadata_obj);
 		return;
@@ -211,7 +218,7 @@ static void parse_tracker_chunk_json(const struct telemetry_log *tl, uint32_t ch
 
 		if (ablist_entry_size == 0) {
 			SOLIDIGM_LOG_WARNING(
-				"Failed to get size of ablist_entry_t from configuration");
+				"Warning: Failed getting ablist_entry_t size");
 			json_object_put(entry_json);
 			json_object_put(entry_metadata);
 			return;
@@ -222,18 +229,36 @@ static void parse_tracker_chunk_json(const struct telemetry_log *tl, uint32_t ch
 		if (sldm_telemetry_structure_parse(tl, ablist_entry_def,
 			chunk_offset * 8 + offset * 8, header_obj, NULL) != 0) {
 			SOLIDIGM_LOG_WARNING(
-				"Failed to parse ablist_entry_t at offset %u", offset);
+				"Warning: ablist_entry_t failed at %u", offset);
 			json_object_put(header_obj);
 			json_object_put(entry_json);
 			json_object_put(entry_metadata);
+			/* Header itself didn't parse: no next_entry_index to recover. */
+			break;
+		}
 
-			// Skip to next entry if we know where it is, otherwise break
-			if (next_entry_index == 0 || next_entry_index >= TRACKER_CHUNK_SIZE)
-				break;
+		// Get the inner object from header_obj
+		if (!json_object_object_get_ex(header_obj,
+				"ablist_entry_t", &ablist_entry_obj)) {
+			SOLIDIGM_LOG_WARNING(
+				"Warning: ablist_entry_t not in header");
+			json_object_put(header_obj);
+			json_object_put(entry_json);
+			json_object_put(entry_metadata);
+			/* No ablist_entry_t: no next_entry_index to recover. */
+			break;
+		}
 
-			offset = next_entry_index;
-			entry_count--;
-			continue;
+		// Get next_entry_index from ablist_entry_obj, before any further
+		// parsing that might fail: this is the only chance to learn where
+		// to resume if a later step in this entry fails.
+		if (!json_object_object_get_ex(ablist_entry_obj,
+				"next_entry_index", &next_obj)) {
+			SOLIDIGM_LOG_WARNING(
+				"Warning: ablist_entry_t.next_idx missing");
+			// Continue with next_entry_index = 0 (will likely break)
+		} else {
+			next_entry_index = json_object_get_int(next_obj);
 		}
 
 		// Parse entry data using tracker_entry_t structure
@@ -242,7 +267,7 @@ static void parse_tracker_chunk_json(const struct telemetry_log *tl, uint32_t ch
 			chunk_offset * 8 + (offset + ablist_entry_size) * 8,
 			data_obj, entry_metadata) != 0) {
 			SOLIDIGM_LOG_WARNING(
-				"Failed to parse tracker_entry_t at offset %u",
+				"Warning: tracker_entry_t failed at %u",
 				offset + ablist_entry_size);
 			json_object_put(header_obj);
 			json_object_put(data_obj);
@@ -258,41 +283,12 @@ static void parse_tracker_chunk_json(const struct telemetry_log *tl, uint32_t ch
 			continue;
 		}
 
-		// Get the inner object from header_obj
-		if (!json_object_object_get_ex(header_obj,
-				"ablist_entry_t", &ablist_entry_obj)) {
-			SOLIDIGM_LOG_WARNING(
-				"Failed to find ablist_entry_t in parsed header data");
-			json_object_put(header_obj);
-			json_object_put(data_obj);
-			json_object_put(entry_json);
-			json_object_put(entry_metadata);
-
-			// Skip to next entry if we know where it is, otherwise break
-			if (next_entry_index == 0 || next_entry_index >= TRACKER_CHUNK_SIZE)
-				break;
-
-			offset = next_entry_index;
-			entry_count--;
-			continue;
-		}
-
-		// Get next_entry_index from ablist_entry_obj
-		if (!json_object_object_get_ex(ablist_entry_obj,
-				"next_entry_index", &next_obj)) {
-			SOLIDIGM_LOG_WARNING(
-				"Failed to find 'next_entry_index' in ablist_entry_t");
-			// Continue with next_entry_index = 0 (will likely break)
-		} else {
-			next_entry_index = json_object_get_int(next_obj);
-		}
-
 		// Get the inner object from data_obj - only supporting nested
 		// structure format
 		if (!json_object_object_get_ex(data_obj,
 				"tracker_entry_t", &tracker_entry_obj)) {
 			SOLIDIGM_LOG_WARNING(
-				"Failed to find tracker_entry_t in parsed data");
+				"Warning: tracker_entry_t not in data");
 			json_object_put(header_obj);
 			json_object_put(data_obj);
 			json_object_put(entry_json);
@@ -306,12 +302,11 @@ static void parse_tracker_chunk_json(const struct telemetry_log *tl, uint32_t ch
 			entry_count--;
 			continue;
 		}
-
 		// Get hash value from tracker_entry_obj
 		if (!json_object_object_get_ex(tracker_entry_obj,
 				"hash", &hash_obj)) {
 			SOLIDIGM_LOG_WARNING(
-				"Failed to find 'hash' in tracker_entry_t");
+				"Warning: tracker_entry_t.hash missing");
 			json_object_put(header_obj);
 			json_object_put(data_obj);
 			json_object_put(entry_json);
@@ -330,7 +325,6 @@ static void parse_tracker_chunk_json(const struct telemetry_log *tl, uint32_t ch
 
 		// Get tracker entry info from config
 		struct json_object *entry_info = get_tracker_entry_info(config, hash);
-
 		// Handle case where no entry info is found
 		if (!entry_info) {
 			// Clean up the entry JSON since we won't be adding it to the array
@@ -376,7 +370,6 @@ static void parse_tracker_chunk_json(const struct telemetry_log *tl, uint32_t ch
 			entry_count--;
 			continue;
 		}
-
 		if (json_object_object_get_ex(tracker_entry_obj, "time",
 					   &time_obj)) {
 			json_object_add_value_uint64(entry_json, "time",
@@ -448,9 +441,8 @@ static void parse_tracker_chunk_json(const struct telemetry_log *tl, uint32_t ch
 		for (uint32_t i = 0; i < arg_count && i < MAX_ARGS
 		     && i < (uint32_t)array_len; i++) {
 			char arg_key[16] = {0};
-			const char *arg_desc = entry_info ?
-				get_arg_description(entry_info, i)
-				: NULL;
+			const char *arg_desc =
+				get_arg_description(entry_info, i);
 			struct json_object *arg_val =
 				json_object_array_get_idx(args_array, i);
 

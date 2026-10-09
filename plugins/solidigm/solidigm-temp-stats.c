@@ -7,8 +7,14 @@
 
 #include <errno.h>
 
-#include "common.h"
+#include <libnvme.h>
+
+#include <ccan/endian/endian.h>
+
+#include "cleanup.h"
+#include "global-ctx.h"
 #include "nvme-print.h"
+#include "plugin.h"
 #include "solidigm-util.h"
 
 #define SLDGM_LEGACY_TEMP_STATS_LID 0xC5
@@ -85,8 +91,8 @@ int sldgm_get_temp_stats_log(int argc, char **argv, struct command *acmd, struct
 			uint64_t *guid = (uint64_t *)&buffer[4080];
 
 			if (guid[1] == 0xC7BB98B7D0324863 && guid[0] == 0xBB2C23990E9C722F) {
-				fprintf(stderr,
-					"Error: Log page has OCP unsupported Requirements GUID\n");
+				nvme_show_error(
+					"Error: Log page has OCP unsupported Requirements GUID");
 				return -EBADMSG;
 			}
 		}

@@ -1,24 +1,24 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-#include <fcntl.h>
+#include <ctype.h>
+#include <dirent.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <unistd.h>
 #include <string.h>
-#include <dirent.h>
-#include <ctype.h>
 #include <sys/stat.h>
 #include <sys/time.h>
+#include <unistd.h>
 
 #include <libnvme.h>
 
+#include <shared/compiler-attributes-util.h>
+
+#include "cleanup.h"
+#include "global-ctx.h"
 #include "nvme-cmds.h"
 #include "nvme-print.h"
-#include "nvme.h"
 #include "plugin.h"
-
-#define CREATE_CMD
-#include "dera-nvme.h"
 
 static int char4_to_int(__u8 *data)
 {
@@ -108,7 +108,7 @@ static int nvme_dera_get_device_status(struct libnvme_transport_handle *hdl, enu
 		.cdw12 = 0x104,
 	};
 
-	err = libnvme_submit_admin_passthru(hdl, &cmd);
+	err = libnvme_exec_admin_passthru(hdl, &cmd);
 	if (!err && result)
 		*result = cmd.result;
 
@@ -190,5 +190,29 @@ exit:
 		nvme_show_status(err);
 
 	return err;
+}
+
+static struct command get_status_cmd = {
+	.name = "smart-log-add",
+	.help = "Retrieve Dera SMART Log, show it",
+	.fn = get_status,
+	.alias = "stat",
+};
+
+static struct command *commands[] = {
+	&get_status_cmd,
+	NULL,
+};
+
+static struct plugin plugin = {
+	.name = "dera",
+	.desc = "Dera vendor specific extensions",
+	.version = NVME_VERSION,
+};
+
+static void __shr_constructor register_plugin(void)
+{
+	plugin_add_group(&plugin, NULL, commands);
+	register_extension(&plugin);
 }
 

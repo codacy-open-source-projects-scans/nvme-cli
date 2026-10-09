@@ -13,6 +13,41 @@
 #include <nvme/nvme-types.h>
 
 /**
+ * DOC: mi-types.h - NVMe-MI wire protocol and messaging types
+ *
+ * This file defines the wire protocol types for NVMe Management Interface
+ * (NVMe-MI) messaging and transport layer. These are the low-level message
+ * structures used for MCTP/MI communication between a host and NVMe devices.
+ *
+ * Scope
+ * =====
+ * - MCTP message framing and headers
+ * - MI request/response message structures
+ * - MI command opcodes and protocol definitions
+ * - Admin command protocol over MI transport
+ * - Control primitives for MI communication
+ * - Asynchronous Event Messages (AEM)
+ * - Low-level transport and protocol details
+ *
+ * This file is primarily used by the libnvme-mi library implementation and
+ * is **internal to the MI transport layer**.
+ *
+ * Separation from nvme-types-mi.h
+ * ================================
+ * This file is **separate** from nvme-types-mi.h, which serves a different purpose:
+ *
+ * - **mi-types.h** (this file): Wire protocol, messaging, transport layer
+ *   - Used by: mi.h (MI library internals)
+ *   - Focus: How messages are sent/received over MCTP
+ *   - Analogy: TCP/IP headers and framing
+ *
+ * - **nvme-types-mi.h**: NVMe-MI data structures from the MI specification
+ *   - Used by: nvme-types.h (public API), applications
+ *   - Focus: MI data payloads (controller info, health status, VPD)
+ *   - Analogy: HTTP request/response bodies
+ */
+
+/**
  * NVME_MI_MSGTYPE_NVME - MCTP message type for NVMe-MI messages.
  *
  * This is defined by MCTP, but is referenced as part of the NVMe-MI message
@@ -53,53 +88,6 @@ enum nvme_mi_ror {
 };
 
 /**
- * enum nvme_mi_resp_status - values for the response status field
- * @NVME_MI_RESP_SUCCESS: success
- * @NVME_MI_RESP_MPR: More Processing Required
- * @NVME_MI_RESP_INTERNAL_ERR: Internal Error
- * @NVME_MI_RESP_INVALID_OPCODE: Invalid command opcode
- * @NVME_MI_RESP_INVALID_PARAM: Invalid command parameter
- * @NVME_MI_RESP_INVALID_CMD_SIZE: Invalid command size
- * @NVME_MI_RESP_INVALID_INPUT_SIZE: Invalid command input data size
- * @NVME_MI_RESP_ACCESS_DENIED: Access Denied
- * @NVME_MI_RESP_VPD_UPDATES_EXCEEDED: More VPD updates than allowed
- * @NVME_MI_RESP_PCIE_INACCESSIBLE: PCIe functionality currently unavailable
- * @NVME_MI_RESP_MEB_SANITIZED: MEB has been cleared due to sanitize
- * @NVME_MI_RESP_ENC_SERV_FAILURE: Enclosure services process failed
- * @NVME_MI_RESP_ENC_SERV_XFER_FAILURE: Transfer with enclosure services failed
- * @NVME_MI_RESP_ENC_FAILURE: Unreoverable enclosure failure
- * @NVME_MI_RESP_ENC_XFER_REFUSED: Enclosure services transfer refused
- * @NVME_MI_RESP_ENC_FUNC_UNSUP: Unsupported enclosure services function
- * @NVME_MI_RESP_ENC_SERV_UNAVAIL: Enclosure services unavailable
- * @NVME_MI_RESP_ENC_DEGRADED: Noncritical failure detected by enc. services
- * @NVME_MI_RESP_SANITIZE_IN_PROGRESS: Command prohibited during sanitize
- */
-enum nvme_mi_resp_status {
-	NVME_MI_RESP_SUCCESS = 0x00,
-	NVME_MI_RESP_MPR = 0x01,
-	NVME_MI_RESP_INTERNAL_ERR = 0x02,
-	NVME_MI_RESP_INVALID_OPCODE = 0x03,
-	NVME_MI_RESP_INVALID_PARAM = 0x04,
-	NVME_MI_RESP_INVALID_CMD_SIZE = 0x05,
-	NVME_MI_RESP_INVALID_INPUT_SIZE = 0x06,
-	NVME_MI_RESP_ACCESS_DENIED = 0x07,
-	/* 0x08 - 0x1f: reserved */
-	NVME_MI_RESP_VPD_UPDATES_EXCEEDED = 0x20,
-	NVME_MI_RESP_PCIE_INACCESSIBLE = 0x21,
-	NVME_MI_RESP_MEB_SANITIZED = 0x22,
-	NVME_MI_RESP_ENC_SERV_FAILURE = 0x23,
-	NVME_MI_RESP_ENC_SERV_XFER_FAILURE = 0x24,
-	NVME_MI_RESP_ENC_FAILURE = 0x25,
-	NVME_MI_RESP_ENC_XFER_REFUSED = 0x26,
-	NVME_MI_RESP_ENC_FUNC_UNSUP = 0x27,
-	NVME_MI_RESP_ENC_SERV_UNAVAIL = 0x28,
-	NVME_MI_RESP_ENC_DEGRADED = 0x29,
-	NVME_MI_RESP_SANITIZE_IN_PROGRESS = 0x2a,
-	/* 0x2b - 0xdf: reserved */
-	/* 0xe0 - 0xff: vendor specific */
-};
-
-/**
  * struct nvme_mi_msg_hdr - General MI message header.
  * @type: MCTP message type, will always be NVME_MI_MSGTYPE_NVME
  * @nmp: NVMe-MI message parameters (including MI message type)
@@ -135,14 +123,50 @@ struct nvme_mi_msg_resp {
  * enum nvme_mi_mi_opcode - Operation code for supported NVMe-MI commands.
  * @nvme_mi_mi_opcode_mi_data_read: Read NVMe-MI Data Structure
  * @nvme_mi_mi_opcode_subsys_health_status_poll: Subsystem Health Status Poll
+ * @nvme_mi_mi_opcode_ctrl_health_status_poll: Controller Health Status Poll
  * @nvme_mi_mi_opcode_configuration_set: MI Configuration Set
  * @nvme_mi_mi_opcode_configuration_get: MI Configuration Get
+ * @nvme_mi_mi_opcode_vpd_read: VPD Read
+ * @nvme_mi_mi_opcode_vpd_write: VPD Write
+ * @nvme_mi_mi_opcode_reset: Reset
+ * @nvme_mi_mi_opcode_ses_recv: SES Receive
+ * @nvme_mi_mi_opcode_ses_send: SES Send
+ * @nvme_mi_mi_opcode_meb_read: Management Endpoint Buffer Read
+ * @nvme_mi_mi_opcode_meb_write: Management Endpoint Buffer Write
+ * @nvme_mi_mi_opcode_shutdown: Shutdown
+ * @nvme_mi_mi_opcode_pda_read: NVMe-MI PDA Read
+ * @nvme_mi_mi_opcode_pda_write: NVMe-MI PDA Write
+ * @nvme_mi_mi_opcode_pda_write_zeroes: NVMe-MI PDA Write Zeroes
  */
 enum nvme_mi_mi_opcode {
 	nvme_mi_mi_opcode_mi_data_read = 0x00,
 	nvme_mi_mi_opcode_subsys_health_status_poll = 0x01,
+	nvme_mi_mi_opcode_ctrl_health_status_poll = 0x02,
 	nvme_mi_mi_opcode_configuration_set = 0x03,
 	nvme_mi_mi_opcode_configuration_get = 0x04,
+	nvme_mi_mi_opcode_vpd_read = 0x05,
+	nvme_mi_mi_opcode_vpd_write = 0x06,
+	nvme_mi_mi_opcode_reset = 0x07,
+	nvme_mi_mi_opcode_ses_recv = 0x08,
+	nvme_mi_mi_opcode_ses_send = 0x09,
+	nvme_mi_mi_opcode_meb_read = 0x0a,
+	nvme_mi_mi_opcode_meb_write = 0x0b,
+	nvme_mi_mi_opcode_shutdown = 0x0c,
+	nvme_mi_mi_opcode_pda_read = 0x0d,
+	nvme_mi_mi_opcode_pda_write = 0x0e,
+	nvme_mi_mi_opcode_pda_write_zeroes = 0x0f,
+};
+
+/**
+ * enum nvme_mi_pda_dformat - NVMe-MI PDA Command - Data Format (DFORMAT)
+ * @nvme_mi_pda_dformat_4kib:	4KiB data format
+ * @nvme_mi_pda_dformat_512b:	512B data format
+ * @nvme_mi_pda_dformat_byte:	Byte Level data format
+ */
+enum nvme_mi_pda_dformat {
+	nvme_mi_pda_dformat_4kib = 0x1,
+	nvme_mi_pda_dformat_512b = 0x2,
+	nvme_mi_pda_dformat_byte = 0x3,
 };
 
 /**
@@ -267,7 +291,7 @@ struct nvme_mi_aem_supported_item {
  * nvme_mi_aem_aesi_get_aese() - return aese from aesi field
  * @aesi: aesi field from @nvme_mi_aem_supported_item
  *
- * Returns: A bool representing the aese value
+ * Return: A bool representing the aese value
  */
 bool nvme_mi_aem_aesi_get_aese(__le16 aesi);
 
@@ -275,7 +299,7 @@ bool nvme_mi_aem_aesi_get_aese(__le16 aesi);
  * nvme_mi_aem_aesi_get_aesid() - return aesid from aesi field
  * @aesi: aesi field from @nvme_mi_aem_supported_item
  *
- * Returns: aesid value
+ * Return: aesid value
  */
 __u8 nvme_mi_aem_aesi_get_aesid(__le16 aesi);
 
@@ -319,7 +343,7 @@ struct nvme_mi_aem_enable_item {
  * nvme_mi_aem_aeei_get_aee() - return aee from aeei field
  * @aeei: aeei field from @nvme_mi_aem_enable_item
  *
- * Returns: aee value
+ * Return: aee value
  */
 bool nvme_mi_aem_aeei_get_aee(__le16 aeei);
 
@@ -327,7 +351,7 @@ bool nvme_mi_aem_aeei_get_aee(__le16 aeei);
  * nvme_mi_aem_aeei_get_aeeid() - return aeeid from aeei field
  * @aeei: aeei field from @nvme_mi_aem_enable_item
  *
- * Returns: aeeid value
+ * Return: aeeid value
  */
 __u8 nvme_mi_aem_aeei_get_aeeid(__le16 aeei);
 
@@ -418,7 +442,7 @@ struct nvme_mi_aem_occ_list_hdr {
  * nvme_mi_aem_aemti_get_aemgn() - return aemgn from aemti field
  * @aemti: aemti field from @nvme_mi_aem_occ_list_hdr
  *
- * Returns: aemgn value
+ * Return: aemgn value
  */
 __u8 nvme_mi_aem_aemti_get_aemgn(__u8 aemti);
 
@@ -426,7 +450,7 @@ __u8 nvme_mi_aem_aemti_get_aemgn(__u8 aemti);
  * nvme_mi_aem_aeolli_get_aeoltl() - return aeoltl from aeolli field
  * @aeolli: Pointer to 3 byte aeolli field from @nvme_mi_aem_occ_list_hdr
  *
- * Returns: aeoltl value
+ * Return: aeoltl value
  */
 __u32 nvme_mi_aem_aeolli_get_aeoltl(__u8 *aeolli);
 

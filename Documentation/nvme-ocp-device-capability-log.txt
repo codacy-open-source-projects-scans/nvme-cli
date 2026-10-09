@@ -8,12 +8,14 @@ nvme-ocp-device-capability-log - Retrieves OCP Device Capability Log Page
 SYNOPSIS
 --------
 [verse]
-'nvme ocp device-capability-log' <device>
-			[<global-options>]
+'nvme' [<global-options>] 'ocp device-capability-log' <device> [--no-uuid | -n]
 
 DESCRIPTION
 -----------
 For the NVMe device given, retrieves OCP Device Capability Log Page
+
+Fields are decoded as the page's Log Page Version defines them: FIPS 140
+Validation and its status from version 2 (OCP 2.7).
 
 The <device> parameter is mandatory and may be either the NVMe character
 device (ex: /dev/nvme0) or block device (ex: /dev/nvme0n1).
@@ -25,6 +27,10 @@ On success it returns 0, error code otherwise.
 
 OPTIONS
 -------
+-n::
+--no-uuid::
+	Do not try to automatically detect UUID index for this command (default
+	UUID index to 0).
 
 include::global-options.txt[]
 

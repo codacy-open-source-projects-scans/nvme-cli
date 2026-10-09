@@ -5,47 +5,24 @@
  * Author: leonardo.da.cunha@solidigm.com
  */
 
-#include <fcntl.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
 
 #include <libnvme.h>
 
-#include "common.h"
-#include "nvme.h"
-#include "plugin.h"
+#include <shared/fs-util.h>
+
+#include "cleanup.h"
+#include "global-ctx.h"
 #include "nvme-print.h"
+#include "plugin.h"
 #include "solidigm-telemetry.h"
-#include "solidigm-telemetry/telemetry-log.h"
-#include "solidigm-telemetry/cod.h"
-#include "solidigm-telemetry/header.h"
-#include "solidigm-telemetry/config.h"
 #include "solidigm-telemetry/data-area.h"
+#include "solidigm-telemetry/telemetry-log.h"
 #include "solidigm-util.h"
-
-static int read_file2buffer(char *file_name, char **buffer, size_t *length)
-{
-	FILE *fd = fopen(file_name, "rb");
-
-	if (!fd)
-		return -errno;
-
-	fseek(fd, 0, SEEK_END);
-	size_t length_bytes = ftell(fd);
-
-	fseek(fd, 0, SEEK_SET);
-
-	*buffer = malloc(length_bytes);
-	if (!*buffer) {
-		fclose(fd);
-		return -errno;
-	}
-	*length = fread(*buffer, 1, length_bytes, fd);
-	fclose(fd);
-	return 0;
-}
 
 struct config {
 	__u32 host_gen;
@@ -53,7 +30,6 @@ struct config {
 	__u8  data_area;
 	char *cfg_file;
 	char *binary_file;
-	char *jq_filter;
 };
 
 static void cleanup_json_object(struct json_object **jobj_ptr)
@@ -70,7 +46,6 @@ int solidigm_get_telemetry_log(int argc, char **argv, struct command *acmd, stru
 	const char *dgen = "Pick which telemetry data area to report. Default is 3 to fetch areas 1-3. Valid options are 1, 2, 3, 4.";
 	const char *cfile = "JSON configuration file";
 	const char *sfile = "binary file containing log dump";
-	const char *jqfilt = "JSON config entry name containing jq filter";
 	bool has_binary_file = false;
 	__cleanup_nvme_global_ctx struct libnvme_global_ctx *ctx = NULL;
 	__cleanup_nvme_transport_handle struct libnvme_transport_handle *hdl = NULL;
@@ -95,10 +70,9 @@ int solidigm_get_telemetry_log(int argc, char **argv, struct command *acmd, stru
 		OPT_FLAG("controller-init", 'c', &cfg.ctrl_init, cgen),
 		OPT_BYTE("data-area",       'd', &cfg.data_area, dgen),
 		OPT_FILE("config-file",     'j', &cfg.cfg_file, cfile),
-		OPT_FILE("source-file",     's', &cfg.binary_file, sfile),
-		OPT_STR("jq-filter",        'q', &cfg.jq_filter, jqfilt));
+		OPT_FILE("source-file",     's', &cfg.binary_file, sfile));
 
-	int err = argconfig_parse(argc, argv, desc, opts);
+	int err = parse_args(argc, argv, desc, opts);
 
 	if (err) {
 		return err;
@@ -108,9 +82,8 @@ int solidigm_get_telemetry_log(int argc, char **argv, struct command *acmd, stru
 		cfg.data_area = argconfig_parse_seen(opts, "config-file") ? 3 : 1;
 
 	if (cfg.data_area < 1 || cfg.data_area > 4) {
-		errno = EINVAL;
-		nvme_show_perror("data-area = '%d'", cfg.data_area);
-		return -errno;
+		nvme_show_error("data-area = '%d'", cfg.data_area);
+		return -EINVAL;
 	}
 
 	has_binary_file = argconfig_parse_seen(opts, "source-file");
@@ -119,36 +92,38 @@ int solidigm_get_telemetry_log(int argc, char **argv, struct command *acmd, stru
 		// GNU getopt() permutes the contents of argv as it scans,
 		// so that eventually all the nonoptions are at the end.
 		if (argc > optind) {
-			errno = EINVAL;
-			nvme_show_perror(
+			nvme_show_error(
 			"Device path not allowed when using --source-file");
-			return -errno;
+			return -EINVAL;
 		}
-		err = read_file2buffer(cfg.binary_file, (char **)&tlog, &tl.log_size);
+		unsigned char *raw = NULL;
+		long raw_size = 0;
+
+		err = shr_read_file(NULL, cfg.binary_file, &raw_size, &raw);
+		tlog = (struct nvme_telemetry_log *)raw;
+		tl.log_size = raw_size;
 	} else {
 		err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	}
-	if (err < 0) {
-		errno = -err;
-		nvme_show_perror("Error");
-	}
+	if (err < 0)
+		nvme_show_err(err, "Error");
 	if (err)
 		return err;
 
 	if (cfg.host_gen > 1) {
-		errno = EINVAL;
-		nvme_show_perror("host-generate = '%d'", cfg.host_gen);
-		return -errno;
+		nvme_show_error("host-generate = '%d'", cfg.host_gen);
+		return -EINVAL;
 	}
 
 	if (argconfig_parse_seen(opts, "config-file")) {
 		__cleanup_free char *conf_str = NULL;
-		size_t length = 0;
 		enum json_tokener_error jerr;
 
-		err = read_file2buffer(cfg.cfg_file, &conf_str, &length);
+		err = shr_read_file_as_string(NULL, cfg.cfg_file, NULL,
+					      &conf_str);
 		if (err) {
-			nvme_show_perror("config-file %s", cfg.cfg_file);
+			nvme_show_error("config-file %s: %s", cfg.cfg_file,
+					libnvme_strerror(-err));
 			return err;
 		}
 		configuration = json_tokener_parse_verbose(conf_str, &jerr);
@@ -188,59 +163,7 @@ int solidigm_get_telemetry_log(int argc, char **argv, struct command *acmd, stru
 	tl.log = tlog;
 	solidigm_telemetry_log_data_areas_parse(&tl, cfg.data_area);
 
-	/* Check if jq filter is requested and available */
-	if (cfg.jq_filter && configuration) {
-		struct json_object *jq_filter_obj = NULL;
-
-		if (json_object_object_get_ex(configuration, cfg.jq_filter,
-					      &jq_filter_obj)) {
-			const char *jq_filter_str;
-
-			jq_filter_str = json_object_get_string(jq_filter_obj);
-			if (jq_filter_str) {
-				/* Get JSON string representation */
-				const char *json_str;
-				char cmd[1024];
-				FILE *jq_pipe;
-
-				json_str = json_object_to_json_string(tl.root);
-
-				/* Create jq command and pipe JSON through it */
-				snprintf(cmd, sizeof(cmd), "jq -r '%s'",
-					 jq_filter_str);
-				jq_pipe = popen(cmd, "w");
-				if (jq_pipe) {
-					fprintf(jq_pipe, "%s", json_str);
-					err = pclose(jq_pipe);
-					if (err != 0)
-						err = -EINVAL;
-				} else {
-					errno = ENOENT;
-					nvme_show_perror(
-						"Failed to execute jq command");
-					err = -ENOENT;
-				}
-			} else {
-				errno = EINVAL;
-				nvme_show_perror(
-					"jq filter entry '%s' is not a valid string",
-					cfg.jq_filter);
-				err = -EINVAL;
-			}
-		} else {
-			errno = ENOENT;
-			nvme_show_perror(
-				"jq filter entry '%s' not found in configuration file",
-				cfg.jq_filter);
-			err = -ENOENT;
-		}
-	} else {
-		/*
-		 * No jq filter requested or no config file,
-		 * use normal JSON output
-		 */
-		json_print_object(tl.root, NULL);
-	}
+	json_print_object(tl.root, NULL);
 	printf("\n");
 
 	return err;

@@ -12,23 +12,43 @@ usage() {
     echo "Usage: build.sh [-b [release|debug]] "
     echo "                [-c [gcc|clang]]"
     echo "                [-m [meson|muon]"
+    echo "                [--e2e-controller /dev/nvme0]"
+    echo "                [--e2e-ns1 /dev/nvme0n1]"
+    echo "                [--e2e-log-dir dir]"
+    echo "                [--e2e-log-level level]"
+    echo "                [--e2e-nvme-bin path]"
+    echo "                [--plugin-tests plugin1,plugin2]"
     echo "                [config]"
     echo ""
     echo "CI build script."
     echo ""
+    echo " -a                   run static analysis with clang analyzer"
     echo " -b [release]|debug   build type"
     echo " -c [gcc]|clang       compiler to use"
     echo " -m [meson]|muon      use meson or muon"
-    echo " -t [arm]|ppc64le|s390x  cross compile target"
-    echo " -x                   run test with valgrind"
+    echo " -p                   enable coverage report"
+    echo " -s                   run tests with ASan+UBSan (asanubsan setup)"
+    echo " -t [arm]|ppc64le|s390x|i386  cross compile target"
+    echo " -x                   run tests with valgrind (valgrind setup)"
+    echo ""
+    echo "options for the 'tests' config (mirror the e2e-* meson options):"
+    echo " --e2e-controller dev    controller device for e2e tests, e.g. /dev/nvme0"
+    echo "                         (required when running the 'tests' config)"
+    echo " --e2e-ns1 dev           namespace device for e2e tests, e.g. /dev/nvme0n1"
+    echo "                         (required when running the 'tests' config)"
+    echo " --e2e-log-dir dir       log directory for e2e tests"
+    echo " --e2e-log-level level   log verbosity for e2e tests"
+    echo " --e2e-nvme-bin path     nvme binary to exercise in e2e tests"
+    echo " --plugin-tests list     comma-separated list of plugin test suites to"
+    echo "                         run against real hardware, e.g. micron,ocp"
     echo ""
     echo "configs with meson:"
     echo "  [default]           default settings"
     echo "  libdbus             build with libdbus"
+    echo "  liburing            build with liburing"
     echo "  fallback            download all dependencies"
     echo "                      and build them as shared libraries"
     echo "  cross               use cross toolchain to build"
-    echo "  coverage            build coverage report"
     echo "  distro              build libnvme and nvme-cli separately"
     echo "  docs                build all documentation"
     echo "  man_docs            build man documentation only"
@@ -36,7 +56,9 @@ usage() {
     echo "  rst_docs            build rst documentation only"
     echo "  static              build a static binary"
     echo "  minimal_static      build a static binary without fabrics support"
+    echo "  nofabrics           build without fabrics support, run unit tests"
     echo "  libnvme             build only libnvme"
+    echo "  libnvme_abi         build only libnvme3.so, no tests/examples"
     echo "  tests               build for nightly build"
     echo ""
     echo "configs with muon:"
@@ -48,35 +70,116 @@ MESON=meson
 BUILDTYPE=release
 CROSS_TARGET=arm
 CC=${CC:-"gcc"}
+SCAN_BUILD=""
 
+use_coverage=0
 use_valgrind=0
+use_asan=0
+use_analyzer=0
 
-while getopts "b:c:m:t:x" o; do
-    case "${o}" in
-        b)
-            BUILDTYPE="${OPTARG}"
+E2E_CONTROLLER=""
+E2E_NS1=""
+E2E_LOG_DIR=""
+E2E_LOG_LEVEL=""
+E2E_NVME_BIN=""
+PLUGIN_TESTS=""
+
+ARGS=()
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -a)
+            if ! command -v clang > /dev/null 2>&1; then
+                echo "Error: clang is not found; please install clang."
+                exit 1
+            fi
+
+            if ! command -v scan-build >/dev/null 2>&1; then
+                echo "Error: scan-build is not found; please install clang-analyzer."
+                exit 1
+            fi
+
+            use_analyzer=1
+            CC=clang
+            SCAN_BUILD=scan-build
+            shift
             ;;
-        c)
-            CC="${OPTARG}"
+        -b)
+            BUILDTYPE="$2"
+            shift 2
             ;;
-        m)
-            BUILDTOOL="${OPTARG}"
+        -c)
+            CC="$2"
+            shift 2
             ;;
-        t)
-            CROSS_TARGET="${OPTARG}"
+        -m)
+            BUILDTOOL="$2"
+            shift 2
             ;;
-        x)
+        -p)
+            use_coverage=1
+            shift
+            ;;
+        -s)
+            use_asan=1
+            shift
+            ;;
+        -t)
+            CROSS_TARGET="$2"
+            shift 2
+            ;;
+        -x)
             use_valgrind=1
+            shift
             ;;
-        *)
+        --e2e-controller)
+            E2E_CONTROLLER="$2"
+            shift 2
+            ;;
+        --e2e-ns1)
+            E2E_NS1="$2"
+            shift 2
+            ;;
+        --e2e-log-dir)
+            E2E_LOG_DIR="$2"
+            shift 2
+            ;;
+        --e2e-log-level)
+            E2E_LOG_LEVEL="$2"
+            shift 2
+            ;;
+        --e2e-nvme-bin)
+            E2E_NVME_BIN="$2"
+            shift 2
+            ;;
+        --plugin-tests)
+            PLUGIN_TESTS="$2"
+            shift 2
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        -*)
             usage
             exit 1
             ;;
+        *)
+            ARGS+=("$1")
+            shift
+            ;;
     esac
 done
-shift $((OPTIND-1))
+set -- "${ARGS[@]}"
 
 CONFIG=${1:-"default"}
+
+if [[ "${CONFIG}" != "tests" ]]; then
+    if [[ -n "${E2E_CONTROLLER}" || -n "${E2E_NS1}" || -n "${E2E_LOG_DIR}" || \
+          -n "${E2E_LOG_LEVEL}" || -n "${E2E_NVME_BIN}" || -n "${PLUGIN_TESTS}" ]]; then
+        echo "error: --e2e-* and --plugin-tests are only valid with the 'tests' config" >&2
+        exit 1
+    fi
+fi
 
 cd "$(git rev-parse --show-toplevel)" || exit 1
 
@@ -86,9 +189,20 @@ TOOLDIR="$(pwd)/.build-tools"
 fn_exists() { declare -F "$1" > /dev/null; }
 
 config_meson_default() {
-    CC="${CC}" "${MESON}" setup                 \
+    local extra_args=()
+    if [ "${use_asan:-0}" -eq 1 ]; then
+        extra_args+=(-Db_sanitize=address,undefined)
+    fi
+    # Build nvme-keysd in CI. "enabled" fails without libsystemd >= 257.
+    if pkg-config --atleast-version=257 libsystemd 2>/dev/null; then
+        extra_args+=(-Dnvme-keysd=enabled)
+    fi
+
+    CC="${CC}" ${SCAN_BUILD} "${MESON}" setup \
         --werror                                \
         --buildtype="${BUILDTYPE}"              \
+		-Dioctl-tests=true						\
+        "${extra_args[@]}"                      \
         "${BUILDDIR}"
 }
 
@@ -108,7 +222,9 @@ config_meson_musl() {
         -Djson-c=disabled                       \
         -Dopenssl=disabled                      \
         -Dkeyutils=disabled                     \
+        -Dlibarchive=disabled                   \
         -Dpython=disabled                       \
+        -Dnvme-discoverd=disabled               \
         "${BUILDDIR}"
 }
 
@@ -116,7 +232,17 @@ config_meson_libdbus() {
     CC="${CC}" "${MESON}" setup                 \
         --werror                                \
         --buildtype="${BUILDTYPE}"              \
+		-Ddeprecated-cmds=enabled				\
         -Dlibdbus=enabled                       \
+        --prefix="${BUILDDIR}/usr"              \
+        "${BUILDDIR}"
+}
+
+config_meson_liburing() {
+    CC="${CC}" "${MESON}" setup                 \
+        --werror                                \
+        --buildtype="${BUILDTYPE}"              \
+        -Dliburing=enabled                      \
         --prefix="${BUILDDIR}/usr"              \
         "${BUILDDIR}"
 }
@@ -134,6 +260,15 @@ config_meson_fallback() {
 }
 
 config_meson_cross() {
+    # armhf/ppc64le/s390x each get a dedicated <triplet>-pkg-config wrapper
+    # from their cross-gcc package, preconfigured to look in the right
+    # multiarch dir. i386 has no such wrapper (it's gcc-multilib, not a
+    # separate cross-gcc), so point plain pkg-config at the i386 multiarch
+    # dir directly instead.
+    if [ "${CROSS_TARGET}" = "i386" ]; then
+        export PKG_CONFIG_LIBDIR=/usr/lib/i386-linux-gnu/pkgconfig
+    fi
+
     CC="${CC}" "${MESON}" setup                 \
         --werror                                \
         --buildtype="${BUILDTYPE}"              \
@@ -143,20 +278,11 @@ config_meson_cross() {
         "${BUILDDIR}"
 }
 
-config_meson_coverage() {
-    CC="${CC}" "${MESON}" setup                 \
-        --werror                                \
-        --buildtype="${BUILDTYPE}"              \
-        --wrap-mode=nofallback                  \
-        -Dlibdbus=enabled                       \
-        -Db_coverage=true                       \
-        "${BUILDDIR}"
-}
-
 config_meson_docs() {
     CC="${CC}" "${MESON}" setup                 \
         -Ddocs=all                              \
         -Ddocs-build=true                       \
+		-Ddeprecated-cmds=enabled				\
         --prefix=/tmp/usr                       \
         "${BUILDDIR}"
 }
@@ -165,6 +291,7 @@ config_meson_man_docs() {
     CC="${CC}" "${MESON}" setup                 \
         -Ddocs=man                              \
         -Ddocs-build=true                       \
+		-Ddeprecated-cmds=enabled				\
         --prefix=/tmp/usr                       \
         "${BUILDDIR}"
 }
@@ -173,6 +300,7 @@ config_meson_html_docs() {
     CC="${CC}" "${MESON}" setup                 \
         -Ddocs=html                             \
         -Ddocs-build=true                       \
+		-Ddeprecated-cmds=enabled				\
         --prefix=/tmp/usr                       \
         "${BUILDDIR}"
 }
@@ -181,6 +309,7 @@ config_meson_rst_docs() {
     CC="${CC}" "${MESON}" setup                 \
         -Ddocs=rst                              \
         -Ddocs-build=true                       \
+		-Ddeprecated-cmds=enabled				\
         --prefix=/tmp/usr                       \
         "${BUILDDIR}"
 }
@@ -194,9 +323,12 @@ config_meson_static() {
         --prefix=/usr                           \
         -Dc_link_args="-static"                 \
         -Dkeyutils=disabled                     \
+        -Dlibkmod=disabled                      \
         -Dliburing=disabled                     \
         -Dpython=disabled                       \
         -Dopenssl=disabled                      \
+        -Dnvme-discoverd=disabled               \
+        -Dlibarchive=disabled                   \
         -Dtests=false                           \
         -Dexamples=false                        \
         "${BUILDDIR}"
@@ -236,18 +368,50 @@ config_meson_minimal_static() {
         -Dc_args="${cflags_str}"                \
         -Dc_link_args="${ldflags_str}"          \
         -Dfabrics=disabled                      \
+        -Dlibkmod=disabled                      \
         -Dmi=disabled                           \
         -Djson-c=disabled                       \
+        -Dopenssl=disabled                      \
+        -Dlibarchive=disabled                   \
         -Dtests=false                           \
         -Dexamples=false                        \
         "${BUILDDIR}"
 }
 
-config_meson_tests() {
+config_meson_nofabrics() {
     CC="${CC}" "${MESON}" setup                 \
         --werror                                \
         --buildtype="${BUILDTYPE}"              \
-        -Dnvme-tests=true                       \
+        -Dfabrics=disabled                      \
+        -Dmi=disabled                           \
+        -Dpython=disabled                       \
+        -Djson-c=disabled                       \
+        -Dlibkmod=disabled                      \
+        -Dopenssl=disabled                      \
+        -Dkeyutils=disabled                     \
+        -Dlibarchive=disabled                   \
+        "${BUILDDIR}"
+}
+
+config_meson_tests() {
+    # e2e tests are destructive and refuse to guess a target device, so
+    # --e2e-controller/--e2e-ns1 must be passed on the command line (meson
+    # setup errors out on its own if they're left unset). The remaining
+    # options are optional and mirror the other e2e-*/plugin-tests meson
+    # options.
+    local extra_args=()
+    [ -n "${E2E_CONTROLLER}" ] && extra_args+=(-De2e-controller="${E2E_CONTROLLER}")
+    [ -n "${E2E_NS1}" ] && extra_args+=(-De2e-ns1="${E2E_NS1}")
+    [ -n "${E2E_LOG_DIR}" ] && extra_args+=(-De2e-log-dir="${E2E_LOG_DIR}")
+    [ -n "${E2E_LOG_LEVEL}" ] && extra_args+=(-De2e-log-level="${E2E_LOG_LEVEL}")
+    [ -n "${E2E_NVME_BIN}" ] && extra_args+=(-De2e-nvme-bin="${E2E_NVME_BIN}")
+    [ -n "${PLUGIN_TESTS}" ] && extra_args+=(-Dplugin-tests="${PLUGIN_TESTS}")
+
+    CC="${CC}" "${MESON}" setup                 \
+        --werror                                \
+        --buildtype="${BUILDTYPE}"              \
+        -De2e-tests=true                        \
+        "${extra_args[@]}"                      \
         "${BUILDDIR}"
 }
 
@@ -260,9 +424,34 @@ config_meson_libnvme() {
         "${BUILDDIR}"
 }
 
+# Like libnvme above, but for callers that only need the compiled
+# libnvme3.so itself (e.g. an ABI comparison) and not the test suite.
+config_meson_libnvme_abi() {
+    CC="${CC}" "${MESON}" setup                 \
+        --werror                                \
+        --buildtype="${BUILDTYPE}"              \
+        -Dnvme=disabled                         \
+        -Dlibnvme=enabled                       \
+        -Dtests=false                           \
+        -Dexamples=false                        \
+        "${BUILDDIR}"
+}
+
+test_meson_libnvme_abi() {
+    :
+}
+
 build_meson() {
-    "${MESON}" compile                          \
-        -C "${BUILDDIR}"
+    if [ "${use_analyzer:-0}" -eq 1 ]; then
+        "${SCAN_BUILD}" -o "${BUILDDIR}/scan-results" \
+            -analyze-headers                          \
+            --force-analyze-debug-code                \
+            --status-bugs                             \
+            "${MESON}" compile -C "${BUILDDIR}"
+    else
+        "${MESON}" compile                            \
+            -C "${BUILDDIR}"
+    fi
 }
 
 build_meson_docs() {
@@ -294,10 +483,12 @@ test_meson() {
 
     if [ "${use_valgrind:-0}" -eq 1 ]; then
         if command -v valgrind >/dev/null 2>&1; then
-            args+=(--wrapper valgrind)
+            args+=(--setup valgrind)
         else
             echo "Warning: valgrind requested but not found; running without it." >&2
         fi
+    elif [ "${use_asan:-0}" -eq 1 ]; then
+        args+=(--setup asanubsan)
     fi
 
     "${MESON}" test "${args[@]}"
@@ -317,12 +508,6 @@ test_meson_html_docs() {
 
 test_meson_rst_docs() {
 	true
-}
-
-test_meson_coverage() {
-    "${MESON}" test                             \
-        -C "${BUILDDIR}"
-    ninja -C "${BUILDDIR}" coverage --verbose
 }
 
 install_meson_docs() {
@@ -380,11 +565,12 @@ config_muon_default() {
         -Ddefault_library=static                        \
         -Dc_link_args="-static"                         \
         -Dwrap_mode=forcefallback                       \
-        -Djson-c=disabled                       \
-        -Dpython=disabled                       \
-        -Dopenssl=disabled                      \
-        -Dkeyutils=disabled                     \
         -Djson-c=disabled                               \
+        -Dpython=disabled                               \
+        -Dopenssl=disabled                              \
+        -Dkeyutils=disabled                             \
+        -Djson-c=disabled                               \
+        -Dnvme-discoverd=disabled                       \
         "${BUILDDIR}"
 }
 
@@ -434,6 +620,11 @@ test_meson_distro() {
     test_meson
 }
 
+if [[ "${use_coverage}" -eq 1 && "${BUILDTOOL}" != "meson" ]]; then
+     echo "error: coverage reporting (-p) is only supported with the meson build tool" >&2
+     exit 1
+fi
+
 if [[ "${BUILDTOOL}" == "muon" ]]; then
     SAMU="$(which samu 2> /dev/null)" || true
     if [[ -z "${SAMU}" ]]; then
@@ -454,6 +645,22 @@ echo "muon: ${MUON}"
 rm -rf "${BUILDDIR}"
 
 config_"${BUILDTOOL}"_"${CONFIG}"
+if [[ "${use_coverage}" -eq 1 ]]; then
+    "${MESON}" setup --reconfigure "${BUILDDIR}" -Db_coverage=true
+fi
 fn_exists "build_${BUILDTOOL}_${CONFIG}" && "build_${BUILDTOOL}_${CONFIG}" || build_"${BUILDTOOL}"
-fn_exists "test_${BUILDTOOL}_${CONFIG}" && "test_${BUILDTOOL}_${CONFIG}" || test_"${BUILDTOOL}"
+if fn_exists "test_${BUILDTOOL}_${CONFIG}"; then
+    test_fn="test_${BUILDTOOL}_${CONFIG}"
+else
+    test_fn="test_${BUILDTOOL}"
+fi
+test_status=0
+"${test_fn}" || test_status=$?
+# Write the report also when a test fails.
+if [[ "${use_coverage}" -eq 1 ]]; then
+    gcovr -r . "${BUILDDIR}" --xml-pretty -o coverage.xml
+fi
+if [[ "${test_status}" -ne 0 ]]; then
+    exit "${test_status}"
+fi
 fn_exists "install_${BUILDTOOL}_${CONFIG}" && "install_${BUILDTOOL}_${CONFIG}" || true;

@@ -30,22 +30,21 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
 
-#include <sys/stat.h>
-
 #include <libnvme.h>
 
-#include "common.h"
+#include <ccan/endian/endian.h>
+#include <shared/compiler-attributes-util.h>
+#include <shared/fs-util.h>
+
+#include "cleanup.h"
+#include "global-ctx.h"
 #include "nvme-cmds.h"
 #include "nvme-print.h"
-#include "nvme.h"
 #include "plugin.h"
-
-#define CREATE_CMD
-
-#include "seagate-nvme.h"
 #include "seagate-diag.h"
 
 
@@ -143,6 +142,7 @@ static void json_log_pages_supp(log_page_map *logPageMap)
 		json_array_add_value_object(logPages, lbaf);
 	}
 	json_print_object(root, NULL);
+	printf("\n");
 	json_free_object(root);
 }
 
@@ -172,7 +172,16 @@ static int log_pages_supp(int argc, char **argv, struct command *acmd,
 
 	err = nvme_get_log_simple(hdl, 0xc5, &logPageMap, sizeof(logPageMap));
 	if (!err) {
-		if (flags & NORMAL) {
+		/*
+		 * NumLogPages comes from the device: never walk past the
+		 * fixed-size table in the log header.
+		 */
+		if (le32_to_cpu(logPageMap.NumLogPages) >
+		    MAX_SUPPORTED_LOG_PAGE_ENTRIES)
+			logPageMap.NumLogPages =
+				cpu_to_le32(MAX_SUPPORTED_LOG_PAGE_ENTRIES);
+
+		if (!(flags & JSON)) {
 			printf("Seagate Supported Log-pages count :%d\n",
 				le32_to_cpu(logPageMap.NumLogPages));
 			printf("%-15s %-30s\n", "LogPage-Id", "LogPage-Name");
@@ -184,7 +193,7 @@ static int log_pages_supp(int argc, char **argv, struct command *acmd,
 			json_log_pages_supp(&logPageMap);
 
 		for (i = 0; i < le32_to_cpu(logPageMap.NumLogPages); i++) {
-			if (flags & NORMAL) {
+			if (!(flags & JSON)) {
 				printf("0x%-15X",
 					   le32_to_cpu(logPageMap.LogPageEntry[i].LogPageID));
 				printf("%-30s\n",
@@ -887,6 +896,7 @@ static void json_print_stx_smart_log_C0(struct json_object *root, STX_EXT_SMART_
 static int vs_smart_log(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
 	struct nvme_id_ctrl     ctrl;
+	struct libnvme_passthru_cmd cmd;
 	char                    modelNo[40];
 	STX_EXT_SMART_LOG_PAGE_C0   ehExtSmart;
 	EXTENDED_SMART_INFO_T   ExtdSMARTInfo;
@@ -905,7 +915,7 @@ static int vs_smart_log(int argc, char **argv, struct command *acmd, struct plug
 
 	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err) {
-		printf("\nDevice not found\n");
+		nvme_show_error("Device not found");
 		return -1;
 	}
 
@@ -925,7 +935,8 @@ static int vs_smart_log(int argc, char **argv, struct command *acmd, struct plug
 	 * to determine drive family.
 	 */
 
-	err = nvme_identify_ctrl(hdl, &ctrl);
+	nvme_init_identify_ctrl(&cmd, &ctrl);
+	err = libnvme_exec_admin_passthru(hdl, &cmd);
 	if (!err) {
 		memcpy(modelNo, ctrl.mn, sizeof(modelNo));
 	} else {
@@ -936,7 +947,7 @@ static int vs_smart_log(int argc, char **argv, struct command *acmd, struct plug
 	if (!stx_is_jag_pan(modelNo)) {
 		err = nvme_get_log_simple(hdl, 0xC4, &ExtdSMARTInfo, sizeof(ExtdSMARTInfo));
 		if (!err) {
-			if (flags & NORMAL) {
+			if (!(flags & JSON)) {
 				printf("%-39s %-15s %-19s\n", "Description", "Ext-Smart-Id", "Ext-Smart-Value");
 				for (index = 0; index < 80; index++)
 					printf("-");
@@ -958,7 +969,7 @@ static int vs_smart_log(int argc, char **argv, struct command *acmd, struct plug
 
 			err = nvme_get_log_simple(hdl, 0xCF, &logPageCF, sizeof(logPageCF));
 			if (!err) {
-				if (flags & NORMAL) {
+				if (!(flags & JSON)) {
 					print_smart_log_CF(&logPageCF);
 				} else if (flags & JSON) {
 					lbafs_DramSmart = json_create_object();
@@ -968,6 +979,7 @@ static int vs_smart_log(int argc, char **argv, struct command *acmd, struct plug
 				}
 			} else if (flags & JSON) {
 				json_print_object(root, NULL);
+				printf("\n");
 				json_free_object(root);
 			}
 		} else if (err > 0) {
@@ -977,7 +989,7 @@ static int vs_smart_log(int argc, char **argv, struct command *acmd, struct plug
 		err = nvme_get_log_simple(hdl, 0xC0, &ehExtSmart, sizeof(ehExtSmart));
 
 		if (!err) {
-			if (flags & NORMAL) {
+			if (!(flags & JSON)) {
 				print_stx_smart_log_C0(&ehExtSmart);
 			} else if (flags & JSON){
 				lbafs_ExtSmart = json_create_object();
@@ -987,6 +999,7 @@ static int vs_smart_log(int argc, char **argv, struct command *acmd, struct plug
 				json_array_add_value_object(lbafs, lbafs_ExtSmart);
 
 				json_print_object(root, NULL);
+				printf("\n");
 				json_free_object(root);
 			}
 		}
@@ -998,7 +1011,7 @@ static int vs_smart_log(int argc, char **argv, struct command *acmd, struct plug
 	err = nvme_get_log_simple(hdl, 0xC4,
 				  &ExtdSMARTInfo, sizeof(ExtdSMARTInfo));
 	if (!err) {
-		if (flags & NORMAL) {
+		if (!(flags & JSON)) {
 			printf("%-39s %-15s %-19s\n", "Description", "Ext-Smart-Id", "Ext-Smart-Value");
 			for (index = 0; index < 80; index++)
 				printf("-");
@@ -1021,7 +1034,7 @@ static int vs_smart_log(int argc, char **argv, struct command *acmd, struct plug
 		err = nvme_get_log_simple(hdl, 0xCF,
 					  &logPageCF, sizeof(logPageCF));
 		if (!err) {
-			if (flags & NORMAL) {
+			if (!(flags & JSON)) {
 				print_smart_log_CF(&logPageCF);
 			} else if (flags & JSON) {
 				lbafs_DramSmart = json_create_object();
@@ -1082,7 +1095,7 @@ static int temp_stats(int argc, char **argv, struct command *acmd, struct plugin
 
 	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err) {
-		printf("\nDevice not found\n");
+		nvme_show_error("Device not found");
 		return -1;
 	}
 
@@ -1092,7 +1105,7 @@ static int temp_stats(int argc, char **argv, struct command *acmd, struct plugin
 		return err;
 	}
 
-	if (flags & NORMAL)
+	if (!(flags & JSON))
 		printf("Seagate Temperature Stats Information :\n");
 	/*STEP-1 : Get Current Temperature from SMART */
 	err = nvme_get_log_smart(hdl, NVME_NSID_ALL, &smart_log);
@@ -1103,7 +1116,7 @@ static int temp_stats(int argc, char **argv, struct command *acmd, struct plugin
 		PcbTemp = PcbTemp ? PcbTemp - 273 : 0;
 		SocTemp = le16_to_cpu(smart_log.temp_sensor[1]);
 		SocTemp = SocTemp ? SocTemp - 273 : 0;
-		if (flags & NORMAL) {
+		if (!(flags & JSON)) {
 			printf("%-20s : %u C\n", "Current Temperature", temperature);
 			printf("%-20s : %u C\n", "Current PCB Temperature", PcbTemp);
 			printf("%-20s : %u C\n", "Current SOC Temperature", SocTemp);
@@ -1118,14 +1131,14 @@ static int temp_stats(int argc, char **argv, struct command *acmd, struct plugin
 			if (ExtdSMARTInfo.vendorData[index].AttributeNumber == VS_ATTR_ID_MAX_LIFE_TEMPERATURE) {
 				maxTemperature = smart_attribute_vs(ExtdSMARTInfo.Version, ExtdSMARTInfo.vendorData[index]);
 				maxTemperature = maxTemperature ? maxTemperature - 273 : 0;
-				if (flags & NORMAL)
+				if (!(flags & JSON))
 					printf("%-20s : %d C\n", "Highest Temperature", (unsigned int)maxTemperature);
 			}
 
 			if (ExtdSMARTInfo.vendorData[index].AttributeNumber == VS_ATTR_ID_MAX_SOC_LIFE_TEMPERATURE) {
 				MaxSocTemp = smart_attribute_vs(ExtdSMARTInfo.Version, ExtdSMARTInfo.vendorData[index]);
 				MaxSocTemp = MaxSocTemp ? MaxSocTemp - 273 : 0;
-				if (flags & NORMAL)
+				if (!(flags & JSON))
 					printf("%-20s : %d C\n", "Max SOC Temperature", (unsigned int)MaxSocTemp);
 			}
 		}
@@ -1245,7 +1258,7 @@ static int vs_pcie_error_log(int argc, char **argv, struct command *acmd, struct
 
 	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err) {
-		printf("\nDevice not found\n");
+		nvme_show_error("Device not found");
 		return -1;
 	}
 
@@ -1255,13 +1268,13 @@ static int vs_pcie_error_log(int argc, char **argv, struct command *acmd, struct
 		return err;
 	}
 
-	if (flags & NORMAL)
+	if (!(flags & JSON))
 		printf("Seagate PCIe error counters Information :\n");
 
 	err = nvme_get_log_simple(hdl, 0xCB,
 				  &pcieErrorLog, sizeof(pcieErrorLog));
 	if (!err) {
-		if (flags & NORMAL)
+		if (!(flags & JSON))
 			print_vs_pcie_error_log(pcieErrorLog);
 		else
 			json_vs_pcie_error_log(pcieErrorLog);
@@ -1279,47 +1292,47 @@ static int vs_pcie_error_log(int argc, char **argv, struct command *acmd, struct
 /***************************************
  * FW Activation History log
  ***************************************/
-static void print_stx_vs_fw_activate_history(stx_fw_activ_history_log_page fwActivHis)
+static void print_stx_vs_fw_activate_history(const stx_fw_activ_history_log_page *fwActivHis)
 {
 	__u32 i;
 	char prev_fw[9] = {0};
 	char new_fw[9] = {0};
 	char buf[80];
 
-	if (fwActivHis.numValidFwActHisEnt > 0) {
+	if (fwActivHis->numValidFwActHisEnt > 0) {
 		printf("\n\nSeagate FW Activation History :\n");
 		printf("%-9s %-21s %-7s %-13s %-9s %-5s %-15s %-9s\n", "Counter ", "      Timestamp ", " PCC ", "Previous FW ", "New FW ", "Slot", "Commit Action", "Result");
 
-		for (i = 0; i < fwActivHis.numValidFwActHisEnt; i++) {
+		for (i = 0; i < fwActivHis->numValidFwActHisEnt; i++) {
 
-			printf("   %-4d   ", fwActivHis.fwActHisEnt[i].fwActivCnt);
+			printf("   %-4d   ", fwActivHis->fwActHisEnt[i].fwActivCnt);
 
-			time_t t = fwActivHis.fwActHisEnt[i].timeStamp / 1000;
+			time_t t = fwActivHis->fwActHisEnt[i].timeStamp / 1000;
 			struct tm  ts = *localtime(&t);
 
 			strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &ts);
 			printf(" %-20s   ", buf);
 			printf("%-5" PRId64 "   ",
-			       (uint64_t)fwActivHis.fwActHisEnt[i].powCycleCnt);
+			       (uint64_t)fwActivHis->fwActHisEnt[i].powCycleCnt);
 
 			memset(prev_fw, 0, sizeof(prev_fw));
-			memcpy(prev_fw, fwActivHis.fwActHisEnt[i].previousFW, sizeof(fwActivHis.fwActHisEnt[i].previousFW));
+			memcpy(prev_fw, fwActivHis->fwActHisEnt[i].previousFW, sizeof(fwActivHis->fwActHisEnt[i].previousFW));
 			printf("%-8s   ", prev_fw);
 
 			memset(new_fw, 0, sizeof(new_fw));
-			memcpy(new_fw, fwActivHis.fwActHisEnt[i].newFW, sizeof(fwActivHis.fwActHisEnt[i].newFW));
+			memcpy(new_fw, fwActivHis->fwActHisEnt[i].newFW, sizeof(fwActivHis->fwActHisEnt[i].newFW));
 			printf("%-8s  ", new_fw);
 
-			printf("  %-2d  ", fwActivHis.fwActHisEnt[i].slotNum);
-			printf("      0x%02x      ", fwActivHis.fwActHisEnt[i].commitActionType);
-			printf("  0x%02x\n", fwActivHis.fwActHisEnt[i].result);
+			printf("  %-2d  ", fwActivHis->fwActHisEnt[i].slotNum);
+			printf("      0x%02x      ", fwActivHis->fwActHisEnt[i].commitActionType);
+			printf("  0x%02x\n", fwActivHis->fwActHisEnt[i].result);
 		}
 	} else {
 		printf("%s\n", "Do not have valid FW Activation History");
 	}
 }
 
-static void json_stx_vs_fw_activate_history(stx_fw_activ_history_log_page fwActivHis)
+static void json_stx_vs_fw_activate_history(const stx_fw_activ_history_log_page *fwActivHis)
 {
 	struct json_object *root = json_create_object();
 	__u32 i;
@@ -1330,39 +1343,41 @@ static void json_stx_vs_fw_activate_history(stx_fw_activ_history_log_page fwActi
 
 	json_object_add_value_array(root, "Seagate FW Activation History", historyLogPage);
 
-	if (fwActivHis.numValidFwActHisEnt > 0) {
-		for (i = 0; i < fwActivHis.numValidFwActHisEnt; i++) {
+	if (fwActivHis->numValidFwActHisEnt > 0) {
+		for (i = 0; i < fwActivHis->numValidFwActHisEnt; i++) {
 			struct json_object *lbaf = json_create_object();
-			char prev_fw[8] = { 0 };
-			char new_fw[8] = { 0 };
+			char prev_fw[9] = { 0 };
+			char new_fw[9] = { 0 };
 
-			json_object_add_value_int(lbaf, "Counter", fwActivHis.fwActHisEnt[i].fwActivCnt);
+			json_object_add_value_int(lbaf, "Counter", fwActivHis->fwActHisEnt[i].fwActivCnt);
 
-			time_t t = fwActivHis.fwActHisEnt[i].timeStamp / 1000;
+			time_t t = fwActivHis->fwActHisEnt[i].timeStamp / 1000;
 			struct tm  ts = *localtime(&t);
 
 			strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &ts);
-			printf(" %-20s   ", buf);
 			json_object_add_value_string(lbaf, "Timestamp", buf);
 
-			json_object_add_value_int(lbaf, "PCC", fwActivHis.fwActHisEnt[i].powCycleCnt);
-			sprintf(prev_fw, "%s", fwActivHis.fwActHisEnt[i].previousFW);
+			json_object_add_value_int(lbaf, "PCC", fwActivHis->fwActHisEnt[i].powCycleCnt);
+			/* the device supplies fixed-width, not NUL-terminated,
+			 * strings: copy by size and rely on the zeroed buffer */
+			memcpy(prev_fw, fwActivHis->fwActHisEnt[i].previousFW,
+			       sizeof(fwActivHis->fwActHisEnt[i].previousFW));
 			json_object_add_value_string(lbaf, "Previous_FW", prev_fw);
 
-			sprintf(new_fw, "%s", fwActivHis.fwActHisEnt[i].newFW);
+			memcpy(new_fw, fwActivHis->fwActHisEnt[i].newFW,
+			       sizeof(fwActivHis->fwActHisEnt[i].newFW));
 			json_object_add_value_string(lbaf, "New_FW", new_fw);
 
-			json_object_add_value_int(lbaf, "Slot", fwActivHis.fwActHisEnt[i].slotNum);
-			json_object_add_value_int(lbaf, "Commit_Action", fwActivHis.fwActHisEnt[i].commitActionType);
-			json_object_add_value_int(lbaf, "Result", fwActivHis.fwActHisEnt[i].result);
+			json_object_add_value_int(lbaf, "Slot", fwActivHis->fwActHisEnt[i].slotNum);
+			json_object_add_value_int(lbaf, "Commit_Action", fwActivHis->fwActHisEnt[i].commitActionType);
+			json_object_add_value_int(lbaf, "Result", fwActivHis->fwActHisEnt[i].result);
 
 			json_array_add_value_object(historyLogPage, lbaf);
 		}
-	} else {
-		printf("%s\n", "Do not have valid FW Activation History");
 	}
 
 	json_print_object(root, NULL);
+	printf("\n");
 	json_free_object(root);
 }
 
@@ -1380,7 +1395,7 @@ static int stx_vs_fw_activate_history(int argc, char **argv, struct command *acm
 
 	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err < 0) {
-		printf("\nDevice not found\n");
+		nvme_show_error("Device not found");
 		return -1;
 	}
 
@@ -1390,15 +1405,23 @@ static int stx_vs_fw_activate_history(int argc, char **argv, struct command *acm
 		return err;
 	}
 
-	if (flags & NORMAL)
+	if (!(flags & JSON))
 		printf("Seagate FW Activation History Information :\n");
 
 	err = nvme_get_log_simple(hdl, 0xC2, &fwActivHis, sizeof(fwActivHis));
 	if (!err) {
-		if (flags & NORMAL)
-			print_stx_vs_fw_activate_history(fwActivHis);
+		/* the device supplies the entry count: never walk past the
+		 * fixed-size table in the log header */
+		const unsigned int max_ent =
+			sizeof(fwActivHis.fwActHisEnt) / sizeof(fwActivHis.fwActHisEnt[0]);
+
+		if (fwActivHis.numValidFwActHisEnt > max_ent)
+			fwActivHis.numValidFwActHisEnt = max_ent;
+
+		if (!(flags & JSON))
+			print_stx_vs_fw_activate_history(&fwActivHis);
 		else
-			json_stx_vs_fw_activate_history(fwActivHis);
+			json_stx_vs_fw_activate_history(&fwActivHis);
 	} else if (err > 0) {
 		nvme_show_status(err);
 	}
@@ -1416,6 +1439,7 @@ static int clear_fw_activate_history(int argc, char **argv, struct command *acmd
 	__cleanup_nvme_global_ctx struct libnvme_global_ctx *ctx = NULL;
 	__cleanup_nvme_transport_handle struct libnvme_transport_handle *hdl = NULL;
 	struct nvme_id_ctrl ctrl;
+	struct libnvme_passthru_cmd cmd;
 	char modelNo[40];
 	__u64 result;
 
@@ -1432,11 +1456,12 @@ static int clear_fw_activate_history(int argc, char **argv, struct command *acmd
 
 	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err < 0) {
-		printf("\nDevice not found\n");
+		nvme_show_error("Device not found");
 		return -1;
 	}
 
-	err = nvme_identify_ctrl(hdl, &ctrl);
+	nvme_init_identify_ctrl(&cmd, &ctrl);
+	err = libnvme_exec_admin_passthru(hdl, &cmd);
 	if (!err) {
 		memcpy(modelNo, ctrl.mn, sizeof(modelNo));
 	} else {
@@ -1450,12 +1475,12 @@ static int clear_fw_activate_history(int argc, char **argv, struct command *acmd
 		err = nvme_set_features(hdl, 0, 0xC1, 0, 0x80000000, 0, 0, 0, 0, NULL,
 				0, &result);
 		if (err)
-			fprintf(stderr, "%s: couldn't clear PCIe correctable errors\n",
+			nvme_show_error("%s: couldn't clear PCIe correctable errors",
 				__func__);
 	}
 
 	if (err < 0) {
-		perror("set-feature");
+		nvme_show_err(err, "set-feature");
 		return errno;
 	}
 
@@ -1469,6 +1494,7 @@ static int vs_clr_pcie_correctable_errs(int argc, char **argv, struct command *a
 	const char *save = "specifies that the controller shall save the attribute";
 
 	struct nvme_id_ctrl ctrl;
+	struct libnvme_passthru_cmd cmd;
 	char modelNo[40];
 
 	__cleanup_nvme_global_ctx struct libnvme_global_ctx *ctx = NULL;
@@ -1490,12 +1516,13 @@ static int vs_clr_pcie_correctable_errs(int argc, char **argv, struct command *a
 
 	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err) {
-		printf("\nDevice not found\n");
+		nvme_show_error("Device not found");
 		return -1;
 	}
 
 
-	err = nvme_identify_ctrl(hdl, &ctrl);
+	nvme_init_identify_ctrl(&cmd, &ctrl);
+	err = libnvme_exec_admin_passthru(hdl, &cmd);
 	if (!err) {
 		memcpy(modelNo, ctrl.mn, sizeof(modelNo));
 	} else {
@@ -1509,13 +1536,11 @@ static int vs_clr_pcie_correctable_errs(int argc, char **argv, struct command *a
 		err = nvme_set_features(hdl, 0, 0xC3, 0, 0x80000000, 0, 0, 0, 0, NULL,
 				0, &result);
 		if (err)
-			fprintf(stderr, "%s: couldn't clear PCIe correctable errors\n", __func__);
+			nvme_show_error("%s: couldn't clear PCIe correctable errors", __func__);
 	}
 
-	err = nvme_set_features_simple(hdl, 0, 0xE1, cfg.save, 0xCB, &result);
-
 	if (err < 0) {
-		perror("set-feature");
+		nvme_show_err(err, "set-feature");
 		return errno;
 	}
 
@@ -1562,8 +1587,9 @@ static int get_host_tele(int argc, char **argv, struct command *acmd, struct plu
 
 	dump_fd = STDOUT_FILENO;
 	cfg.log_id = (cfg.log_id << 8) | 0x07;
-	err = nvme_get_nsid_log(hdl, cfg.namespace_id, false, cfg.log_id,
-				(void *)(&tele_log), sizeof(tele_log));
+	nvme_init_get_log(&cmd, cfg.namespace_id, cfg.log_id, NVME_CSI_NVM,
+			  (void *)(&tele_log), sizeof(tele_log));
+	err = libnvme_get_log(hdl, &cmd, false, NVME_LOG_PAGE_PDU_SIZE);
 	if (!err) {
 		maxBlk = tele_log.tele_data_area3;
 		offset += 512;
@@ -1578,10 +1604,8 @@ static int get_host_tele(int argc, char **argv, struct command *acmd, struct plu
 			d((unsigned char *)(&tele_log), sizeof(tele_log), 16, 1);
 		} else
 			seaget_d_raw((unsigned char *)(&tele_log), sizeof(tele_log), dump_fd);
-	} else if (err > 0) {
-		nvme_show_status(err);
 	} else {
-		perror("log page");
+		nvme_show_err(err, "log page");
 	}
 
 	blkCnt = 0;
@@ -1600,7 +1624,7 @@ static int get_host_tele(int argc, char **argv, struct command *acmd, struct plu
 		log = malloc(bytesToGet);
 
 		if (!log) {
-			fprintf(stderr, "could not alloc buffer for log\n");
+			nvme_show_error("could not alloc buffer for log");
 
 			return -EINVAL;
 		}
@@ -1620,10 +1644,8 @@ static int get_host_tele(int argc, char **argv, struct command *acmd, struct plu
 				d((unsigned char *)log, bytesToGet, 16, 1);
 			} else
 				seaget_d_raw((unsigned char *)log, bytesToGet, dump_fd);
-		} else if (err > 0) {
-			nvme_show_status(err);
 		} else {
-			perror("log page");
+			nvme_show_err(err, "log page");
 		}
 
 		blkCnt += blksToGet;
@@ -1670,8 +1692,9 @@ static int get_ctrl_tele(int argc, char **argv, struct command *acmd, struct plu
 	dump_fd = STDOUT_FILENO;
 
 	log_id = 0x08;
-	err = nvme_get_nsid_log(hdl, cfg.namespace_id, false, log_id,
-				(void *)(&tele_log), sizeof(tele_log));
+	nvme_init_get_log(&cmd, cfg.namespace_id, log_id, NVME_CSI_NVM,
+			  (void *)(&tele_log), sizeof(tele_log));
+	err = libnvme_get_log(hdl, &cmd, false, NVME_LOG_PAGE_PDU_SIZE);
 	if (!err) {
 		maxBlk = tele_log.tele_data_area3;
 		offset += 512;
@@ -1685,10 +1708,8 @@ static int get_ctrl_tele(int argc, char **argv, struct command *acmd, struct plu
 			d((unsigned char *)(&tele_log), sizeof(tele_log), 16, 1);
 		} else
 			seaget_d_raw((unsigned char *)(&tele_log), sizeof(tele_log), dump_fd);
-	} else if (err > 0) {
-		nvme_show_status(err);
 	} else {
-		perror("log page");
+		nvme_show_err(err, "log page");
 	}
 
 	blkCnt = 0;
@@ -1705,7 +1726,7 @@ static int get_ctrl_tele(int argc, char **argv, struct command *acmd, struct plu
 		log = malloc(bytesToGet);
 
 		if (!log) {
-			fprintf(stderr, "could not alloc buffer for log\n");
+			nvme_show_error("could not alloc buffer for log");
 			return -EINVAL;
 		}
 
@@ -1724,10 +1745,8 @@ static int get_ctrl_tele(int argc, char **argv, struct command *acmd, struct plu
 				d((unsigned char *)log, bytesToGet, 16, 1);
 			} else
 				seaget_d_raw((unsigned char *)log, bytesToGet, dump_fd);
-		} else if (err > 0) {
-			nvme_show_status(err);
 		} else {
-			perror("log page");
+			nvme_show_err(err, "log page");
 		}
 
 		blkCnt += blksToGet;
@@ -1785,25 +1804,24 @@ static int vs_internal_log(int argc, char **argv, struct command *acmd, struct p
 
 	dump_fd = STDOUT_FILENO;
 	if (strlen(cfg.file)) {
-		dump_fd = open(cfg.file, flags, mode);
+		dump_fd = shr_open_rawdata(cfg.file, flags, mode);
 		if (dump_fd < 0) {
-			perror(cfg.file);
+			nvme_show_perror("%s", cfg.file);
 			return -EINVAL;
 		}
 	}
 
 	log_id = 0x08;
-	err = nvme_get_nsid_log(hdl, cfg.namespace_id, false, log_id,
-				(void *)(&tele_log), sizeof(tele_log));
+	nvme_init_get_log(&cmd, cfg.namespace_id, log_id, NVME_CSI_NVM,
+			  (void *)(&tele_log), sizeof(tele_log));
+	err = libnvme_get_log(hdl, &cmd, false, NVME_LOG_PAGE_PDU_SIZE);
 	if (!err) {
 		maxBlk = tele_log.tele_data_area3;
 		offset += 512;
 
 		seaget_d_raw((unsigned char *)(&tele_log), sizeof(tele_log), dump_fd);
-	} else if (err > 0) {
-		nvme_show_status(err);
 	} else {
-		perror("log page");
+		nvme_show_err(err, "log page");
 	}
 
 	blkCnt = 0;
@@ -1820,7 +1838,7 @@ static int vs_internal_log(int argc, char **argv, struct command *acmd, struct p
 		log = malloc(bytesToGet);
 
 		if (!log) {
-			fprintf(stderr, "could not alloc buffer for log\n");
+			nvme_show_error("could not alloc buffer for log");
 			err = EINVAL;
 			goto out;
 		}
@@ -1837,10 +1855,8 @@ static int vs_internal_log(int argc, char **argv, struct command *acmd, struct p
 
 			seaget_d_raw((unsigned char *)log, bytesToGet, dump_fd);
 
-		} else if (err > 0) {
-			nvme_show_status(err);
 		} else {
-			perror("log page");
+			nvme_show_err(err, "log page");
 		}
 
 		blkCnt += blksToGet;
@@ -1857,9 +1873,18 @@ out:
 /*SEAGATE-PLUGIN Version */
 static int seagate_plugin_version(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
-	printf("Seagate-Plugin version : %d.%d\n",
-		   SEAGATE_PLUGIN_VERSION_MAJOR,
-		   SEAGATE_PLUGIN_VERSION_MINOR);
+	const char *desc = "Prints the Seagate plugin version.";
+	int err;
+
+	NVME_ARGS(opts);
+
+	err = parse_args(argc, argv, desc, opts);
+	if (err)
+		return err;
+
+	nvme_show_result("Seagate-Plugin version : %d.%d",
+			 SEAGATE_PLUGIN_VERSION_MAJOR,
+			 SEAGATE_PLUGIN_VERSION_MINOR);
 	return 0;
 }
 /*EOF SEAGATE-PLUGIN Version */
@@ -1867,9 +1892,120 @@ static int seagate_plugin_version(int argc, char **argv, struct command *acmd, s
 /*OCP SEAGATE-PLUGIN Version */
 static int stx_ocp_plugin_version(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
-	printf("Seagate-OCP-Plugin version : %d.%d\n",
-		SEAGATE_OCP_PLUGIN_VERSION_MAJOR,
-		SEAGATE_OCP_PLUGIN_VERSION_MINOR);
+	const char *desc = "Prints the Seagate OCP plugin version.";
+	int err;
+
+	NVME_ARGS(opts);
+
+	err = parse_args(argc, argv, desc, opts);
+	if (err)
+		return err;
+
+	nvme_show_result("Seagate-OCP-Plugin version : %d.%d",
+			 SEAGATE_OCP_PLUGIN_VERSION_MAJOR,
+			 SEAGATE_OCP_PLUGIN_VERSION_MINOR);
 	return 0;
 }
 /*EOF OCP SEAGATE-PLUGIN Version */
+
+static struct command temp_stats_cmd = {
+	.name = "vs-temperature-stats",
+	.help = "Retrieve Seagate temperature statistics ",
+	.fn = temp_stats,
+};
+
+static struct command log_pages_supp_cmd = {
+	.name = "vs-log-page-sup",
+	.help = "Retrieve Seagate Supported Log-pages Information ",
+	.fn = log_pages_supp,
+};
+
+static struct command vs_smart_log_cmd = {
+	.name = "vs-smart-add-log",
+	.help = "Retrieve Seagate extended-SMART Information ",
+	.fn = vs_smart_log,
+};
+
+static struct command vs_pcie_error_log_cmd = {
+	.name = "vs-pcie-stats",
+	.help = "Retrieve Seagate PCIe error statistics ",
+	.fn = vs_pcie_error_log,
+};
+
+static struct command vs_clr_pcie_correctable_errs_cmd = {
+	.name = "clear-pcie-correctable-errors",
+	.help = "Clear Seagate PCIe error statistics  ",
+	.fn = vs_clr_pcie_correctable_errs,
+};
+
+static struct command get_host_tele_cmd = {
+	.name = "get-host-tele",
+	.help = "Retrieve Seagate Host-Initiated Telemetry ",
+	.fn = get_host_tele,
+};
+
+static struct command get_ctrl_tele_cmd = {
+	.name = "get-ctrl-tele",
+	.help = "Retrieve Seagate Controller-Initiated Telemetry ",
+	.fn = get_ctrl_tele,
+};
+
+static struct command vs_internal_log_cmd = {
+	.name = "vs-internal-log",
+	.help = "Retrieve Seagate Controller-Initiated Telemetry in binary format",
+	.fn = vs_internal_log,
+};
+
+static struct command stx_vs_fw_activate_history_cmd = {
+	.name = "vs-fw-activate-history",
+	.help = "Retrieve the Firmware Activation History",
+	.fn = stx_vs_fw_activate_history,
+};
+
+static struct command clear_fw_activate_history_cmd = {
+	.name = "clear-fw-activate-history",
+	.help = "Clear Firmware Activation History",
+	.fn = clear_fw_activate_history,
+};
+
+static struct command seagate_plugin_version_cmd = {
+	.name = "plugin-version",
+	.help = "Shows Seagate plugin's version information ",
+	.fn = seagate_plugin_version,
+	.no_device = true,
+};
+
+static struct command stx_ocp_plugin_version_cmd = {
+	.name = "cloud-SSD-plugin-version",
+	.help = "Shows OCP Seagate plugin's version information ",
+	.fn = stx_ocp_plugin_version,
+	.no_device = true,
+};
+
+static struct command *commands[] = {
+	&temp_stats_cmd,
+	&log_pages_supp_cmd,
+	&vs_smart_log_cmd,
+	&vs_pcie_error_log_cmd,
+	&vs_clr_pcie_correctable_errs_cmd,
+	&get_host_tele_cmd,
+	&get_ctrl_tele_cmd,
+	&vs_internal_log_cmd,
+	&stx_vs_fw_activate_history_cmd,
+	&clear_fw_activate_history_cmd,
+	&seagate_plugin_version_cmd,
+	&stx_ocp_plugin_version_cmd,
+	NULL,
+};
+
+static struct plugin plugin = {
+	.name = "seagate",
+	.desc = "Seagate vendor specific extensions",
+	.version = NVME_VERSION,
+};
+
+static void __shr_constructor register_plugin(void)
+{
+	plugin_add_group(&plugin, NULL, commands);
+	register_extension(&plugin);
+}

@@ -5,19 +5,21 @@
  * Author: leonardo.da.cunha@solidigm.com
  */
 
-#include <fcntl.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
 
 #include <libnvme.h>
 
-#include "common.h"
-#include "nvme.h"
-#include "plugin.h"
-#include "nvme-print.h"
+#include <ccan/endian/endian.h>
+#include <shared/compiler-attributes-util.h>
 
+#include "cleanup.h"
+#include "global-ctx.h"
+#include "nvme-print.h"
+#include "plugin.h"
 #include "solidigm-smart.h"
 #include "solidigm-util.h"
 
@@ -60,7 +62,7 @@ struct vu_smart_log {
 	struct nvme_additional_smart_log_item item[VU_SMART_MAX_ITEMS];
 };
 
-static char *id_to_name(__u8 id)
+static const char *id_to_name(__u8 id, bool has_smart_id_e7_or_e8)
 {
 	switch (id) {
 	case 0x0D:
@@ -78,7 +80,8 @@ static char *id_to_name(__u8 id)
 	case 0xB8:
 		return "e2e_error_detect_count";
 	case 0xC7:
-		return "crc_error_count";
+		return has_smart_id_e7_or_e8 ? "bad_tlp_error_count"
+		 : "crc_error_count";
 	case 0xE2:
 		return "media_wear_percentage";
 	case 0xE3:
@@ -89,6 +92,10 @@ static char *id_to_name(__u8 id)
 		return "read_commands_in_flight_counter";
 	case 0xE6:
 		return "write_commands_in_flight_counter";
+	case 0xE7:
+		return "bad_dllp_count";
+	case 0xE8:
+		return "receiver_error_count";
 	case 0xEA:
 		return "thermal_throttle_status";
 	case 0xEE:
@@ -124,15 +131,26 @@ static char *id_to_name(__u8 id)
 	}
 }
 
-static void smart_log_item_print(struct nvme_additional_smart_log_item *item)
+static bool vu_smart_log_has_item(const struct vu_smart_log *payload, __u8 id)
+{
+	for (int i = 0; i < VU_SMART_MAX_ITEMS; i++) {
+		if (payload->item[i].id == id)
+			return true;
+	}
+
+	return false;
+}
+
+static void smart_log_item_print(struct nvme_additional_smart_log_item *item,
+	 bool has_smart_id_e7_or_e8)
 {
 	struct smart_ref_clk *pll_item = (struct smart_ref_clk *)item;
 
 	if (!item->id)
 		return;
 
-	printf("%#x    %-45s  %3d         ",
-		item->id, id_to_name(item->id), item->normalized);
+	printf("%#x    %-45s  %3d         ", item->id,
+		 id_to_name(item->id, has_smart_id_e7_or_e8), item->normalized);
 
 	switch (item->id) {
 	case 0xAD:
@@ -147,7 +165,7 @@ static void smart_log_item_print(struct nvme_additional_smart_log_item *item)
 			le32_to_cpu(item->thermal_throttle.count));
 		return;
 	case 0xF3:
-		printf("gain0: %u, loss0: %u, gain1: %u, loss1: %u, legacy:%lu\n",
+		printf("gain0: %u, loss0: %u, gain1: %u, loss1: %u, legacy:%"PRIu64"\n",
 			le16_to_cpu(pll_item->gainCount0),
 			le16_to_cpu(pll_item->lossCount0),
 			le16_to_cpu(pll_item->gainCount1),
@@ -159,7 +177,9 @@ static void smart_log_item_print(struct nvme_additional_smart_log_item *item)
 	}
 }
 
-static void smart_log_item_add_json(struct nvme_additional_smart_log_item *item, struct json_object *dev_stats)
+static void smart_log_item_add_json(struct nvme_additional_smart_log_item *item,
+					    struct json_object *dev_stats,
+					    bool has_smart_id_e7_or_e8)
 {
 	struct smart_ref_clk *pll_item = (struct smart_ref_clk *)item;
 	struct json_object *entry_stats = json_create_object();
@@ -189,17 +209,21 @@ static void smart_log_item_add_json(struct nvme_additional_smart_log_item *item,
 	default:
 		json_object_add_value_int(entry_stats, "raw", int48_to_long(item->raw));
 	}
-	json_object_add_value_object(dev_stats, id_to_name(item->id), entry_stats);
+	json_object_add_value_object(dev_stats, id_to_name(item->id,
+		has_smart_id_e7_or_e8), entry_stats);
 }
 
 static void vu_smart_log_show_json(struct vu_smart_log *payload, unsigned int nsid, const char *devname)
 {
 	struct json_object *dev_stats = json_create_object();
 	struct nvme_additional_smart_log_item *item = payload->item;
+	bool has_smart_id_e7_or_e8 = vu_smart_log_has_item(payload, 0xE7) ||
+		vu_smart_log_has_item(payload, 0xE8);
 	struct json_object *root;
 
 	for (int i = 0; i < VU_SMART_MAX_ITEMS; i++)
-		smart_log_item_add_json(&item[i], dev_stats);
+		smart_log_item_add_json(&item[i], dev_stats,
+			 has_smart_id_e7_or_e8);
 
 	root = json_create_object();
 	json_object_add_value_string(root, "Solidigm SMART log", devname);
@@ -213,13 +237,15 @@ static void vu_smart_log_show(struct vu_smart_log *payload, unsigned int nsid, c
 			      __u8 uuid_index)
 {
 	struct nvme_additional_smart_log_item *item = payload->item;
+	bool has_smart_id_e7_or_e8 = vu_smart_log_has_item(payload, 0xE7) ||
+		vu_smart_log_has_item(payload, 0xE8);
 
 	printf("Additional Smart Log for NVMe device:%s namespace-id:%x UUID-idx:%d\n",
 		devname, nsid, uuid_index);
 	printf("ID             KEY                                 Normalized     Raw\n");
 
 	for (int i = 0; i < VU_SMART_MAX_ITEMS; i++)
-		smart_log_item_print(&item[i]);
+		smart_log_item_print(&item[i], has_smart_id_e7_or_e8);
 }
 
 int solidigm_get_additional_smart_log(int argc, char **argv, struct command *acmd, struct plugin *plugin)
@@ -253,7 +279,7 @@ int solidigm_get_additional_smart_log(int argc, char **argv, struct command *acm
 
 	err = validate_output_format(nvme_args.output_format, &flags);
 	if (err < 0) {
-		fprintf(stderr, "Invalid output format '%s'\n",
+		nvme_show_error("Invalid output format '%s'",
 			nvme_args.output_format);
 		return err;
 	}
@@ -282,4 +308,3 @@ int solidigm_get_additional_smart_log(int argc, char **argv, struct command *acm
 
 	return err;
 }
-

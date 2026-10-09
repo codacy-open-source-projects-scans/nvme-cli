@@ -10,8 +10,6 @@
 #include <stdio.h>
 #include <string.h>
 
-#include <json.h>
-
 #include "config.h"
 #include "telemetry-log.h"
 
@@ -45,6 +43,10 @@ static bool config_get_by_version(const struct json_object *obj,
 		if (json_object_object_get_ex(major_obj, "*", value))
 			return value != NULL;
 
+		/* Try alternative minor version wildcard */
+		if (json_object_object_get_ex(major_obj, "49374", value))
+			return value != NULL;
+
 		SOLIDIGM_LOG_WARNING(
 			"Warning: Object %s version major %d found but minor %d not found\n",
 			key, version_major, version_minor);
@@ -58,6 +60,25 @@ static bool config_get_by_version(const struct json_object *obj,
 
 		/* Try wildcard minor version */
 		if (json_object_object_get_ex(major_obj, "*", value))
+			return value != NULL;
+
+		/* Try alternative minor version wildcard */
+		if (json_object_object_get_ex(major_obj, "49374", value))
+			return value != NULL;
+	}
+
+	/* Try alternative major version wildcard */
+	if (json_object_object_get_ex(obj, "47837", &major_obj)) {
+		/* Try exact minor version match */
+		if (json_object_object_get_ex(major_obj, str_subkey, value))
+			return value != NULL;
+
+		/* Try wildcard minor version */
+		if (json_object_object_get_ex(major_obj, "*", value))
+			return value != NULL;
+
+		/* Try alternative minor version wildcard */
+		if (json_object_object_get_ex(major_obj, "49374", value))
 			return value != NULL;
 	}
 
@@ -113,7 +134,8 @@ struct json_object *solidigm_config_get_nlog_formats(const struct json_object *c
 {
 	struct json_object *nlog_formats = NULL;
 
-	json_object_object_get_ex(config, "NLOG_FORMATS", &nlog_formats);
+	if (!json_object_object_get_ex(config, "NLOG_FORMATS", &nlog_formats))
+		return NULL;
 	return nlog_formats;
 }
 

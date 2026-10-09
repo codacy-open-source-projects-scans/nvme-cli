@@ -22,18 +22,20 @@
 #include <sys/select.h>
 #include <sys/stat.h>
 
+#include <libnvme.h>
+
 #include <ccan/endian/endian.h>
 
-#include <libnvme.h>
+#include <shared/fs-util.h>
 
 #include "nvme/tree.h"
 
 struct events {
-	libnvme_ctrl_t c;
+	struct libnvme_ctrl *c;
 	int uevent_fd;
 };
 
-static int open_uevent(libnvme_ctrl_t c)
+static int open_uevent(struct libnvme_ctrl *c)
 {
 	char buf[0x1000];
 	if (snprintf(buf, sizeof(buf), "%s/uevent", libnvme_ctrl_get_sysfs_dir(c)) < 0)
@@ -41,7 +43,7 @@ static int open_uevent(libnvme_ctrl_t c)
 	return open(buf, O_RDONLY);
 }
 
-static void save_telemetry(libnvme_ctrl_t c)
+static void save_telemetry(struct libnvme_ctrl *c)
 {
 	char buf[0x1000];
 	size_t log_size;
@@ -63,7 +65,7 @@ static void save_telemetry(libnvme_ctrl_t c)
 		return;
 	}
 
-	fd = open(buf, O_CREAT|O_WRONLY, S_IRUSR|S_IRGRP);
+	fd = shr_open_rawdata(buf, O_CREAT|O_WRONLY, S_IRUSR|S_IRGRP);
 	if (fd < 0) {
 		free(log);
 		return;
@@ -79,7 +81,7 @@ static void save_telemetry(libnvme_ctrl_t c)
 	free(log);
 }
 
-static void check_telemetry(libnvme_ctrl_t c, int ufd)
+static void check_telemetry(struct libnvme_ctrl *c, int ufd)
 {
 	char buf[0x1000] = { 0 };
 	char *p, *ptr;
@@ -108,7 +110,7 @@ static void check_telemetry(libnvme_ctrl_t c, int ufd)
 	}
 }
 
-static void wait_events(fd_set *fds, struct events *e, int nr)
+static void wait_events(fd_set *fds, struct events *e, int nr, int maxfd)
 {
 	int ret, i;
 
@@ -116,12 +118,15 @@ static void wait_events(fd_set *fds, struct events *e, int nr)
 		check_telemetry(e[i].c, e[i].uevent_fd);
 
 	while (1) {
-		ret = select(nr, fds, NULL, NULL, NULL);
+		/* select() clears the bits of inactive fds, restore them */
+		fd_set read_fds = *fds;
+
+		ret = select(maxfd + 1, &read_fds, NULL, NULL, NULL);
 		if (ret < 0)
 			return;
 
 		for (i = 0; i < nr; i++) {
-			if (!FD_ISSET(e[i].uevent_fd, fds))
+			if (!FD_ISSET(e[i].uevent_fd, &read_fds))
 				continue;
 			check_telemetry(e[i].c, e[i].uevent_fd);
 		}
@@ -132,16 +137,18 @@ int main()
 {
 	struct events *e;
 	fd_set fds;
+	int maxfd = -1;
 	int i = 0;
 
 	struct libnvme_global_ctx *ctx;
-	libnvme_subsystem_t s;
-	libnvme_ctrl_t c;
-	libnvme_host_t h;
+	struct libnvme_subsystem *s;
+	struct libnvme_ctrl *c;
+	struct libnvme_host *h;
 
-	ctx = libnvme_create_global_ctx(stdout, LIBNVME_DEFAULT_LOGLEVEL);
+	ctx = libnvme_create_global_ctx();
 	if (!ctx)
 		return 1;
+	libnvme_set_logging_file(ctx, stdout);
 
 	if (libnvme_scan_topology(ctx, NULL, NULL)) {
 		libnvme_free_global_ctx(ctx);
@@ -154,6 +161,10 @@ int main()
 				i++;
 
 	e = calloc(i, sizeof(struct events));
+	if (i > 0 && !e) {
+		libnvme_free_global_ctx(ctx);
+		return EXIT_FAILURE;
+	}
 	FD_ZERO(&fds);
 	i = 0;
 
@@ -165,6 +176,8 @@ int main()
 				if (fd < 0)
 					continue;
 				FD_SET(fd, &fds);
+				if (fd > maxfd)
+					maxfd = fd;
 				e[i].uevent_fd = fd;
 				e[i].c = c;
 				i++;
@@ -172,7 +185,8 @@ int main()
 		}
 	}
 
-	wait_events(&fds, e, i);
+	if (i > 0)
+		wait_events(&fds, e, i, maxfd);
 	libnvme_free_global_ctx(ctx);
 	free(e);
 

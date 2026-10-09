@@ -8,8 +8,7 @@ plugin_sources += [
 ]
 
 if json_c_dep.found()
-    plugin_sources += [
-        'plugins/lm/lm-print-json.c',
-    ]
+  plugin_sources += [
+      'plugins/lm/lm-print-json.c',
+  ]
 endif
-

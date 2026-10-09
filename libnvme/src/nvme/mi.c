@@ -16,12 +16,13 @@
 #include <ccan/endian/endian.h>
 #include <ccan/minmax/minmax.h>
 
+#include <shared/compiler-attributes-util.h>
+
 #include <libnvme.h>
 #include <libnvme-mi.h>
 
 #include "private.h"
 #include "private-mi.h"
-#include "compiler-attributes.h"
 
 #define NUM_ENABLES    (256u)
 
@@ -38,7 +39,7 @@ _Static_assert(sizeof(struct nvme_mi_aem_occ_data) == 9,
 _Static_assert(sizeof(struct nvme_mi_aem_occ_list_hdr) == 7,
 	"size_of_nvme_mi_aem_occ_list_hdr_is_not_7_bytes");
 
-static int libnvme_mi_get_async_message(libnvme_mi_ep_t ep,
+static int libnvme_mi_get_async_message(struct libnvme_mi_ep *ep,
 	struct nvme_mi_aem_msg *aem_msg, size_t *aem_msg_len);
 
 static const int default_timeout = 1000; /* milliseconds; endpoints may
@@ -90,6 +91,10 @@ int __libnvme_transport_handle_open_mi(struct libnvme_transport_handle *hdl, con
 	ep = libnvme_mi_open_mctp(hdl->ctx, net, eid);
 	if (!ep)
 		return -EINVAL;
+
+	hdl->ep = ep;
+	hdl->id = ctrl_id;
+	list_add_tail(&ep->controllers, &hdl->ep_entry);
 
 	return 0;
 }
@@ -195,7 +200,7 @@ void libnvme_mi_ep_probe(struct libnvme_mi_ep *ep)
 	 */
 	nvme_init_identify_ctrl(&cmd, &id);
 	cmd.data_len = offsetof(struct nvme_id_ctrl, rab);
-	rc = libnvme_submit_admin_passthru(hdl, &cmd);
+	rc = libnvme_exec_admin_passthru(hdl, &cmd);
 	if (rc) {
 		libnvme_msg(ep->ctx, LIBNVME_LOG_WARN,
 			 "Identify Controller failed, no quirks applied\n");
@@ -293,12 +298,16 @@ struct libnvme_mi_ep *libnvme_mi_init_ep(struct libnvme_global_ctx *ctx)
 	ep->mprt_max = 0;
 	list_head_init(&ep->controllers);
 
+	ep->mi_submit_entry = __libnvme_mi_submit_entry;
+	ep->mi_submit_exit = __libnvme_mi_submit_exit;
+
 	list_add(&ctx->endpoints, &ep->root_entry);
 
 	return ep;
 }
 
-__public int libnvme_mi_ep_set_timeout(libnvme_mi_ep_t ep, unsigned int timeout_ms)
+__shr_public int libnvme_mi_ep_set_timeout(
+		struct libnvme_mi_ep *ep, unsigned int timeout_ms)
 {
 	if (ep->transport->check_timeout) {
 		int rc;
@@ -311,22 +320,45 @@ __public int libnvme_mi_ep_set_timeout(libnvme_mi_ep_t ep, unsigned int timeout_
 	return 0;
 }
 
-void libnvme_mi_ep_set_mprt_max(libnvme_mi_ep_t ep, unsigned int mprt_max_ms)
+void libnvme_mi_ep_set_mprt_max(struct libnvme_mi_ep *ep, unsigned int mprt_max_ms)
 {
 	ep->mprt_max = mprt_max_ms;
 }
 
-__public unsigned int libnvme_mi_ep_get_timeout(libnvme_mi_ep_t ep)
+__shr_public unsigned int libnvme_mi_ep_get_timeout(struct libnvme_mi_ep *ep)
 {
 	return ep->timeout;
 }
 
-static bool libnvme_mi_ep_has_quirk(libnvme_mi_ep_t ep, unsigned long quirk)
+__shr_public void libnvme_mi_ep_set_submit_entry(struct libnvme_mi_ep *ep,
+		void *(*mi_submit_entry)(struct libnvme_mi_ep *ep,
+				__u8 type, const struct nvme_mi_msg_hdr *hdr,
+				size_t hdr_len, const void *data,
+				size_t data_len))
+{
+	ep->mi_submit_entry = mi_submit_entry;
+	if (!ep->mi_submit_entry)
+		ep->mi_submit_entry = __libnvme_mi_submit_entry;
+}
+
+__shr_public void libnvme_mi_ep_set_submit_exit(struct libnvme_mi_ep *ep,
+		void (*mi_submit_exit)(struct libnvme_mi_ep *ep,
+				__u8 type, const struct nvme_mi_msg_hdr *hdr,
+				size_t hdr_len, const void *data,
+				size_t data_len, void *user_data))
+{
+	ep->mi_submit_exit = mi_submit_exit;
+	if (!ep->mi_submit_exit)
+		ep->mi_submit_exit = __libnvme_mi_submit_exit;
+}
+
+static bool libnvme_mi_ep_has_quirk(struct libnvme_mi_ep *ep, unsigned long quirk)
 {
 	return ep->quirks & quirk;
 }
 
-__public struct libnvme_transport_handle *libnvme_mi_init_transport_handle(libnvme_mi_ep_t ep, __u16 ctrl_id)
+__shr_public struct libnvme_transport_handle *libnvme_mi_init_transport_handle(
+		struct libnvme_mi_ep *ep, __u16 ctrl_id)
 {
 	struct libnvme_transport_handle *hdl;
 
@@ -344,12 +376,21 @@ __public struct libnvme_transport_handle *libnvme_mi_init_transport_handle(libnv
 	return hdl;
 }
 
-__public __u16 libnvme_mi_ctrl_id(struct libnvme_transport_handle *hdl)
+__shr_public __u16 libnvme_mi_ctrl_id(struct libnvme_transport_handle *hdl)
 {
 	return hdl->id;
 }
 
-__public int libnvme_mi_scan_ep(libnvme_mi_ep_t ep, bool force_rescan)
+__shr_public struct libnvme_mi_ep *libnvme_transport_handle_get_mi_ep(
+		struct libnvme_transport_handle *hdl)
+{
+	if (!hdl || !libnvme_transport_handle_is_mi(hdl))
+		return NULL;
+
+	return hdl->ep;
+}
+
+__shr_public int libnvme_mi_scan_ep(struct libnvme_mi_ep *ep, bool force_rescan)
 {
 	struct nvme_ctrl_list list;
 	unsigned int i, n_ctrl;
@@ -422,18 +463,21 @@ static int libnvme_mi_verify_resp_mic(struct libnvme_mi_resp *resp)
 	return resp->mic != ~crc;
 }
 
-__public __weak void *libnvme_mi_submit_entry(__u8 type, const struct nvme_mi_msg_hdr *hdr,
-					   size_t hdr_len, const void *data, size_t data_len)
+void *__libnvme_mi_submit_entry(struct libnvme_mi_ep *ep,
+		__u8 type, const struct nvme_mi_msg_hdr *hdr,
+		size_t hdr_len, const void *data, size_t data_len)
 {
 	return NULL;
 }
 
-__public __weak void libnvme_mi_submit_exit(__u8 type, const struct nvme_mi_msg_hdr *hdr,
-					 size_t hdr_len, const void *data, size_t data_len,
-					 void *user_data) { }
+void __libnvme_mi_submit_exit(struct libnvme_mi_ep *ep,
+		__u8 type, const struct nvme_mi_msg_hdr *hdr,
+		size_t hdr_len, const void *data, size_t data_len,
+		void *user_data)
+{
+}
 
-
-int libnvme_mi_async_read(libnvme_mi_ep_t ep, struct libnvme_mi_resp *resp)
+int libnvme_mi_async_read(struct libnvme_mi_ep *ep, struct libnvme_mi_resp *resp)
 {
 	if (libnvme_mi_ep_has_quirk(ep, LIBNVME_QUIRK_MIN_INTER_COMMAND_TIME))
 		libnvme_mi_record_resp_time(ep);
@@ -473,7 +517,7 @@ int libnvme_mi_async_read(libnvme_mi_ep_t ep, struct libnvme_mi_resp *resp)
 		return -EPROTO;
 	}
 
-	if (!(resp->hdr->nmp & ~(NVME_MI_ROR_REQ << 7))) {
+	if (resp->hdr->nmp & (NVME_MI_ROR_RSP << 7)) {
 		libnvme_msg(ep->ctx, LIBNVME_LOG_DEBUG,
 			 "ROR value in response indicates a response\n");
 		return -EIO;
@@ -490,14 +534,11 @@ int libnvme_mi_async_read(libnvme_mi_ep_t ep, struct libnvme_mi_resp *resp)
 }
 
 
-int libnvme_mi_submit(libnvme_mi_ep_t ep, struct libnvme_mi_req *req,
-		   struct libnvme_mi_resp *resp)
+int libnvme_mi_submit(struct libnvme_mi_ep *ep, struct libnvme_mi_req *req,
+		struct libnvme_mi_resp *resp)
 {
 	int rc;
 	void *user_data;
-
-	user_data = libnvme_mi_submit_entry(req->hdr->type, req->hdr, req->hdr_len, req->data,
-					 req->data_len);
 
 	if (req->hdr_len < sizeof(struct nvme_mi_msg_hdr))
 		return -EINVAL;
@@ -510,6 +551,9 @@ int libnvme_mi_submit(libnvme_mi_ep_t ep, struct libnvme_mi_req *req,
 
 	if (resp->hdr_len & 0x3)
 		return -EINVAL;
+
+	user_data = ep->mi_submit_entry(ep, req->hdr->type, req->hdr,
+		req->hdr_len, req->data, req->data_len);
 
 	libnvme_mi_ep_probe(ep);
 
@@ -564,13 +608,13 @@ int libnvme_mi_submit(libnvme_mi_ep_t ep, struct libnvme_mi_req *req,
 		return -EIO;
 	}
 
-	libnvme_mi_submit_exit(resp->hdr->type, resp->hdr, resp->hdr_len, resp->data, resp->data_len,
-			    user_data);
+	ep->mi_submit_exit(ep, resp->hdr->type, resp->hdr, resp->hdr_len,
+		resp->data, resp->data_len, user_data);
 
 	return 0;
 }
 
-__public int libnvme_mi_set_csi(libnvme_mi_ep_t ep, uint8_t csi)
+__shr_public int libnvme_mi_set_csi(struct libnvme_mi_ep *ep, uint8_t csi)
 {
 	uint8_t csi_bit = (csi) ? 1 : 0;
 
@@ -582,7 +626,7 @@ __public int libnvme_mi_set_csi(libnvme_mi_ep_t ep, uint8_t csi)
 	return 0;
 }
 
-static void libnvme_mi_admin_init_req(libnvme_mi_ep_t ep,
+static void libnvme_mi_admin_init_req(struct libnvme_mi_ep *ep,
 				   struct libnvme_mi_req *req,
 				   struct nvme_mi_admin_req_hdr *hdr,
 				   __u16 ctrl_id, __u8 opcode)
@@ -609,7 +653,7 @@ static void libnvme_mi_admin_init_resp(struct libnvme_mi_resp *resp,
 	resp->hdr_len = sizeof(*hdr);
 }
 
-static void libnvme_mi_control_init_req(libnvme_mi_ep_t ep,
+static void libnvme_mi_control_init_req(struct libnvme_mi_ep *ep,
 				    struct libnvme_mi_req *req,
 				    struct nvme_mi_control_req *control_req,
 				    __u8 opcode, __u16 cpsp)
@@ -701,7 +745,7 @@ static int libnvme_mi_control_parse_status(struct libnvme_mi_resp *resp, __u16 *
 	return control_resp->status;
 }
 
-static int libnvme_mi_get_async_message(libnvme_mi_ep_t ep,
+static int libnvme_mi_get_async_message(struct libnvme_mi_ep *ep,
 							struct nvme_mi_aem_msg *aem_msg,
 							size_t *aem_msg_len)
 {
@@ -723,7 +767,7 @@ static int libnvme_mi_get_async_message(libnvme_mi_ep_t ep,
 }
 
 
-__public int libnvme_mi_admin_xfer(struct libnvme_transport_handle *hdl,
+__shr_public int libnvme_mi_admin_xfer(struct libnvme_transport_handle *hdl,
 		       struct nvme_mi_admin_req_hdr *admin_req,
 		       size_t req_data_size,
 		       struct nvme_mi_admin_resp_hdr *admin_resp,
@@ -889,7 +933,7 @@ int libnvme_mi_admin_admin_passthru(struct libnvme_transport_handle *hdl,
 	return 0;
 }
 
-__public int libnvme_mi_control(libnvme_mi_ep_t ep, __u8 opcode,
+__shr_public int libnvme_mi_control(struct libnvme_mi_ep *ep, __u8 opcode,
 		    __u16 cpsp, __u16 *result_cpsr)
 {
 	struct nvme_mi_control_resp control_resp;
@@ -912,7 +956,7 @@ __public int libnvme_mi_control(libnvme_mi_ep_t ep, __u8 opcode,
 	return 0;
 }
 
-static void libnvme_mi_mi_init_req(libnvme_mi_ep_t ep,
+static void libnvme_mi_mi_init_req(struct libnvme_mi_ep *ep,
 	struct libnvme_mi_req *req,
 	struct nvme_mi_mi_req_hdr *hdr,
 	__u32 cdw0, __u8 opcode)
@@ -931,7 +975,7 @@ static void libnvme_mi_mi_init_req(libnvme_mi_ep_t ep,
 	req->hdr_len = sizeof(*hdr);
 }
 
-static int libnvme_mi_read_data(libnvme_mi_ep_t ep, __u32 cdw0,
+static int libnvme_mi_read_data(struct libnvme_mi_ep *ep, __u32 cdw0,
 			     void *data, size_t *data_len)
 {
 	struct nvme_mi_mi_resp_hdr resp_hdr;
@@ -961,7 +1005,7 @@ static int libnvme_mi_read_data(libnvme_mi_ep_t ep, __u32 cdw0,
 	return 0;
 }
 
-__public int libnvme_mi_mi_xfer(libnvme_mi_ep_t ep,
+__shr_public int libnvme_mi_mi_xfer(struct libnvme_mi_ep *ep,
 		       struct nvme_mi_mi_req_hdr *mi_req,
 		       size_t req_data_size,
 		       struct nvme_mi_mi_resp_hdr *mi_resp,
@@ -1011,7 +1055,7 @@ __public int libnvme_mi_mi_xfer(libnvme_mi_ep_t ep,
 	return 0;
 }
 
-__public int libnvme_mi_mi_read_mi_data_subsys(libnvme_mi_ep_t ep,
+__shr_public int libnvme_mi_mi_read_mi_data_subsys(struct libnvme_mi_ep *ep,
 				   struct nvme_mi_read_nvm_ss_info *s)
 {
 	size_t len;
@@ -1036,8 +1080,9 @@ __public int libnvme_mi_mi_read_mi_data_subsys(libnvme_mi_ep_t ep,
 	return 0;
 }
 
-__public int libnvme_mi_mi_read_mi_data_port(libnvme_mi_ep_t ep, __u8 portid,
-				 struct nvme_mi_read_port_info *p)
+__shr_public int libnvme_mi_mi_read_mi_data_port(
+		struct libnvme_mi_ep *ep, __u8 portid,
+		struct nvme_mi_read_port_info *p)
 {
 	size_t len;
 	__u32 cdw0;
@@ -1056,8 +1101,9 @@ __public int libnvme_mi_mi_read_mi_data_port(libnvme_mi_ep_t ep, __u8 portid,
 	return 0;
 }
 
-__public int libnvme_mi_mi_read_mi_data_ctrl_list(libnvme_mi_ep_t ep, __u8 start_ctrlid,
-				       struct nvme_ctrl_list *list)
+__shr_public int libnvme_mi_mi_read_mi_data_ctrl_list(
+		struct libnvme_mi_ep *ep, __u8 start_ctrlid,
+		struct nvme_ctrl_list *list)
 {
 	size_t len;
 	__u32 cdw0;
@@ -1073,8 +1119,9 @@ __public int libnvme_mi_mi_read_mi_data_ctrl_list(libnvme_mi_ep_t ep, __u8 start
 	return 0;
 }
 
-__public int libnvme_mi_mi_read_mi_data_ctrl(libnvme_mi_ep_t ep, __u16 ctrl_id,
-				       struct nvme_mi_read_ctrl_info *ctrl)
+__shr_public int libnvme_mi_mi_read_mi_data_ctrl(
+		struct libnvme_mi_ep *ep, __u16 ctrl_id,
+		struct nvme_mi_read_ctrl_info *ctrl)
 {
 	size_t len;
 	__u32 cdw0;
@@ -1093,8 +1140,9 @@ __public int libnvme_mi_mi_read_mi_data_ctrl(libnvme_mi_ep_t ep, __u16 ctrl_id,
 	return 0;
 }
 
-__public int libnvme_mi_mi_subsystem_health_status_poll(libnvme_mi_ep_t ep, bool clear,
-					    struct nvme_mi_nvm_ss_health_status *sshs)
+__shr_public int libnvme_mi_mi_subsystem_health_status_poll(
+		struct libnvme_mi_ep *ep, bool clear,
+		struct nvme_mi_nvm_ss_health_status *sshs)
 {
 	struct nvme_mi_mi_resp_hdr resp_hdr;
 	struct nvme_mi_mi_req_hdr req_hdr;
@@ -1104,7 +1152,7 @@ __public int libnvme_mi_mi_subsystem_health_status_poll(libnvme_mi_ep_t ep, bool
 
 	libnvme_mi_mi_init_req(ep, &req, &req_hdr, 0,
 		nvme_mi_mi_opcode_subsys_health_status_poll);
-	req_hdr.cdw1 = (clear ? 1 : 0) << 31;
+	req_hdr.cdw1 = cpu_to_le32((clear ? 1U : 0U) << 31);
 
 	memset(&resp, 0, sizeof(resp));
 	resp.hdr = &resp_hdr.hdr;
@@ -1130,7 +1178,93 @@ __public int libnvme_mi_mi_subsystem_health_status_poll(libnvme_mi_ep_t ep, bool
 	return 0;
 }
 
-int libnvme_mi_mi_config_set_get_ex(libnvme_mi_ep_t ep, __u8 opcode, __u32 dw0,
+__shr_public int libnvme_mi_mi_pda_read(struct libnvme_mi_ep *ep,
+		enum nvme_mi_pda_dformat dformat, __u32 dofst, __u32 dlen,
+		void *data, size_t *data_len)
+{
+	struct nvme_mi_mi_resp_hdr resp_hdr;
+	struct nvme_mi_mi_req_hdr req_hdr;
+	struct libnvme_mi_resp resp;
+	struct libnvme_mi_req req;
+	int rc;
+
+	libnvme_mi_mi_init_req(ep, &req, &req_hdr, dofst,
+		nvme_mi_mi_opcode_pda_read);
+	req_hdr.rsvd0[0] = dformat;
+	req_hdr.cdw1 = cpu_to_le32(dlen);
+
+	memset(&resp, 0, sizeof(resp));
+	resp.hdr = &resp_hdr.hdr;
+	resp.hdr_len = sizeof(resp_hdr);
+	resp.data = data;
+	resp.data_len = *data_len;
+
+	rc = libnvme_mi_submit(ep, &req, &resp);
+	if (rc)
+		return rc;
+
+	if (resp_hdr.status)
+		return resp_hdr.status;
+
+	*data_len = resp.data_len;
+
+	return 0;
+}
+
+__shr_public int libnvme_mi_mi_pda_write(struct libnvme_mi_ep *ep,
+		enum nvme_mi_pda_dformat dformat, __u32 dofst, __u32 dlen,
+		void *data, size_t data_len)
+{
+	struct nvme_mi_mi_resp_hdr resp_hdr;
+	struct nvme_mi_mi_req_hdr req_hdr;
+	struct libnvme_mi_resp resp;
+	struct libnvme_mi_req req;
+	int rc;
+
+	libnvme_mi_mi_init_req(ep, &req, &req_hdr, dofst,
+		nvme_mi_mi_opcode_pda_write);
+	req_hdr.rsvd0[0] = dformat;
+	req_hdr.cdw1 = cpu_to_le32(dlen);
+	req.data = data;
+	req.data_len = data_len;
+
+	memset(&resp, 0, sizeof(resp));
+	resp.hdr = &resp_hdr.hdr;
+	resp.hdr_len = sizeof(resp_hdr);
+
+	rc = libnvme_mi_submit(ep, &req, &resp);
+	if (rc)
+		return rc;
+
+	return resp_hdr.status;
+}
+
+__shr_public int libnvme_mi_mi_pda_write_zeroes(struct libnvme_mi_ep *ep,
+		enum nvme_mi_pda_dformat dformat, __u32 dofst, __u32 dlen)
+{
+	struct nvme_mi_mi_resp_hdr resp_hdr;
+	struct nvme_mi_mi_req_hdr req_hdr;
+	struct libnvme_mi_resp resp;
+	struct libnvme_mi_req req;
+	int rc;
+
+	libnvme_mi_mi_init_req(ep, &req, &req_hdr, dofst,
+		nvme_mi_mi_opcode_pda_write_zeroes);
+	req_hdr.rsvd0[0] = dformat;
+	req_hdr.cdw1 = cpu_to_le32(dlen);
+
+	memset(&resp, 0, sizeof(resp));
+	resp.hdr = &resp_hdr.hdr;
+	resp.hdr_len = sizeof(resp_hdr);
+
+	rc = libnvme_mi_submit(ep, &req, &resp);
+	if (rc)
+		return rc;
+
+	return resp_hdr.status;
+}
+
+int libnvme_mi_mi_config_set_get_ex(struct libnvme_mi_ep *ep, __u8 opcode, __u32 dw0,
 				__u32 dw1, void *data_out, size_t data_out_len,
 				void *data_in, size_t *data_in_len, __u32 *nmresp)
 {
@@ -1169,8 +1303,8 @@ int libnvme_mi_mi_config_set_get_ex(libnvme_mi_ep_t ep, __u8 opcode, __u32 dw0,
 	return 0;
 }
 
-__public int libnvme_mi_mi_config_get(libnvme_mi_ep_t ep, __u32 dw0, __u32 dw1,
-			  __u32 *nmresp)
+__shr_public int libnvme_mi_mi_config_get(
+		struct libnvme_mi_ep *ep, __u32 dw0, __u32 dw1, __u32 *nmresp)
 {
 	size_t data_in_len = 0;
 
@@ -1185,7 +1319,8 @@ __public int libnvme_mi_mi_config_get(libnvme_mi_ep_t ep, __u32 dw0, __u32 dw1,
 					nmresp);
 }
 
-__public int libnvme_mi_mi_config_set(libnvme_mi_ep_t ep, __u32 dw0, __u32 dw1)
+__shr_public int libnvme_mi_mi_config_set(
+		struct libnvme_mi_ep *ep, __u32 dw0, __u32 dw1)
 {
 	size_t data_in_len = 0;
 
@@ -1200,7 +1335,7 @@ __public int libnvme_mi_mi_config_set(libnvme_mi_ep_t ep, __u32 dw0, __u32 dw1)
 					NULL);
 }
 
-int libnvme_mi_mi_config_get_async_event(libnvme_mi_ep_t ep,
+int libnvme_mi_mi_config_get_async_event(struct libnvme_mi_ep *ep,
 				__u8 *aeelver,
 				struct nvme_mi_aem_supported_list *list,
 				size_t *list_num_bytes)
@@ -1227,7 +1362,7 @@ int libnvme_mi_mi_config_get_async_event(libnvme_mi_ep_t ep,
 	return 0;
 }
 
-int libnvme_mi_mi_config_set_async_event(libnvme_mi_ep_t ep,
+int libnvme_mi_mi_config_set_async_event(struct libnvme_mi_ep *ep,
 				bool envfa,
 				bool empfa,
 				bool encfa,
@@ -1269,7 +1404,7 @@ int libnvme_mi_mi_config_set_async_event(libnvme_mi_ep_t ep,
 }
 
 
-__public void libnvme_mi_close(libnvme_mi_ep_t ep)
+__shr_public void libnvme_mi_close(struct libnvme_mi_ep *ep)
 {
 	struct libnvme_transport_handle *hdl, *tmp;
 
@@ -1285,7 +1420,7 @@ __public void libnvme_mi_close(libnvme_mi_ep_t ep)
 	free(ep);
 }
 
-__public char *libnvme_mi_endpoint_desc(libnvme_mi_ep_t ep)
+__shr_public char *libnvme_mi_endpoint_desc(struct libnvme_mi_ep *ep)
 {
 	char tsbuf[101], *s = NULL;
 	size_t tslen;
@@ -1315,58 +1450,27 @@ __public char *libnvme_mi_endpoint_desc(libnvme_mi_ep_t ep)
 	return s;
 }
 
-__public libnvme_mi_ep_t libnvme_mi_first_endpoint(struct libnvme_global_ctx *ctx)
+__shr_public struct libnvme_mi_ep *libnvme_mi_first_endpoint(
+		struct libnvme_global_ctx *ctx)
 {
 	return list_top(&ctx->endpoints, struct libnvme_mi_ep, root_entry);
 }
 
-__public libnvme_mi_ep_t libnvme_mi_next_endpoint(struct libnvme_global_ctx *ctx, libnvme_mi_ep_t ep)
+__shr_public struct libnvme_mi_ep *libnvme_mi_next_endpoint(
+		struct libnvme_global_ctx *ctx, struct libnvme_mi_ep *ep)
 {
 	return ep ? list_next(&ctx->endpoints, ep, root_entry) : NULL;
 }
 
-struct libnvme_transport_handle *libnvme_mi_first_transport_handle(libnvme_mi_ep_t ep)
+struct libnvme_transport_handle *libnvme_mi_first_transport_handle(struct libnvme_mi_ep *ep)
 {
 	return list_top(&ep->controllers, struct libnvme_transport_handle, ep_entry);
 }
 
-struct libnvme_transport_handle *libnvme_mi_next_transport_handle(libnvme_mi_ep_t ep,
+struct libnvme_transport_handle *libnvme_mi_next_transport_handle(struct libnvme_mi_ep *ep,
 							    struct libnvme_transport_handle *hdl)
 {
 	return hdl ? list_next(&ep->controllers, hdl, ep_entry) : NULL;
-}
-
-static const char *const mi_status[] = {
-        [NVME_MI_RESP_MPR]                   = "More Processing Required: The command message is in progress and requires more time to complete processing",
-        [NVME_MI_RESP_INTERNAL_ERR]          = "Internal Error: The request message could not be processed due to a vendor-specific error",
-        [NVME_MI_RESP_INVALID_OPCODE]        = "Invalid Command Opcode",
-        [NVME_MI_RESP_INVALID_PARAM]         = "Invalid Parameter",
-        [NVME_MI_RESP_INVALID_CMD_SIZE]      = "Invalid Command Size: The size of the message body of the request was different than expected",
-        [NVME_MI_RESP_INVALID_INPUT_SIZE]    = "Invalid Command Input Data Size: The command requires data and contains too much or too little data",
-        [NVME_MI_RESP_ACCESS_DENIED]         = "Access Denied. Processing prohibited due to a vendor-specific mechanism of the Command and Feature lockdown function",
-        [NVME_MI_RESP_VPD_UPDATES_EXCEEDED]  = "VPD Updates Exceeded",
-        [NVME_MI_RESP_PCIE_INACCESSIBLE]     = "PCIe Inaccessible. The PCIe functionality is not available at this time",
-        [NVME_MI_RESP_MEB_SANITIZED]         = "Management Endpoint Buffer Cleared Due to Sanitize",
-        [NVME_MI_RESP_ENC_SERV_FAILURE]      = "Enclosure Services Failure",
-        [NVME_MI_RESP_ENC_SERV_XFER_FAILURE] = "Enclosure Services Transfer Failure: Communication with the Enclosure Services Process has failed",
-        [NVME_MI_RESP_ENC_FAILURE]           = "An unrecoverable enclosure failure has been detected by the Enclosuer Services Process",
-        [NVME_MI_RESP_ENC_XFER_REFUSED]      = "Enclosure Services Transfer Refused: The NVM Subsystem or Enclosure Services Process indicated an error or an invalid format in communication",
-        [NVME_MI_RESP_ENC_FUNC_UNSUP]        = "Unsupported Enclosure Function: An SES Send command has been attempted to a simple Subenclosure",
-        [NVME_MI_RESP_ENC_SERV_UNAVAIL]      = "Enclosure Services Unavailable: The NVM Subsystem or Enclosure Services Process has encountered an error but may become available again",
-        [NVME_MI_RESP_ENC_DEGRADED]          = "Enclosure Degraded: A noncritical failure has been detected by the Enclosure Services Process",
-        [NVME_MI_RESP_SANITIZE_IN_PROGRESS]  = "Sanitize In Progress: The requested command is prohibited while a sanitize operation is in progress",
-};
-
-/* kept in mi.c while we have a split libnvme/libnvme-mi; consider moving
- * to utils.c (with libnvme_status_to_string) if we ever merge. */
-__public const char *libnvme_mi_status_to_string(int status)
-{
-	const char *s = "Unknown status";
-
-	if (status < ARRAY_SIZE(mi_status) && mi_status[status])
-                s = mi_status[status];
-
-        return s;
 }
 
 bool nvme_mi_aem_aeei_get_aee(__le16 aeei)
@@ -1527,7 +1631,7 @@ err_cleanup:
 	return err;
 }
 
-__public int libnvme_mi_aem_get_fd(libnvme_mi_ep_t ep)
+__shr_public int libnvme_mi_aem_get_fd(struct libnvme_mi_ep *ep)
 {
 	if (!ep || !ep->aem_ctx || !ep->transport || !ep->transport->aem_fd)
 		return -1;
@@ -1544,7 +1648,7 @@ static void reset_list_info(struct libnvme_mi_aem_ctx *ctx)
 	ctx->occ_header = NULL;
 }
 
-static int aem_sync(libnvme_mi_ep_t ep,
+static int aem_sync(struct libnvme_mi_ep *ep,
 	bool envfa,
 	bool empfa,
 	bool encfa,
@@ -1595,7 +1699,7 @@ static int aem_sync(libnvme_mi_ep_t ep,
 	return rc;
 }
 
-static int aem_disable_enabled(libnvme_mi_ep_t ep)
+static int aem_disable_enabled(struct libnvme_mi_ep *ep)
 {
 	struct libnvme_mi_aem_enabled_map already_enabled = {false};
 	uint8_t response_buffer[4096] = {0};
@@ -1636,7 +1740,7 @@ static int aem_disable_enabled(libnvme_mi_ep_t ep)
 	return rc;
 }
 
-__public int libnvme_mi_aem_enable(libnvme_mi_ep_t ep,
+__shr_public int libnvme_mi_aem_enable(struct libnvme_mi_ep *ep,
 	struct libnvme_mi_aem_config *config,
 	void *userdata)
 {
@@ -1710,7 +1814,7 @@ cleanup_ctx:
 	return rc;
 }
 
-__public int libnvme_mi_aem_get_enabled(libnvme_mi_ep_t ep,
+__shr_public int libnvme_mi_aem_get_enabled(struct libnvme_mi_ep *ep,
 	struct libnvme_mi_aem_enabled_map *enabled_map)
 {
 	if (!ep || !enabled_map)
@@ -1751,7 +1855,7 @@ cleanup:
 	return rc;
 }
 
-__public int libnvme_mi_aem_disable(libnvme_mi_ep_t ep)
+__shr_public int libnvme_mi_aem_disable(struct libnvme_mi_ep *ep)
 {
 	if (!ep)
 		return -1;
@@ -1769,7 +1873,8 @@ __public int libnvme_mi_aem_disable(libnvme_mi_ep_t ep)
  *spec_info and vend_spec_info must be copied to persist as they will not be valid after
  *the aem_handler has returned.
  */
-__public struct libnvme_mi_event *libnvme_mi_aem_get_next_event(libnvme_mi_ep_t ep)
+__shr_public struct libnvme_mi_event *libnvme_mi_aem_get_next_event(
+		struct libnvme_mi_ep *ep)
 {
 	if (!ep || !ep->aem_ctx ||
 		!ep->aem_ctx->list_current ||
@@ -1806,7 +1911,7 @@ __public struct libnvme_mi_event *libnvme_mi_aem_get_next_event(libnvme_mi_ep_t 
 /* POLLIN has indicated events.  This function reads and processes them.
  * A callback will likely be invoked.
  */
-__public int libnvme_mi_aem_process(libnvme_mi_ep_t ep, void *userdata)
+__shr_public int libnvme_mi_aem_process(struct libnvme_mi_ep *ep, void *userdata)
 {
 	int rc = 0;
 	uint8_t response_buffer[4096];
@@ -1849,7 +1954,8 @@ __public int libnvme_mi_aem_process(libnvme_mi_ep_t ep, void *userdata)
 		reset_list_info(ep->aem_ctx);
 
 		if (action == NVME_MI_AEM_HNA_ACK) {
-			response_len = sizeof(response_buffer);
+			response_len = sizeof(response_buffer) -
+				offsetof(struct nvme_mi_aem_msg, occ_list_hdr);
 
 			rc = libnvme_mi_aem_ack(ep, &response->occ_list_hdr, &response_len);
 			if (rc)

@@ -8,24 +8,28 @@
  * This file implements basic logging functionality.
  */
 
+#include <errno.h>
 #include <stdarg.h>
 #include <stdbool.h>
 #include <stdio.h>
+#include <string.h>
 #include <time.h>
 #include <unistd.h>
+
+#include <shared/compiler-attributes-util.h>
+#include <shared/io-util.h>
 
 #include <libnvme.h>
 
 #include "cleanup.h"
 #define LOG_FUNCNAME 1
 #include "private.h"
-#include "compiler-attributes.h"
 
 #ifndef LOG_CLOCK
 #define LOG_CLOCK CLOCK_MONOTONIC
 #endif
 
-void __attribute__((format(printf, 4, 5)))
+void __libnvme_printf_format(4, 5)
 __libnvme_msg(struct libnvme_global_ctx *ctx, int level,
 	   const char *func, const char *format, ...)
 {
@@ -45,6 +49,7 @@ __libnvme_msg(struct libnvme_global_ctx *ctx, int level,
 	};
 	__cleanup_free char *header = NULL;
 	__cleanup_free char *message = NULL;
+	__cleanup_free char *log = NULL;
 	int idx = 0;
 
 	if (level > l->level)
@@ -78,20 +83,24 @@ __libnvme_msg(struct libnvme_global_ctx *ctx, int level,
 		message = NULL;
 	va_end(ap);
 
-	dprintf(l->fd, "%s%s",
-		header ? header : "<error>",
-		message ? message : "<error>");
+	if (asprintf(&log, "%s%s", header ? header : "<error>",
+			message ? message : "<error>") == -1)
+		return;
+
+	if (shr_write_all(l->fd, log, strlen(log)) < 0)
+		perror("failed to write log entry");
 }
 
-__public void libnvme_set_logging_level(struct libnvme_global_ctx *ctx, int log_level,
-		bool log_pid, bool log_tstamp)
+__shr_public void libnvme_set_logging_level(
+		struct libnvme_global_ctx *ctx, int log_level, bool log_pid,
+		bool log_tstamp)
 {
 	ctx->log.level = log_level;
 	ctx->log.pid = log_pid;
 	ctx->log.timestamp = log_tstamp;
 }
 
-__public int libnvme_get_logging_level(struct libnvme_global_ctx *ctx,
+__shr_public int libnvme_get_logging_level(struct libnvme_global_ctx *ctx,
 		bool *log_pid, bool *log_tstamp)
 {
 	if (log_pid)
@@ -99,4 +108,10 @@ __public int libnvme_get_logging_level(struct libnvme_global_ctx *ctx,
 	if (log_tstamp)
 		*log_tstamp = ctx->log.timestamp;
 	return ctx->log.level;
+}
+
+__shr_public void libnvme_set_logging_file(struct libnvme_global_ctx *ctx,
+		FILE *fp)
+{
+	ctx->log.fd = fp ? fileno(fp) : STDERR_FILENO;
 }

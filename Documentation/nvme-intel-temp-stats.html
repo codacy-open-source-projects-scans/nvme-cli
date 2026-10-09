@@ -749,8 +749,7 @@ nvme-intel-temp-stats(1) Manual Page
 <h2 id="_synopsis">SYNOPSIS</h2>
 <div class="sectionbody">
 <div class="verseblock">
-<pre class="content"><em>nvme intel temp-stats</em> &lt;device&gt; [--raw-binary | -b]
-                        [&lt;global-options&gt;]</pre>
+<pre class="content"><em>nvme</em> [&lt;global-options&gt;] <em>intel temp-stats</em> &lt;device&gt; [--raw-binary | -b]</pre>
 <div class="attribution">
 </div></div>
 </div>
@@ -860,6 +859,8 @@ and are available to this subcommand:</p></div>
 </p>
 </dd>
 </dl></div>
+<div class="paragraph"><p>These options can also be set as machine-wide defaults in
+nvme-cli.conf(5). A command-line flag always overrides the file.</p></div>
 </div>
 </div>
 <div class="sect1">
@@ -899,7 +900,7 @@ Print the raw SMART log to a file:
 <div id="footer">
 <div id="footer-text">
 Last updated
- 2026-04-17 09:46:00 CEST
+ 2026-09-18 12:15:54 CEST
 </div>
 </div>
 </body>

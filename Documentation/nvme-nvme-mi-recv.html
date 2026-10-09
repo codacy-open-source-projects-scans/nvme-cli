@@ -749,13 +749,14 @@ nvme-nvme-mi-recv(1) Manual Page
 <h2 id="_synopsis">SYNOPSIS</h2>
 <div class="sectionbody">
 <div class="verseblock">
-<pre class="content"><em>nvme nvme-mi-recv</em> &lt;device&gt; [--opcode=&lt;opcode&gt; | -O &lt;opcode&gt;]
+<pre class="content"><em>nvme</em> [&lt;global-options&gt;] <em>nvme-mi recv</em> &lt;device&gt;
+                        [--opcode=&lt;opcode&gt; | -O &lt;opcode&gt;]
                         [--namespace-id=&lt;nsid&gt; | -n &lt;nsid&gt;]
                         [--data-len=&lt;data-len&gt; | -l &lt;data-len&gt;]
                         [--nmimt=&lt;nmimt&gt; | -m &lt;nmimt&gt;]
-                        [--nmd0=&lt;nmd0&gt; | -0 &lt;nmd0&gt;] [--nmd1=&lt;nmd1&gt; | -1 &lt;nmd1&gt;]
-                        [--input-file=&lt;file&gt; | -i &lt;file&gt;]
-                        [&lt;global-options&gt;]</pre>
+                        [--nmd0=&lt;nmd0&gt; | -0 &lt;nmd0&gt;]
+                        [--nmd1=&lt;nmd1&gt; | -1 &lt;nmd1&gt;]
+                        [--input-file=&lt;file&gt; | -i &lt;file&gt;]</pre>
 <div class="attribution">
 </div></div>
 </div>
@@ -767,6 +768,9 @@ nvme-nvme-mi-recv(1) Manual Page
 <div class="paragraph"><p>The &lt;device&gt; parameter is mandatory and may be either the NVMe character
 device (ex: /dev/nvme0) or block device (ex: /dev/nvme0n1).</p></div>
 <div class="paragraph"><p>On success it returns 0, error code otherwise.</p></div>
+<div class="paragraph"><p>The bare <em>nvme nvme-mi-recv</em> form (without a space) still works as a deprecated
+alias and will be removed in a future major version. New scripts should
+use <em>nvme nvme-mi recv</em> instead.</p></div>
 </div>
 </div>
 <div class="sect1">
@@ -930,6 +934,8 @@ and are available to this subcommand:</p></div>
 </p>
 </dd>
 </dl></div>
+<div class="paragraph"><p>These options can also be set as machine-wide defaults in
+nvme-cli.conf(5). A command-line flag always overrides the file.</p></div>
 </div>
 </div>
 <div class="sect1">
@@ -942,7 +948,7 @@ Has the program issue a nvme-mi-recv to execute the VPD read.
 </p>
 <div class="listingblock">
 <div class="content">
-<pre><code># nvme nvme-mi-recv /dev/nvme0n1 -O 5 -m 1 -0 0 -1 0x100 -l 256</code></pre>
+<pre><code># nvme nvme-mi recv /dev/nvme0n1 -O 5 -m 1 -0 0 -1 0x100 -l 256</code></pre>
 </div></div>
 </li>
 </ul></div>
@@ -959,7 +965,7 @@ Has the program issue a nvme-mi-recv to execute the VPD read.
 <div id="footer">
 <div id="footer-text">
 Last updated
- 2026-04-17 09:46:00 CEST
+ 2026-09-18 12:15:54 CEST
 </div>
 </div>
 </body>

@@ -1,13 +1,17 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <libnvme.h>
+
+#include <ccan/endian/endian.h>
+
 #include "lm-print.h"
-#include "common.h"
+#include "nvme-print.h"
 
 static void json_controller_state_data(struct nvme_lm_controller_state_data *data, size_t len,
 				      __u32 offset)
 {
 	if (offset) {
-		fprintf(stderr, "cannot understand non-zero offset\n");
+		nvme_show_error("cannot understand non-zero offset");
 		return;
 	}
 

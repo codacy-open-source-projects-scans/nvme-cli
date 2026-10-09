@@ -1,7 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
-
-#ifndef _SED_OPAL_CMD_H
-#define _SED_OPAL_CMD_H
+#pragma once
 
 #define	SEDOPAL_CURRENT_PW_PROMPT	"Password: "
 #define	SEDOPAL_NEW_PW_PROMPT		"New Password: "
@@ -35,25 +33,23 @@ enum sedopal_cmds {
 };
 
 struct cmd_table {
-	int (*cmd_handler)(int fd);
+	int (*cmd_handler)(struct libnvme_transport_handle *hdl);
 };
 
 /*
  * command handlers
  */
-int sedopal_cmd_initialize(int fd);
-int sedopal_cmd_lock(int fd);
-int sedopal_cmd_unlock(int fd);
-int sedopal_cmd_revert(int fd);
-int sedopal_cmd_password(int fd);
-int sedopal_cmd_discover(int fd);
+int sedopal_cmd_initialize(struct libnvme_transport_handle *hdl);
+int sedopal_cmd_lock(struct libnvme_transport_handle *hdl);
+int sedopal_cmd_unlock(struct libnvme_transport_handle *hdl);
+int sedopal_cmd_revert(struct libnvme_transport_handle *hdl);
+int sedopal_cmd_password(struct libnvme_transport_handle *hdl);
+int sedopal_cmd_discover(struct libnvme_transport_handle *hdl);
 
 /*
  * utility functions
  */
 int sedopal_open_nvme_device(char *device);
-int sedopal_lock_unlock(int fd, int lock_state);
+int sedopal_lock_unlock(struct libnvme_transport_handle *hdl, int lock_state);
 const char *sedopal_error_to_text(int code);
-int sedopal_locking_state(int fd);
-
-#endif /* _SED_OPAL_CMD_H */
+int sedopal_locking_state(struct libnvme_transport_handle *hdl);

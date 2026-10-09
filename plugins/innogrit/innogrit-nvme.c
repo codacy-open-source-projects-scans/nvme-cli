@@ -1,22 +1,21 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-#include <stdio.h>
-#include <string.h>
-#include <stdlib.h>
 #include <errno.h>
-#include <unistd.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 #include <sys/stat.h>
 #include <time.h>
+#include <unistd.h>
 
 #include <libnvme.h>
 
-#include "common.h"
-#include "nvme.h"
-#include "nvme-print.h"
-#include "typedef.h"
-#include "util/cleanup.h"
+#include <shared/compiler-attributes-util.h>
 
-#define CREATE_CMD
-#include "innogrit-nvme.h"
+#include "global-ctx.h"
+#include "nvme-print.h"
+#include "plugin.h"
+#include "src/cleanup.h"
+#include "typedef.h"
 
 static int nvme_vucmd(struct libnvme_transport_handle *hdl, unsigned char opcode,
 		      unsigned int cdw12, unsigned int cdw13,
@@ -36,7 +35,7 @@ static int nvme_vucmd(struct libnvme_transport_handle *hdl, unsigned char opcode
 	cmd.nsid = 0xffffffff;
 	cmd.addr = (__u64)(__u64)(uintptr_t)data;
 	cmd.data_len = data_len;
-	return libnvme_submit_admin_passthru(hdl, &cmd);
+	return libnvme_exec_admin_passthru(hdl, &cmd);
 }
 
 static int getlogpage(struct libnvme_transport_handle *hdl, unsigned char ilogid,
@@ -103,7 +102,7 @@ static int getvsc_eventlog(struct libnvme_transport_handle *hdl, FILE *fp)
 		}
 
 		if (ret == -1) {
-			printf("(error)\n");
+			nvme_show_error("(error)");
 			return IG_ERROR;
 		}
 
@@ -112,7 +111,7 @@ static int getvsc_eventlog(struct libnvme_transport_handle *hdl, FILE *fp)
 		} else {
 			errcnt++;
 			if (errcnt > 16) {
-				printf("(invalid data error)\n");
+				nvme_show_error("(invalid data error)");
 				return IG_ERROR;
 			}
 		}
@@ -160,7 +159,7 @@ int getlogpage_eventlog(struct libnvme_transport_handle *hdl, FILE *fp)
 		printf("\rget eventlog   : %d.%d MB ", i / SIZE_MB,
 			(i % SIZE_MB) * 100 / SIZE_MB);
 		if (ret) {
-			printf("(error)\n");
+			nvme_show_error("(error)");
 			return IG_ERROR;
 		}
 		fwrite(data, 1, 4096, fp);
@@ -219,6 +218,7 @@ static int innogrit_vsc_getcdump(int argc, char **argv, struct command *acmd,
 	unsigned int itotal, icur, ivsctype;
 	unsigned int ipackcount, ipackindex;
 	unsigned char busevsc = false;
+	struct libnvme_passthru_cmd cmd;
 	struct cdumpinfo cdumpinfo;
 	struct tm *logtime;
 	FILE *fp = NULL;
@@ -268,8 +268,6 @@ static int innogrit_vsc_getcdump(int argc, char **argv, struct command *acmd,
 					logtime->tm_mon+1, logtime->tm_mday, logtime->tm_hour,
 					logtime->tm_min, logtime->tm_sec, ipackindex, fwvera);
 				sprintf(filename, "%s/%s", currentdir, fname);
-				if (fp != NULL)
-					fclose(fp);
 				fp = fopen(filename, "a+");
 			}
 		}
@@ -277,8 +275,8 @@ static int innogrit_vsc_getcdump(int argc, char **argv, struct command *acmd,
 
 	if (busevsc == false) {
 		memset(data, 0, 4096);
-		ret = nvme_get_nsid_log(hdl, NVME_NSID_ALL,true, 0x07,
-					data, 4096);
+		nvme_init_get_log(&cmd, NVME_NSID_ALL, 0x07, NVME_CSI_NVM, data, 4096);
+		ret = libnvme_get_log(hdl, &cmd, true, NVME_LOG_PAGE_PDU_SIZE);
 		if (ret != 0)
 			return ret;
 
@@ -287,13 +285,13 @@ static int innogrit_vsc_getcdump(int argc, char **argv, struct command *acmd,
 		sprintf(fname, "cdump_%02d%02d-%02d%02d%02d.cdp", logtime->tm_mon+1,
 			logtime->tm_mday, logtime->tm_hour, logtime->tm_min, logtime->tm_sec);
 		sprintf(filename, "%s/%s", currentdir, fname);
-		if (fp != NULL)
-			fclose(fp);
 		fp = fopen(filename, "a+");
 	}
 
 	if (itotal == 0) {
 		printf("no cdump data\n");
+		if (fp != NULL)
+			fclose(fp);
 		return 0;
 	}
 
@@ -315,11 +313,14 @@ static int innogrit_vsc_getcdump(int argc, char **argv, struct command *acmd,
 						0x82, 0x00,	0, 0, (char *)data, 4096);
 				}
 			} else {
-				ret = nvme_get_nsid_log(hdl, NVME_NSID_ALL, true,
-							0x07, data, 4096);
+				nvme_init_get_log(&cmd, NVME_NSID_ALL, 0x07,
+						  NVME_CSI_NVM, data, 4096);
+				ret = libnvme_get_log(hdl, &cmd, true, NVME_LOG_PAGE_PDU_SIZE);
 			}
-			if (ret != 0)
+			if (ret != 0) {
+				fclose(fp);
 				return ret;
+			}
 
 			fwrite(data, 1, 4096, fp);
 			printf("\rWait for dump data %d%%" XCLEAN_LINE,
@@ -344,11 +345,14 @@ static int innogrit_vsc_getcdump(int argc, char **argv, struct command *acmd,
 						0x82, 0x00,	0, 0, (char *)data, 4096);
 				}
 			} else {
-				ret = nvme_get_nsid_log(hdl, NVME_NSID_ALL, true,
-							0x07, data, 4096);
+				nvme_init_get_log(&cmd, NVME_NSID_ALL, 0x07,
+						  NVME_CSI_NVM, data, 4096);
+				ret = libnvme_get_log(hdl, &cmd, true, NVME_LOG_PAGE_PDU_SIZE);
 			}
-			if (ret != 0)
+			if (ret != 0) {
+				fclose(fp);
 				return ret;
+			}
 
 			itotal = cdumpinfo.cdumppack[ipackindex].ilenth;
 			memset(fwvera, 0, sizeof(fwvera));
@@ -356,6 +360,7 @@ static int innogrit_vsc_getcdump(int argc, char **argv, struct command *acmd,
 			sprintf(fname, "cdump_%02d%02d-%02d%02d%02d_%d_%s.cdp", logtime->tm_mon+1,
 				logtime->tm_mday, logtime->tm_hour, logtime->tm_min, logtime->tm_sec,
 				ipackindex,	fwvera);
+			sprintf(filename, "%s/%s", currentdir, fname);
 			if (fp != NULL)
 				fclose(fp);
 			fp = fopen(filename, "a+");
@@ -367,4 +372,34 @@ static int innogrit_vsc_getcdump(int argc, char **argv, struct command *acmd,
 	if (fp != NULL)
 		fclose(fp);
 	return ret;
+}
+
+static struct command innogrit_geteventlog_cmd = {
+	.name = "get-eventlog",
+	.help = "get event log",
+	.fn = innogrit_geteventlog,
+};
+
+static struct command innogrit_vsc_getcdump_cmd = {
+	.name = "get-cdump",
+	.help = "get cdump data",
+	.fn = innogrit_vsc_getcdump,
+};
+
+static struct command *commands[] = {
+	&innogrit_geteventlog_cmd,
+	&innogrit_vsc_getcdump_cmd,
+	NULL,
+};
+
+static struct plugin plugin = {
+	.name = "innogrit",
+	.desc = "innogrit vendor specific extensions",
+	.version = NVME_VERSION,
+};
+
+static void __shr_constructor register_plugin(void)
+{
+	plugin_add_group(&plugin, NULL, commands);
+	register_extension(&plugin);
 }

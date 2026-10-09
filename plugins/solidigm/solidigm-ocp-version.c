@@ -6,7 +6,9 @@
  */
 
 #include <stdio.h>
-#include "nvme.h"
+
+#include "args.h"
+#include "plugin.h"
 
 int sldgm_ocp_version(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
@@ -14,7 +16,7 @@ int sldgm_ocp_version(int argc, char **argv, struct command *acmd, struct plugin
 
 	NVME_ARGS(opts);
 
-	int err = argconfig_parse(argc, argv, desc, opts);
+	int err = parse_args(argc, argv, desc, opts);
 
 	if (!err)
 		printf("1.0\n");

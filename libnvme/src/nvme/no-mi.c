@@ -8,14 +8,9 @@
 
 #include <errno.h>
 
+#include <shared/compiler-attributes-util.h>
+
 #include <libnvme.h>
-
-#include "compiler-attributes.h"
-
-__public const char *libnvme_mi_status_to_string(int status)
-{
-	return "MI support disabled";
-}
 
 int __libnvme_transport_handle_open_mi(struct libnvme_transport_handle *hdl,
 		const char *devname)
@@ -36,4 +31,10 @@ int libnvme_mi_admin_admin_passthru(struct libnvme_transport_handle *hdl,
 		struct libnvme_passthru_cmd *cmd)
 {
 	return -ENOTSUP;
+}
+
+__shr_public struct libnvme_mi_ep *libnvme_transport_handle_get_mi_ep(
+		struct libnvme_transport_handle *hdl)
+{
+	return NULL;
 }

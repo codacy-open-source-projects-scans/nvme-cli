@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <libnvme.h>
+
 #include "lm-print.h"
+#include "nvme-print.h"
 
 #define lm_print(name, flags, ...) \
 	do { \
@@ -8,7 +11,7 @@
 		if (ops && ops->name) \
 			ops->name(__VA_ARGS__); \
 		else \
-			fprintf(stderr, "unhandled output format\n"); \
+			nvme_show_error("unhandled output format"); \
 	} while (false)
 
 static struct lm_print_ops *lm_print_ops(nvme_print_flags_t flags)

@@ -2,12 +2,12 @@
 .\"     Title: nvme-intel-temp-stats
 .\"    Author: [FIXME: author] [see http://www.docbook.org/tdg5/en/html/author]
 .\" Generator: DocBook XSL Stylesheets vsnapshot <http://docbook.sf.net/>
-.\"      Date: 04/17/2026
+.\"      Date: 09/18/2026
 .\"    Manual: NVMe Manual
 .\"    Source: NVMe
 .\"  Language: English
 .\"
-.TH "NVME\-INTEL\-TEMP\-S" "1" "04/17/2026" "NVMe" "NVMe Manual"
+.TH "NVME\-INTEL\-TEMP\-S" "1" "09/18/2026" "NVMe" "NVMe Manual"
 .\" -----------------------------------------------------------------
 .\" * Define some portability stuff
 .\" -----------------------------------------------------------------
@@ -32,8 +32,7 @@ nvme-intel-temp-stats \- Send NVMe SMART log page request, returns result and lo
 .SH "SYNOPSIS"
 .sp
 .nf
-\fInvme intel temp\-stats\fR <device> [\-\-raw\-binary | \-b]
-                        [<global\-options>]
+\fInvme\fR [<global\-options>] \fIintel temp\-stats\fR <device> [\-\-raw\-binary | \-b]
 .fi
 .SH "DESCRIPTION"
 .sp
@@ -93,6 +92,8 @@ Set the timeout for the command in milliseconds\&.
 .RS 4
 Increase the level of detail in the output\&. May be specified multiple times to further increase verbosity\&.
 .RE
+.sp
+These options can also be set as machine\-wide defaults in nvme\-cli\&.conf(5)\&. A command\-line flag always overrides the file\&.
 .SH "EXAMPLES"
 .sp
 .RS 4

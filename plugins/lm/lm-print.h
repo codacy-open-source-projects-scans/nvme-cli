@@ -1,10 +1,9 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
-#ifndef LM_PRINT_H
-#define LM_PRINT_H
+#pragma once
 
 #include <libnvme.h>
 
-#include "nvme.h"
+#include "args.h"
 
 struct lm_print_ops {
 	void (*controller_state_data)(struct nvme_lm_controller_state_data *data, size_t len,
@@ -29,4 +28,3 @@ void lm_show_controller_state_data(struct nvme_lm_controller_state_data *data, s
 				   __u32 offset, nvme_print_flags_t flags);
 void lm_show_controller_data_queue(struct nvme_lm_ctrl_data_queue_fid_data *data,
 				   nvme_print_flags_t flags);
-#endif /* LM_PRINT_H */

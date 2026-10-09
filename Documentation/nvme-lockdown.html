@@ -749,12 +749,14 @@ nvme-lockdown(1) Manual Page
 <h2 id="_synopsis">SYNOPSIS</h2>
 <div class="sectionbody">
 <div class="verseblock">
-<pre class="content"><em>nvme-lockdown</em> &lt;device&gt; [--ofi=&lt;ofi&gt; | -O &lt;ofi&gt;]
+<pre class="content"><em>nvme</em> [&lt;global-options&gt;] <em>lockdown</em> &lt;device&gt;
+                        [--ofi=&lt;ofi&gt; | -O &lt;ofi&gt;]
                         [--ifc=&lt;ifc&gt; | -f &lt;ifc&gt;]
                         [--prhbt=&lt;prhbt&gt; | -p &lt;prhbt&gt;]
                         [--scp=&lt;scp&gt; | -s &lt;scp&gt;]
                         [--uuid=&lt;UUID_Index&gt; | -U &lt;UUID_Index&gt;]
-                        [&lt;global-options&gt;]</pre>
+                        [--csel=&lt;csel&gt; | -c &lt;csel&gt;]
+                        [--css=&lt;css&gt; | -C &lt;css&gt;]</pre>
 <div class="attribution">
 </div></div>
 </div>
@@ -829,6 +831,34 @@ Identifier.</p></div>
         UUID Index - If this field is set to a non-zero value, then the value of
         this field is the index of a UUID in the UUID List that is used by the command.
         If this field is cleared to 0h,then no UUID index is specified.
+</p>
+</dd>
+<dt class="hdlist1">
+-c &lt;csel&gt;
+</dt>
+<dt class="hdlist1">
+--csel=&lt;csel&gt;
+</dt>
+<dd>
+<p>
+        Controller Select (CSEL) specifies the controller(s) affected by
+        this command: 0 = NVM subsystem (all controllers), 1 = the specific
+        controller identified by --css, 2 = the secondary controllers of
+        the specific primary controller identified by --css, 15 = vendor
+        specific.
+</p>
+</dd>
+<dt class="hdlist1">
+-C &lt;css&gt;
+</dt>
+<dt class="hdlist1">
+--css=&lt;css&gt;
+</dt>
+<dd>
+<p>
+        Controller Select Specific (CSS) - meaning depends on --csel: the
+        Controller Identifier if --csel=1, or the Primary Controller
+        Identifier if --csel=2. Ignored if --csel=0.
 </p>
 </dd>
 </dl></div>
@@ -908,6 +938,8 @@ and are available to this subcommand:</p></div>
 </p>
 </dd>
 </dl></div>
+<div class="paragraph"><p>These options can also be set as machine-wide defaults in
+nvme-cli.conf(5). A command-line flag always overrides the file.</p></div>
 </div>
 </div>
 <div class="sect1">
@@ -927,7 +959,7 @@ and are available to this subcommand:</p></div>
 <div id="footer">
 <div id="footer-text">
 Last updated
- 2026-04-17 09:46:00 CEST
+ 2026-09-18 12:15:54 CEST
 </div>
 </div>
 </body>

@@ -52,88 +52,146 @@ When contributing new functions to libnvme, choose the prefix based on scope:
 You may wish to add a new command or possibly an entirely new plug-in
 for some special extension outside the spec.
 
-This project provides macros that help generate the code for you. If
-you're interested in how that works, it is very similar to how trace
-events are created by Linux kernel's 'ftrace' component.
+Every command (built-in or plugin) is a `struct command`: a name, a help
+string, a callback, and optionally an alias, a `deprecated` flag, or a
+`no_device` flag. A group of commands is registered together with
+`plugin_add_group()`, and a named plugin additionally calls
+`register_extension()` once. 
 
-### Add a command to the existing built-in
+### Add a command to an existing group
 
-The first thing to do is define a new command entry in the command
-list. This is declared in nvme-builtin.h. Simply append a new "ENTRY" into
-the list. The ENTRY normally takes three arguments: the "name" of the
-subcommand (this is what the user will type at the command line to invoke
-your command), a short help description of what your command does, and the
-name of the function callback that you're going to write. Additionally,
-you can declare an alias name of the subcommand with a fourth argument, if
-needed.
+The built-in (no-plugin-prefix) commands are split by feature area across
+`src/nvme-cmds-*.c` (e.g. `src/nvme-cmds-io.c` for read/write/flush/...,
+`src/nvme-cmds-registers.c` for register access, etc.). Pick the file that
+matches your command's area, or add a new `src/nvme-cmds-<area>.c` if none
+fit -- just add the one line to `src/meson.build`'s `sources` list. Each
+such file ends with a block like this one from `src/nvme-cmds-discovery.c`:
 
-After the ENTRY is defined, you need to implement the callback. It takes
-four arguments: argc, argv, the command structure associated with the
-callback, and the plug-in structure that contains that command. The
-prototype looks like this:
+```c
+static struct command get_log_cmd = {
+	.name = "get-log",
+	.help = "Generic NVMe get log, returns log in raw format",
+	.fn = get_log,
+};
 
-  ```c
-  int f(int argc, char **argv, struct command *command, struct plugin *plugin);
-  ```
+static struct command *commands[] = {
+	&get_log_cmd,
+	/* ... */
+	NULL,
+};
 
-The argc and argv are adjusted from the command line arguments to start
-after the sub-command. So if the command line is "nvme foo --option=bar",
-the argc is 1 and argv starts at "--option".
+static void __shr_constructor register_group(void)
+{
+	plugin_add_group(&builtin, "Log Page & Identify", commands);
+}
+```
 
-You can then define argument parsing for your sub-command's specific
-options then do some command-specific action in your callback.
+To add a command, write its callback function, add a `struct command`
+literal for it, and add that entry to the `commands[]` array. The
+callback's prototype is:
+
+```c
+int f(int argc, char **argv, struct command *command, struct plugin *plugin);
+```
+
+`argc`/`argv` are adjusted to start after the sub-command. For
+`nvme foo --option=bar`, `argc` is 1 and `argv` starts at `--option`.
+Use `.alias = "other-name"` for an alias, and `.deprecated = true` for a
+deprecated command (deprecated built-ins live in
+`src/nvme-cmds-deprecated.c`, gated by `#ifdef CONFIG_DEPRECATED_CMDS`).
+Set `.no_device = true` for a command that doesn't take a positional
+`<device>` argument (e.g. `nvme list` or `nvme gen-hostnqn`) -- this drops
+`<device>` from its usage line and, when none of a plugin's commands need
+one, from that plugin's `--help` output too.
+
+The `title` passed to `plugin_add_group()` (`"Log Page & Identify"` above)
+is the heading shown for that group's commands in `nvme help`; pass `NULL`
+for no heading (that's what plugins normally do, see below).
 
 ### Add a new plugin
 
-The nvme-cli provides macros to make defining a new plug-in simpler. You
-can certainly do all this by hand if you want, but it should be easier
-to get going using the macros. To start, first create a header file
-to define your plugin. This is where you will give your plugin a name,
-description, and define all the sub-commands your plugin implements.
+Create `plugins/foo/foo-nvme.c` (no header needed unless you have real
+shared declarations across multiple files, see "Multi-file plugins"
+below). Implement your command callbacks, then add the same three pieces
+at the end of the file:
 
-The macros must appear in a specific order within the header file. The following
-is a basic example on how to start this:
-
-File: foo-plugin.h
 ```c
-#undef CMD_INC_FILE
-#define CMD_INC_FILE plugins/foo/foo-plugin
+static int bar(int argc, char **argv, struct command *acmd, struct plugin *plugin)
+{
+	...
+}
 
-#if !defined(FOO) || defined(CMD_HEADER_MULTI_READ)
-#define FOO
+static struct command bar_cmd = {
+	.name = "bar",
+	.help = "foo bar",
+	.fn = bar,
+};
 
-#include "cmd.h"
+static struct command *commands[] = {
+	&bar_cmd,
+	NULL,
+};
 
-PLUGIN(NAME("foo", "Foo plugin"),
-	COMMAND_LIST(
-		ENTRY("bar", "foo bar", bar)
-		ENTRY("baz", "foo baz", baz)
-		ENTRY("qux", "foo qux", qux)
-	)
-);
+static struct plugin plugin = {
+	.name = "foo",
+	.desc = "Foo plugin",
+	.version = NVME_VERSION,
+	/* .core = true,   -- for a "core" plugin, shown in its own section of `nvme help` */
+};
 
-#endif
-
-#include "define_cmd.h"
+static void __attribute__((constructor)) register_plugin(void)
+{
+	plugin_add_group(&plugin, NULL, commands);
+	register_extension(&plugin);
+}
 ```
 
-In order to have the compiler generate the plugin through the xmacro
-expansion, you need to include this header in your source file, with
-a pre-defining macro directive to create the commands.
+Then append `plugins/foo/foo-nvme.c` to the `all_plugins` dict in
+`plugins/meson.build`.
 
-To get started from the above example, we just need to define "CREATE_CMD"
-and include the header:
+"Core" vs. "vendor" plugin is just the `.core` flag on `struct plugin` --
+it only affects which heading a plugin's listed under on `nvme help`. Both
+kinds work identically otherwise.
 
-File: foo-plugin.c
-```c
-#include "nvme.h"
+A core plugin can also set `.group` to the title of a built-in group (see
+above) it's thematically related to, e.g. `.group = "Features"` for the
+`feat` plugin. When set, `nvme help` lists the plugin right after that
+group's commands instead of in the flat "core NVMe/NVMeoF plugins" list.
+This only affects display -- the plugin is still invoked as `nvme foo bar`,
+not merged into the flat top-level command namespace.
 
-#define CREATE_CMD
-#include "foo-plugin.h"
+#### Multi-file plugins
+
+A plugin can span multiple `.c` files (see `plugins/ocp` or
+`plugins/solidigm` for real examples): put the `struct plugin` definition
+and any shared declarations in a small header, `#include` it from each
+file, and have each file call `plugin_add_group()` with its own commands
+(and its own title, if you want `nvme <plugin> help` to show sub-headings)
+. only *one* file should call `register_extension()`.
+
+### Regenerating shell completions
+
+nvme-cli ships bash, zsh, and PowerShell tab-completion scripts under
+`completions/`. They are generated from the command and option metadata the
+built `nvme` binary emits, committed to the source tree, and are **not**
+regenerated during a normal build. A CI check rejects any change that leaves
+them out of sync with the CLI.
+
+After adding or changing a command, plugin, or option, regenerate and commit
+the completions:
+
+```shell
+$ meson compile -C .build update-completions
+$ git add completions/bash-nvme-completion.sh completions/_nvme completions/nvme-completion.ps1
+$ git commit -s -m "completions: regenerate for <your change>"
 ```
 
-After that, you just need to implement the functions you defined in each
-ENTRY, then append the object file name to the meson.build "sources".
+Do this on **Linux** with the default (all-plugins) build. Windows and other
+reduced builds leave some plugins out, so completions generated there would be
+missing commands and fail the CI check.
+
+See [completions/README](completions/README) for how the generator works and
+how to install the completions locally.
 
 ### Updating the libnvme accessor functions
 
@@ -175,8 +233,8 @@ The script atomically updates the `.h` and `.c` files when their content
 changes. Commit the updated files afterward:
 
 ```shell
-$ git add libnvme/src/nvme/accessors.h libnvme/src/nvme/accessors.c
-$ git add libnvme/src/nvme/accessors-fabrics.h libnvme/src/nvme/accessors-fabrics.c
+$ git add libnvme/src/nvme/generated/accessors.h libnvme/src/nvme/generated/accessors.c
+$ git add libnvme/src/nvme/generated/accessors-fabrics.h libnvme/src/nvme/generated/accessors-fabrics.c
 $ git commit -m "libnvme: regenerate accessors following <struct> changes"
 ```
 
@@ -285,6 +343,40 @@ $ git rebase master
 # Push your changes to Github and trigger a PR
 $ git push -u origin fix-something
 ```
+
+## AI-assisted development (optional)
+
+The [nvme-cli-ai](https://github.com/linux-nvme/nvme-cli-ai) companion
+repository provides optional AI workflow resources for contributors who use
+AI coding assistants. It contains shared project context, coding rules,
+reusable skills, and assistant configuration files for the nvme-cli and
+libnvme ecosystem.
+
+Using nvme-cli-ai is entirely optional. The nvme-cli project has no dependency
+on any AI tooling.
+
+### Setup
+
+Clone both repositories side-by-side under the same parent directory:
+
+    workspace/
+    ├── nvme-cli/
+    └── nvme-cli-ai/
+
+### Claude Code
+
+Claude Code searches for configuration by walking up the directory tree from
+the current working directory. Because nvme-cli-ai is a sibling repository,
+use the --add-dir flag to include it when starting a session:
+
+    $ claude --add-dir ../nvme-cli-ai
+
+Skills under .claude/skills/ (such as the /nvme-spec verifier) are discovered
+automatically from the added directory. The shared CLAUDE.md project context,
+however, is not loaded from an --add-dir directory by default; to load it as
+well, also set CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD=1:
+
+    $ CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD=1 claude --add-dir ../nvme-cli-ai
 
 ## Bug Reports
 

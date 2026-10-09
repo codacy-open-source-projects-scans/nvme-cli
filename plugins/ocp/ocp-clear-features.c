@@ -8,12 +8,15 @@
 
 #include <unistd.h>
 
+#include <libnvme.h>
+
+#include "cleanup.h"
+#include "global-ctx.h"
 #include "nvme-cmds.h"
 #include "nvme-print.h"
-#include "util/types.h"
-
 #include "ocp-nvme.h"
 #include "ocp-utils.h"
+#include "plugin.h"
 
 static int ocp_clear_feature(int argc, char **argv, const char *desc, const __u8 fid)
 {
@@ -33,14 +36,14 @@ static int ocp_clear_feature(int argc, char **argv, const char *desc, const __u8
 	if (err)
 		return err;
 
-	if (opts[0].seen)
+	if (argconfig_parse_seen(opts, "no-uuid"))
 		uuid = false;
 
 	if (uuid) {
 		/* OCP 2.0 requires UUID index support */
 		err = ocp_get_uuid_index(hdl, &uuid_index);
 		if (err || !uuid_index) {
-			fprintf(stderr, "ERROR: No OCP UUID index found\n");
+			nvme_show_error("ERROR: No OCP UUID index found");
 			return err;
 		}
 	}
@@ -49,11 +52,11 @@ static int ocp_clear_feature(int argc, char **argv, const char *desc, const __u8
 			&result);
 
 	if (err == 0)
-		printf("Success : %s\n", desc);
+		nvme_show_verbose_result("Success : %s", desc);
 	else if (err > 0)
 		nvme_show_status(err);
 	else
-		printf("Fail : %s\n", desc);
+		nvme_show_error("Fail : %s", desc);
 
 	return err;
 }
@@ -61,7 +64,7 @@ static int ocp_clear_feature(int argc, char **argv, const char *desc, const __u8
 int get_ocp_error_counters(int argc, char **argv, struct command *acmd,
 			   struct plugin *plugin)
 {
-	const char *desc = "Define Issue Get Feature cmd (FID: 0xC3) Clear PCIe Corr Err Counters";
+	const char *desc = "Issue Get Feature command (FID: 0xC3) Clear PCIe Correctable Error Counters";
 	const char *sel = "[0-3]: current/default/saved/supported/";
 	const char *nsid = "Byte[04-07]: Namespace Identifier Valid/Invalid/Inactive";
 	const char *no_uuid = "Do not try to automatically detect UUID index";

@@ -7,10 +7,19 @@
 
 #include <errno.h>
 #include <time.h>
+#include <unistd.h>
 
-#include "common.h"
+#include <libnvme.h>
+
+#include <ccan/array_size/array_size.h>
+#include <ccan/endian/endian.h>
+#include <ccan/minmax/minmax.h>
+
+#include "cleanup.h"
+#include "global-ctx.h"
 #include "nvme-cmds.h"
 #include "nvme-print.h"
+#include "plugin.h"
 
 #define LID 0xf9
 #define FID 0xf1
@@ -244,8 +253,8 @@ static void wltracker_print_header(struct wltracker *wlt)
 	printf("%-24s %u.%u\n", "Log page version:", le16_to_cpu(log->majorVersion),
 	       le16_to_cpu(log->minorVersion));
 	printf("%-24s %u\n", "Sample period(ms):", le32_to_cpu(log->samplePeriodInMilliseconds));
-	printf("%-24s %lu\n", "timestamp_lastChange:", le64_to_cpu(log->timestamp_lastEntry));
-	printf("%-24s %lu\n", "timestamp_triggered:", le64_to_cpu(log->timestamp_triggered));
+	printf("%-24s %"PRIu64"\n", "timestamp_lastChange:", le64_to_cpu(log->timestamp_lastEntry));
+	printf("%-24s %"PRIu64"\n", "timestamp_triggered:", le64_to_cpu(log->timestamp_triggered));
 	printf("%-24s 0x%x\n", "config:", le32_to_cpu(log->config.dword));
 	printf("%-24s %u\n", "Triggerthreshold:", le32_to_cpu(log->triggerthreshold));
 	printf("%-24s %u\n", "ValueTriggered:", le32_to_cpu(log->triggeredValue));
@@ -253,7 +262,7 @@ static void wltracker_print_header(struct wltracker *wlt)
 	printf("%-24s %u\n", "Total log page entries:", le32_to_cpu(log->workloadLogCount));
 	printf("%-24s %u\n", "Trigger count:", log->triggeredEvents);
 	if (nvme_args.verbose > 1)
-		printf("%-24s %ld\n", "Poll count:", wlt->poll_count);
+		printf("%-24s %zu\n", "Poll count:", wlt->poll_count);
 	if (wlt->poll_count != 0)
 		wltracker_print_field_names(wlt);
 }
@@ -285,6 +294,7 @@ static int wltracker_show_newer_entries(struct wltracker *wlt)
 	union WorkloadLogEnable workloadEnable;
 	static __u64 last_timestamp_us;
 	struct libnvme_passthru_cmd cmd;
+	__u64 sample_period_ms;
 	__u64 timestamp_us = 0;
 	__u64 timestamp = 0;
 	__u8 content_group;
@@ -312,14 +322,15 @@ static int wltracker_show_newer_entries(struct wltracker *wlt)
 	content_group = workloadEnable.contentGroup;
 
 	if (cnt == 0) {
-		nvme_show_error("Warning : No valid workload log data\n");
+		nvme_show_error("Warning : No valid workload log data");
 		return 0;
 	}
 
+	sample_period_ms = log->samplePeriodInMilliseconds;
 	timestamp_us = (le64_to_cpu(log->timestamp_lastEntry) / WLT2US) -
-		       (log->samplePeriodInMilliseconds * 1000 * (cnt - 1));
+		       (sample_period_ms * 1000 * (cnt - 1));
 	timestamp = le64_to_cpu(log->timestamp_lastEntry) -
-		    (log->samplePeriodInMilliseconds * WLT2MS * (cnt - 1));
+		    (sample_period_ms * WLT2MS * (cnt - 1));
 
 	if (wlt->poll_count++ == 0) {
 		__u64 tle = log->timestamp_lastEntry;
@@ -358,6 +369,11 @@ static int wltracker_show_newer_entries(struct wltracker *wlt)
 				we = log->config;
 				we.triggerEnable = false;
 				err = wltracker_config(wlt, &we);
+				if (err < 0)
+					nvme_show_error("Failed to restore original tracker config: %s",
+							libnvme_strerror(-err));
+				else if (err > 0)
+					nvme_show_status(err);
 				if (nvme_args.verbose > 1)
 					printf("Restored config value: 0x%08x\n",
 					       we.dword);
@@ -374,11 +390,11 @@ static int wltracker_show_newer_entries(struct wltracker *wlt)
 			      (log->samplePeriodInMilliseconds * 100);
 
 		if (is_old) {
-			timestamp_us += (log->samplePeriodInMilliseconds * 1000);
-			timestamp += log->samplePeriodInMilliseconds * WLT2MS;
+			timestamp_us += sample_period_ms * 1000;
+			timestamp += sample_period_ms * WLT2MS;
 			continue;
 		}
-		printf("%-16llu", timestamp);
+		printf("%-16" PRIu64, (uint64_t)timestamp);
 		for (int j = 0; j < MAX_FIELDS; j++) {
 			__u32 val = 0;
 			struct field f = group_fields[content_group][j];
@@ -422,8 +438,8 @@ static int wltracker_show_newer_entries(struct wltracker *wlt)
 
 			printf("%-*u ", (int)strlen(f.name), val);
 		}
-		timestamp_us += (log->samplePeriodInMilliseconds * 1000);
-		timestamp += log->samplePeriodInMilliseconds * WLT2MS;
+		timestamp_us += sample_period_ms * 1000;
+		timestamp += sample_period_ms * WLT2MS;
 	}
 	last_timestamp_us = log->timestamp_lastEntry / WLT2US;
 	return 0;
@@ -433,10 +449,10 @@ void wltracker_run_time_update(struct wltracker *wlt)
 {
 	wlt->run_time_us = micros() - wlt->start_time_us;
 	if (nvme_args.verbose > 0)
-		printf("run_time: %lluus\n", wlt->run_time_us);
+		printf("run_time: %" PRIu64 "us\n", (uint64_t)wlt->run_time_us);
 }
 
-static int stricmp(char const *a, char const *b)
+static int sldgm_stricmp(char const *a, char const *b)
 {
 	if (!a || !b)
 		return 1;
@@ -449,25 +465,25 @@ static int stricmp(char const *a, char const *b)
 static int find_option(char const *list[], int size, const char *val)
 {
 	for (int i = 0; i < size; i++) {
-		if (!stricmp(val, list[i]))
+		if (!sldgm_stricmp(val, list[i]))
 			return i;
 	}
 	return -EINVAL;
 }
 
-static void join_options(char *dest, char const *list[], size_t list_size)
+static void join_options(char *dest, size_t dest_size, char const *list[], size_t list_size)
 {
-	strcat(dest, list[0]);
+	strncat(dest, list[0], dest_size - strlen(dest) - 1);
 	for (int i = 1; i < list_size; i++) {
-		strcat(dest, "|");
-		strcat(dest, list[i]);
+		strncat(dest, "|", dest_size - strlen(dest) - 1);
+		strncat(dest, list[i], dest_size - strlen(dest) - 1);
 	}
 }
 
 static int find_field(struct field *fields, const char *val)
 {
 	for (int i = 0; i < MAX_FIELDS; i++) {
-		if (!stricmp(val, fields[i].name))
+		if (!sldgm_stricmp(val, fields[i].name))
 			return i;
 	}
 	return -EINVAL;
@@ -524,8 +540,8 @@ int sldgm_get_workload_tracker(int argc, char **argv, struct command *acmd, stru
 		.trigger_field = "",
 	};
 
-	join_options(type_options, trk_types, ARRAY_SIZE(trk_types));
-	join_options(sample_options, samplet, ARRAY_SIZE(samplet));
+	join_options(type_options, sizeof(type_options), trk_types, ARRAY_SIZE(trk_types));
+	join_options(sample_options, sizeof(sample_options), samplet, ARRAY_SIZE(samplet));
 
 	NVME_ARGS(opts,
 		OPT_BYTE("uuid-index",   'U', &wlt.uuid_index, "specify uuid index"),
@@ -632,7 +648,7 @@ int sldgm_get_workload_tracker(int argc, char **argv, struct command *acmd, stru
 	}
 
 	wlt.start_time_us = micros();
-	stop_time_us = cfg.run_time_s * 1000000;
+	stop_time_us = (__u64)cfg.run_time_s * 1000000;
 	while (wlt.run_time_us < stop_time_us) {
 		__u64 interval;
 		__u64 elapsed;
@@ -656,7 +672,8 @@ int sldgm_get_workload_tracker(int argc, char **argv, struct command *acmd, stru
 			__u64 period_us = min(next_sample_us - wlt.run_time_us,
 					      stop_time_us - wlt.run_time_us);
 			if (nvme_args.verbose > 1)
-				printf("Sleeping %lluus..\n", period_us);
+				printf("Sleeping %" PRIu64 "us..\n",
+					(uint64_t)period_us);
 			usleep(period_us);
 			wltracker_run_time_update(&wlt);
 		}

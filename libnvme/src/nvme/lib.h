@@ -14,22 +14,25 @@
 #include <nvme/lib-types.h>
 
 enum libnvme_log_level {
-	LIBNVME_LOG_ERR	  = 0,
-	LIBNVME_LOG_WARN  = 1,
-	LIBNVME_LOG_INFO  = 2,
-	LIBNVME_LOG_DEBUG = 3,
+	LIBNVME_LOG_ERR           = 0,
+	LIBNVME_LOG_WARN          = 1,
+	LIBNVME_LOG_INFO          = 2,
+	LIBNVME_LOG_DEBUG         = 3,
+	LIBNVME_LOG_DEBUG_VERBOSE = 4,
 };
 
 #define LIBNVME_DEFAULT_LOGLEVEL LIBNVME_LOG_WARN
 
 /**
  * libnvme_create_global_ctx() - Initialize global context object
- * @fp:		File descriptor for logging messages
- * @log_level:	Logging level to use
+ *
+ * Creates a global context with default settings: logging to stderr at
+ * LIBNVME_DEFAULT_LOGLEVEL.  Use libnvme_set_logging_file() and
+ * libnvme_set_logging_level() to adjust these after creation.
  *
  * Return: Initialized &struct libnvme_global_ctx object
  */
-struct libnvme_global_ctx *libnvme_create_global_ctx(FILE *fp, int log_level);
+struct libnvme_global_ctx *libnvme_create_global_ctx(void);
 
 /**
  * libnvme_free_global_ctx() - Free global context object
@@ -38,6 +41,54 @@ struct libnvme_global_ctx *libnvme_create_global_ctx(FILE *fp, int log_level);
  * Free an &struct libnvme_global_ctx object and all attached objects
  */
 void libnvme_free_global_ctx(struct libnvme_global_ctx *ctx);
+
+/**
+ * libnvme_set_owner() - Set the orchestrator identity for the registry
+ * @ctx:	&struct libnvme_global_ctx object
+ * @owner:	Orchestrator identity string (e.g. "stas", "nbft").
+ *
+ * Records the orchestrator identity used when claiming registry ownership of
+ * connections made through @ctx.  A later call overwrites the previous value;
+ * treating the identity as immutable is a policy decision left to the caller.
+ * A process that does not participate in the registry simply never calls this.
+ *
+ * This is the supported way to record the registry owner;
+ * libnvme_create_global_ctx() deliberately takes no owner parameter.
+ *
+ * See also: libnvmf_get_owner_from_tid() and libnvmf_get_owner_from_fctx()
+ * (fabrics.h) to look up who owns a candidate connection before connecting
+ * it, and libnvmf_registry_retrieve() (registry.h) to read a live
+ * controller's registry entry directly.
+ *
+ * Return: 0 on success, -EINVAL or -ENOMEM on error.
+ */
+int libnvme_set_owner(struct libnvme_global_ctx *ctx, const char *owner);
+
+/**
+ * libnvme_set_test_base_dir() - Reroot libnvme's on-disk files for testing
+ * @ctx:	&struct libnvme_global_ctx object
+ * @path:	Sandbox directory under /tmp, or NULL to restore defaults
+ *
+ * Redirects the files libnvme reads and writes (the exclusion list, the
+ * ownership registry, ...) under @path instead of their production locations,
+ * so a test can run against a throwaway directory.  For safety @path must be
+ * confined to /tmp and contain no ".." component; anything else is rejected.
+ * Passing NULL clears a previously set override.
+ *
+ * Return: 0 on success, -EINVAL if @ctx is NULL or @path is not a valid
+ * sandbox path, -ENOMEM on allocation failure.
+ */
+int libnvme_set_test_base_dir(struct libnvme_global_ctx *ctx, const char *path);
+
+/**
+ * libnvme_set_test_sysfs_dir() - Set libnvme's lookup sysfs path for testing
+ * @ctx:	&struct libnvme_global_ctx object
+ * @path:	Directory with sysfs or NULL to restore defaults
+ *
+ * Return: 0 on success, -EINVAL if @ctx is NULL, -ENOMEM on allocation
+ * failure.
+ */
+int libnvme_set_test_sysfs_dir(struct libnvme_global_ctx *ctx, const char *path);
 
 /**
  * libnvme_set_logging_level() - Set current logging level
@@ -67,17 +118,29 @@ int libnvme_get_logging_level(struct libnvme_global_ctx *ctx, bool *log_pid,
 		bool *log_tstamp);
 
 /**
+ * libnvme_set_logging_file() - Set the log output file for the global context
+ * @ctx:	struct libnvme_global_ctx object
+ * @fp:		File stream to write log messages to, or NULL to use stderr
+ *
+ * Sets the file descriptor used for log output.  Passing NULL reverts to the
+ * default (stderr).
+ */
+void libnvme_set_logging_file(struct libnvme_global_ctx *ctx, FILE *fp);
+
+/**
  * libnvme_open() - Open an nvme controller or namespace device
  * @ctx:	struct libnvme_global_ctx object
  * @name:	The basename of the device to open
+ * @flags:	Flags to pass to the underlying open(2) call, e.g. O_RDONLY
+ *		or O_RDONLY | O_EXCL
  * @hdl:	Transport handle to return
  *
  * This will look for the handle in /dev/ and validate the name and filetype
  * match linux conventions.
  *
- * Return: 0 on success or negative error code otherwise
+ * Return: 0 on success, negative error code otherwise.
  */
-int libnvme_open(struct libnvme_global_ctx *ctx, const char *name,
+int libnvme_open(struct libnvme_global_ctx *ctx, const char *name, int flags,
 	      struct libnvme_transport_handle **hdl);
 
 /**
@@ -94,16 +157,32 @@ void libnvme_close(struct libnvme_transport_handle *hdl);
  * If the device handle is for a ioctl based device,
  * libnvme_transport_handle_get_fd will return a valid file descriptor.
  *
- * Return: File descriptor for an IOCTL based transport handle, otherwise -1.
+ * Return: File descriptor for an IOCTL based transport handle,
+ * otherwise LIBNVME_INVALID_FD.
  */
-int libnvme_transport_handle_get_fd(struct libnvme_transport_handle *hdl);
+libnvme_fd_t libnvme_transport_handle_get_fd(
+		struct libnvme_transport_handle *hdl);
+
+/**
+ * libnvme_transport_handle_get_mi_ep() - get the MI endpoint from a
+ * transport handle
+ * @hdl: transport handle
+ *
+ * Retrieve the MI endpoint associated with this transport handle. Only valid
+ * for MI-type transport handles (check with libnvme_transport_handle_is_mi
+ * first).
+ *
+ * Return: the MI endpoint, or NULL if the handle is not an MI handle.
+ */
+struct libnvme_mi_ep *libnvme_transport_handle_get_mi_ep(
+		struct libnvme_transport_handle *hdl);
 
 /**
  * libnvme_transport_handle_get_name - Return name of the device
  * transport handle
  * @hdl:	Transport handle
  *
- * Return: Device file name, otherwise -1.
+ * Return: Device file name, otherwise NULL.
  */
 const char *libnvme_transport_handle_get_name(
 		struct libnvme_transport_handle *hdl);
@@ -228,36 +307,3 @@ void libnvme_transport_handle_set_decide_retry(
  */
 void libnvme_transport_handle_set_timeout(struct libnvme_transport_handle *hdl,
 		__u32 timeout_ms);
-
-/**
- * libnvme_set_probe_enabled() - enable/disable the probe for new MI endpoints
- * @ctx:	&struct libnvme_global_ctx object
- * @enabled: whether to probe new endpoints
- *
- * Controls whether newly-created endpoints are probed for quirks on creation.
- * Defaults to enabled, which results in some initial messaging with the
- * endpoint to determine model-specific details.
- */
-void libnvme_set_probe_enabled(struct libnvme_global_ctx *ctx, bool enabled);
-
-/**
- * libnvme_set_dry_run() - Set global dry run state
- * @ctx:	struct libnvme_global_ctx object
- * @enable:	Enable/disable dry run state
- *
- * When dry_run is enabled, any IOCTL commands send via the passthru
- * interface won't be executed.
- */
-void libnvme_set_dry_run(struct libnvme_global_ctx *ctx, bool enable);
-
-/**
- * libnvme_set_ioctl_probing() - Enable/disable 64-bit IOCTL probing
- * @ctx:	struct libnvme_global_ctx object
- * @enable:	Enable/disable 64-bit IOCTL probing
- *
- * When IOCTL probing is enabled, a 64-bit IOCTL command is issued to
- * figure out if the passthru interface supports it.
- *
- * IOCTL probing is enabled per default.
- */
-void libnvme_set_ioctl_probing(struct libnvme_global_ctx *ctx, bool enable);

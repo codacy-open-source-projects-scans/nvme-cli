@@ -16,7 +16,7 @@
  * We have a few data structures define here to reflect the topology
  * of a MI connection with an NVMe subsystem:
  *
- *  - &libnvme_mi_ep_t: an MI endpoint - our mechanism of communication with a
+ *  - &struct libnvme_mi_ep: an MI endpoint - our mechanism of communication with a
  *    NVMe subsystem. For MCTP, an endpoint will be the component that
  *    holds the MCTP address (EID), and receives our request message.
  *
@@ -27,7 +27,7 @@
  *
  *  - &libnvme_mi_ctrl_t: a NVMe controller, as defined by the NVMe base spec.
  *    The controllers are responsible for processing any NVMe standard
- *    commands (eg, the Admin command set). An endpoint (&libnvme_mi_ep_t)
+ *    commands (eg, the Admin command set). An endpoint (&struct libnvme_mi_ep)
  *    may provide access to multiple controllers - so each of the controller-
  *    type commands will require a &libnvme_mi_ctrl_t to be specified, rather than
  *    an endpoint
@@ -85,26 +85,8 @@
 #include <nvme/mi-types.h>
 #include <nvme/tree.h>
 
-/**
- * libnvme_mi_status_to_string() - return a string representation of the MI
- * status.
- * @status: MI response status
- *
- * Gives a string description of @status, as per section 4.1.2 of the NVMe-MI
- * spec. The status value should be of type NVME_STATUS_MI, and extracted
- * from the return value using nvme_status_get_value().
- *
- * Returned string is const, and should not be free()ed.
- *
- * Returns: A string representing the status value
- */
-const char *libnvme_mi_status_to_string(int status);
-
-/* Top level management object: NVMe-MI Management Endpoint */
-struct libnvme_mi_ep;
-
-/**
- * typedef libnvme_mi_ep_t - MI Endpoint object.
+/*
+ * struct libnvme_mi_ep - MI Endpoint object.
  *
  * Represents our communication endpoint on the remote MI-capable device.
  * To be used for direct MI commands for the endpoint (through the
@@ -116,7 +98,7 @@ struct libnvme_mi_ep;
  * Subsequent operations on the endpoint (and related controllers) are
  * transport-independent.
  */
-typedef struct libnvme_mi_ep * libnvme_mi_ep_t;
+struct libnvme_mi_ep;
 
 /**
  * libnvme_mi_set_csi - Assign a CSI to an endpoint.
@@ -126,7 +108,7 @@ typedef struct libnvme_mi_ep * libnvme_mi_ep_t;
  * Return: 0 if successful, -1 otherwise (some endpoints may not support)
  *
  */
-int libnvme_mi_set_csi(libnvme_mi_ep_t ep, uint8_t csi);
+int libnvme_mi_set_csi(struct libnvme_mi_ep *ep, uint8_t csi);
 
 /**
  * libnvme_mi_first_endpoint - Start endpoint iterator
@@ -137,24 +119,24 @@ int libnvme_mi_set_csi(libnvme_mi_ep_t ep, uint8_t csi);
  *
  * See: &libnvme_mi_next_endpoint, &libnvme_mi_for_each_endpoint
  */
-libnvme_mi_ep_t libnvme_mi_first_endpoint(struct libnvme_global_ctx *ctx);
+struct libnvme_mi_ep *libnvme_mi_first_endpoint(struct libnvme_global_ctx *ctx);
 
 /**
  * libnvme_mi_next_endpoint - Continue endpoint iterator
  * @ctx:	&struct libnvme_global_ctx object
- * @e: &libnvme_mi_ep_t current position of iterator
+ * @e: &struct libnvme_mi_ep current position of iterator
  *
  * Return: next endpoint MI endpoint object after @e under this root, or NULL
  *         if no further endpoints are present.
  *
  * See: &libnvme_mi_first_endpoint, &libnvme_mi_for_each_endpoint
  */
-libnvme_mi_ep_t libnvme_mi_next_endpoint(struct libnvme_global_ctx *ctx, libnvme_mi_ep_t e);
+struct libnvme_mi_ep *libnvme_mi_next_endpoint(struct libnvme_global_ctx *ctx, struct libnvme_mi_ep *e);
 
 /**
  * libnvme_mi_for_each_endpoint - Iterator for NVMe-MI endpoints.
  * @c: &struct libnvme_global_ctx object
- * @e: &libnvme_mi_ep_t object, set on each iteration
+ * @e: &struct libnvme_mi_ep object, set on each iteration
  */
 #define libnvme_mi_for_each_endpoint(c, e)			\
 	for (e = libnvme_mi_first_endpoint(c); e != NULL;	\
@@ -164,8 +146,8 @@ libnvme_mi_ep_t libnvme_mi_next_endpoint(struct libnvme_global_ctx *ctx, libnvme
  * libnvme_mi_for_each_endpoint_safe - Iterator for NVMe-MI endpoints, allowing
  * deletion during traversal
  * @c: &struct libnvme_global_ctx object
- * @e: &libnvme_mi_ep_t object, set on each iteration
- * @_e: &libnvme_mi_ep_t object used as temporary storage
+ * @e: &struct libnvme_mi_ep object, set on each iteration
+ * @_e: &struct libnvme_mi_ep object used as temporary storage
  */
 #define libnvme_mi_for_each_endpoint_safe(c, e, _e)			      \
 	for (e = libnvme_mi_first_endpoint(c), _e = libnvme_mi_next_endpoint(c, e); \
@@ -177,7 +159,7 @@ libnvme_mi_ep_t libnvme_mi_next_endpoint(struct libnvme_global_ctx *ctx, libnvme
  * @ep: MI endpoint object
  * @timeout_ms: Timeout for MI responses, given in milliseconds
  */
-int libnvme_mi_ep_set_timeout(libnvme_mi_ep_t ep, unsigned int timeout_ms);
+int libnvme_mi_ep_set_timeout(struct libnvme_mi_ep *ep, unsigned int timeout_ms);
 
 /**
  * libnvme_mi_ep_set_mprt_max - set the maximum wait time for a More Processing
@@ -195,7 +177,7 @@ int libnvme_mi_ep_set_timeout(libnvme_mi_ep_t ep, unsigned int timeout_ms);
  * This should be larger than the command/response timeout set in
  * &libnvme_mi_ep_set_timeout().
  */
-void libnvme_mi_ep_set_mprt_max(libnvme_mi_ep_t ep, unsigned int mprt_max_ms);
+void libnvme_mi_ep_set_mprt_max(struct libnvme_mi_ep *ep, unsigned int mprt_max_ms);
 
 /**
  * libnvme_mi_ep_get_timeout - get the current timeout value for NVMe-MI responses
@@ -203,22 +185,22 @@ void libnvme_mi_ep_set_mprt_max(libnvme_mi_ep_t ep, unsigned int mprt_max_ms);
  *
  * Returns the current timeout value, in milliseconds, for this endpoint.
  */
-unsigned int libnvme_mi_ep_get_timeout(libnvme_mi_ep_t ep);
+unsigned int libnvme_mi_ep_get_timeout(struct libnvme_mi_ep *ep);
 
 /**
  * libnvme_mi_first_transport_handle - Start transport handle iterator
- * @ep: &libnvme_mi_ep_t object
+ * @ep: &struct libnvme_mi_ep object
  *
  * Return: first transport handle to a MI controller object under this
  *         root, or NULL if no controllers are present.
  *
  * See: &libnvme_mi_next_transport_handle, &libnvme_mi_for_each_transport_handle
  */
-struct libnvme_transport_handle *libnvme_mi_first_transport_handle(libnvme_mi_ep_t ep);
+struct libnvme_transport_handle *libnvme_mi_first_transport_handle(struct libnvme_mi_ep *ep);
 
 /**
  * libnvme_mi_next_transport_handle - Continue transport handle iterator
- * @ep: &libnvme_mi_ep_t object
+ * @ep: &struct libnvme_mi_ep object
  * @hdl: &nvme_transport_handle current position of iterator
  *
  * Return: next transport handle to MI controller object after @c under
@@ -226,12 +208,12 @@ struct libnvme_transport_handle *libnvme_mi_first_transport_handle(libnvme_mi_ep
  *
  * See: &libnvme_mi_first_transport_handle, &libnvme_mi_for_each_transport_handle
  */
-struct libnvme_transport_handle *libnvme_mi_next_transport_handle(libnvme_mi_ep_t ep,
+struct libnvme_transport_handle *libnvme_mi_next_transport_handle(struct libnvme_mi_ep *ep,
 							    struct libnvme_transport_handle *hdl);
 
 /**
  * libnvme_mi_for_each_transport_handle - Iterator for transport handle to NVMe-MI controllers.
- * @ep: &libnvme_mi_ep_t containing endpoints
+ * @ep: &struct libnvme_mi_ep containing endpoints
  * @hdl: &nvme_trasnport_handle object, set on each iteration
  *
  * Allows iteration of the list of controllers behind an endpoint. Unless the
@@ -247,7 +229,7 @@ struct libnvme_transport_handle *libnvme_mi_next_transport_handle(libnvme_mi_ep_
 /**
  * libnvme_mi_for_each_transport_handle_safe - Iterator for transport handle to NVMe-MI controllers, allowing
  * deletion during traversal
- * @ep: &libnvme_mi_ep_t containing controllers
+ * @ep: &struct libnvme_mi_ep containing controllers
  * @hdl: &nvme_transport_handle object, set on each iteration
  * @_hdl: &nvme_transport_handle object used as temporary storage
  *
@@ -277,7 +259,7 @@ struct libnvme_transport_handle *libnvme_mi_next_transport_handle(libnvme_mi_ep_
  *
  * See &libnvme_mi_close
  */
-libnvme_mi_ep_t libnvme_mi_open_mctp(struct libnvme_global_ctx *ctx,
+struct libnvme_mi_ep *libnvme_mi_open_mctp(struct libnvme_global_ctx *ctx,
 			       unsigned int netid, uint8_t eid);
 
 /**
@@ -286,7 +268,7 @@ libnvme_mi_ep_t libnvme_mi_open_mctp(struct libnvme_global_ctx *ctx,
  *
  * Return: 0 if success, -1 otherwise
  */
-int libnvme_mi_aem_open(libnvme_mi_ep_t ep);
+int libnvme_mi_aem_open(struct libnvme_mi_ep *ep);
 
 /**
  * libnvme_mi_close() - Close an endpoint connection and release resources,
@@ -294,7 +276,7 @@ int libnvme_mi_aem_open(libnvme_mi_ep_t ep);
  *
  * @ep: Endpoint object to close
  */
-void libnvme_mi_close(libnvme_mi_ep_t ep);
+void libnvme_mi_close(struct libnvme_mi_ep *ep);
 
 /**
  * libnvme_mi_scan_mctp - look for MCTP-connected NVMe-MI endpoints.
@@ -302,7 +284,7 @@ void libnvme_mi_close(libnvme_mi_ep_t ep);
  * Description: This function queries the system MCTP daemon ("mctpd") over
  * D-Bus, to find MCTP endpoints that report support for NVMe-MI over MCTP.
  *
- * This requires libvnme-mi to be compiled with D-Bus support; if not, this
+ * This requires libnvme-mi to be compiled with D-Bus support; if not, this
  * will return NULL.
  *
  * Return: A @struct libnvme_global_ctx populated with a set of
@@ -325,11 +307,11 @@ struct libnvme_global_ctx *libnvme_mi_scan_mctp(void);
  * hold a reference to those across this call.
  *
  * Return: The nvme command status if a response was received (see
- * &enum nvme_status_field) or -1 with errno set otherwise.
+ * &enum nvme_status_field) or negative error code otherwise.
  *
  * See: &libnvme_mi_for_each_ctrl
  */
-int libnvme_mi_scan_ep(libnvme_mi_ep_t ep, bool force_rescan);
+int libnvme_mi_scan_ep(struct libnvme_mi_ep *ep, bool force_rescan);
 
 /**
  * libnvme_mi_init_transport_handle() - initialise a transport handle to NVMe controller.
@@ -344,7 +326,7 @@ int libnvme_mi_scan_ep(libnvme_mi_ep_t ep, bool force_rescan);
  *
  * See &libnvme_mi_close_transport_handle
  */
-struct libnvme_transport_handle *libnvme_mi_init_transport_handle(libnvme_mi_ep_t ep, __u16 ctrl_id);
+struct libnvme_transport_handle *libnvme_mi_init_transport_handle(struct libnvme_mi_ep *ep, __u16 ctrl_id);
 
 /**
  * libnvme_mi_ctrl_id() - get the ID of a controller
@@ -370,7 +352,50 @@ __u16 libnvme_mi_ctrl_id(struct libnvme_transport_handle *hdl);
  * Return: a newly-allocated string containing the endpoint description, or
  *         NULL on failure.
  */
-char *libnvme_mi_endpoint_desc(libnvme_mi_ep_t ep);
+char *libnvme_mi_endpoint_desc(struct libnvme_mi_ep *ep);
+
+/**
+ * libnvme_mi_ep_set_submit_entry() - Install MI submit-entry callback
+ * @ep: endpoint to configure
+ * @mi_submit_entry: After input validation the callback is invoked before an MI
+ *		command is submitted. The function receives the endpoint,
+ *		message type, header, and data about to be sent, and may return
+ *		an opaque pointer representing per-command context. This pointer
+ *		is later passed unmodified to the mi_submit_exit callback.
+ *		Implementations typically use this hook for logging, tracing, or
+ *		allocating per-command state.
+ *
+ * Installs a callback invoked at the moment an MI command enters the submission
+ * path. This applies to all MI operations through this endpoint (both endpoint-
+ * level MI commands and controller admin commands). Passing NULL removes any
+ * previously installed callback.
+ */
+void libnvme_mi_ep_set_submit_entry(
+	struct libnvme_mi_ep *ep,
+	void *(*mi_submit_entry)(struct libnvme_mi_ep *ep, __u8 type,
+				 const struct nvme_mi_msg_hdr *hdr,
+				 size_t hdr_len, const void *data,
+				 size_t data_len));
+
+/**
+ * libnvme_mi_ep_set_submit_exit() - Install MI submit-exit callback
+ * @ep: endpoint to configure
+ * @mi_submit_exit: Callback invoked after an MI command completes callback
+ *		(i.e., after a response has been received and passed basic
+ *		validation). The function receives the endpoint, message type,
+ *		header, data, and the @user_data pointer returned earlier by the
+ *		mi_submit_entry callback. Implementations typically use this
+ *		hook for logging, tracing, or freeing per-command state.
+ *
+ * Installs a callback invoked when an MI command completes. This applies to all
+ * MI operations through this endpoint. Passing NULL removes any previously
+ * installed callback.
+ */
+void libnvme_mi_ep_set_submit_exit(struct libnvme_mi_ep *ep,
+		void (*mi_submit_exit)(struct libnvme_mi_ep *ep,
+				__u8 type, const struct nvme_mi_msg_hdr *hdr,
+				size_t hdr_len, const void *data,
+				size_t data_len, void *user_data));
 
 /* MI Command API: libnvme_mi_mi_ prefix */
 
@@ -396,9 +421,9 @@ char *libnvme_mi_endpoint_desc(libnvme_mi_ep_t ep);
  * See: &struct nvme_mi_mi_req_hdr and &struct nvme_mi_mi_resp_hdr.
  *
  * Return: The nvme command status if a response was received (see
- * &enum nvme_status_field) or -1 with errno set otherwise..
+ * &enum nvme_status_field) or negative error code otherwise.
  */
-int libnvme_mi_mi_xfer(libnvme_mi_ep_t ep,
+int libnvme_mi_mi_xfer(struct libnvme_mi_ep *ep,
 		       struct nvme_mi_mi_req_hdr *mi_req,
 		       size_t req_data_size,
 		       struct nvme_mi_mi_resp_hdr *mi_resp,
@@ -414,9 +439,9 @@ int libnvme_mi_mi_xfer(libnvme_mi_ep_t ep,
  * NVMe version information. See &struct nvme_mi_read_nvm_ss_info.
  *
  * Return: The nvme command status if a response was received (see
- * &enum nvme_status_field) or -1 with errno set otherwise..
+ * &enum nvme_status_field) or negative error code otherwise.
  */
-int libnvme_mi_mi_read_mi_data_subsys(libnvme_mi_ep_t ep,
+int libnvme_mi_mi_read_mi_data_subsys(struct libnvme_mi_ep *ep,
 				   struct nvme_mi_read_nvm_ss_info *s);
 
 /**
@@ -433,9 +458,9 @@ int libnvme_mi_mi_read_mi_data_subsys(libnvme_mi_ep_t ep,
  * See &struct nvme_mi_read_port_info.
  *
  * Return: The nvme command status if a response was received (see
- * &enum nvme_status_field) or -1 with errno set otherwise..
+ * &enum nvme_status_field) or negative error code otherwise.
  */
-int libnvme_mi_mi_read_mi_data_port(libnvme_mi_ep_t ep, __u8 portid,
+int libnvme_mi_mi_read_mi_data_port(struct libnvme_mi_ep *ep, __u8 portid,
 				 struct nvme_mi_read_port_info *p);
 
 /**
@@ -451,9 +476,9 @@ int libnvme_mi_mi_read_mi_data_port(libnvme_mi_ep_t ep, __u8 portid,
  * See &struct nvme_ctrl_list.
  *
  * Return: The nvme command status if a response was received (see
- * &enum nvme_status_field) or -1 with errno set otherwise..
+ * &enum nvme_status_field) or negative error code otherwise.
  */
-int libnvme_mi_mi_read_mi_data_ctrl_list(libnvme_mi_ep_t ep, __u8 start_ctrlid,
+int libnvme_mi_mi_read_mi_data_ctrl_list(struct libnvme_mi_ep *ep, __u8 start_ctrlid,
 				      struct nvme_ctrl_list *list);
 
 /**
@@ -469,9 +494,9 @@ int libnvme_mi_mi_read_mi_data_ctrl_list(libnvme_mi_ep_t ep, __u8 start_ctrlid,
  * See &struct nvme_mi_read_ctrl_info.
  *
  * Return: The nvme command status if a response was received (see
- * &enum nvme_status_field) or -1 with errno set otherwise..
+ * &enum nvme_status_field) or negative error code otherwise.
  */
-int libnvme_mi_mi_read_mi_data_ctrl(libnvme_mi_ep_t ep, __u16 ctrl_id,
+int libnvme_mi_mi_read_mi_data_ctrl(struct libnvme_mi_ep *ep, __u16 ctrl_id,
 				 struct nvme_mi_read_ctrl_info *ctrl);
 
 /**
@@ -488,10 +513,73 @@ int libnvme_mi_mi_read_mi_data_ctrl(libnvme_mi_ep_t ep, __u16 ctrl_id,
  * See &struct nvme_mi_nvm_ss_health_status.
  *
  * Return: The nvme command status if a response was received (see
- * &enum nvme_status_field) or -1 with errno set otherwise..
+ * &enum nvme_status_field) or negative error code otherwise.
  */
-int libnvme_mi_mi_subsystem_health_status_poll(libnvme_mi_ep_t ep, bool clear,
+int libnvme_mi_mi_subsystem_health_status_poll(struct libnvme_mi_ep *ep, bool clear,
 					    struct nvme_mi_nvm_ss_health_status *nshds);
+
+/**
+ * libnvme_mi_mi_pda_read() - Read the NVMe-MI Persistent Data Area (PDA)
+ * @ep: endpoint for MI communication
+ * @dformat: data format to use for @dofst and @dlen, see
+ *	     &enum nvme_mi_pda_dformat
+ * @dofst: starting offset, in units of @dformat, into the PDA to read
+ * @dlen: length, in units of @dformat, to read from the PDA starting at
+ *	  @dofst
+ * @data: buffer to receive the PDA contents
+ * @data_len: in: size of @data; out: length of data actually returned
+ *
+ * Performs an NVMe-MI PDA Read command. See the PDA Size (PDAS) and
+ * Supported Data Format (SDFORMAT) fields of &struct nvme_mi_port_smb for
+ * the size and supported @dformat values of the PDA on a given port.
+ *
+ * Return: The nvme command status if a response was received (see
+ * &enum nvme_status_field) or negative error code otherwise.
+ */
+int libnvme_mi_mi_pda_read(struct libnvme_mi_ep *ep,
+			enum nvme_mi_pda_dformat dformat,
+			__u32 dofst, __u32 dlen,
+			void *data, size_t *data_len);
+
+/**
+ * libnvme_mi_mi_pda_write() - Write the NVMe-MI Persistent Data Area (PDA)
+ * @ep: endpoint for MI communication
+ * @dformat: data format to use for @dofst and @dlen, see
+ *	     &enum nvme_mi_pda_dformat
+ * @dofst: starting offset, in units of @dformat, into the PDA to write
+ * @dlen: length, in units of @dformat, of @data to write to the PDA
+ *	  starting at @dofst
+ * @data: data to write to the PDA
+ * @data_len: length of @data
+ *
+ * Performs an NVMe-MI PDA Write command.
+ *
+ * Return: The nvme command status if a response was received (see
+ * &enum nvme_status_field) or negative error code otherwise.
+ */
+int libnvme_mi_mi_pda_write(struct libnvme_mi_ep *ep,
+			enum nvme_mi_pda_dformat dformat,
+			__u32 dofst, __u32 dlen,
+			void *data, size_t data_len);
+
+/**
+ * libnvme_mi_mi_pda_write_zeroes() - Clear a range of the NVMe-MI Persistent
+ * Data Area (PDA) to 0h
+ * @ep: endpoint for MI communication
+ * @dformat: data format to use for @dofst and @dlen, see
+ *	     &enum nvme_mi_pda_dformat
+ * @dofst: starting offset, in units of @dformat, into the PDA to clear
+ * @dlen: length, in units of @dformat, of the PDA to clear starting at
+ *	  @dofst
+ *
+ * Performs an NVMe-MI PDA Write Zeroes command.
+ *
+ * Return: The nvme command status if a response was received (see
+ * &enum nvme_status_field) or negative error code otherwise.
+ */
+int libnvme_mi_mi_pda_write_zeroes(struct libnvme_mi_ep *ep,
+			enum nvme_mi_pda_dformat dformat,
+			__u32 dofst, __u32 dlen);
 
 /**
  * libnvme_mi_mi_config_get - query a configuration parameter
@@ -511,9 +599,9 @@ int libnvme_mi_mi_subsystem_health_status_poll(libnvme_mi_ep_t ep, bool clear,
  * See &enum nvme_mi_config_id for identifiers.
  *
  * Return: The nvme command status if a response was received (see
- * &enum nvme_status_field) or -1 with errno set otherwise..
+ * &enum nvme_status_field) or negative error code otherwise.
  */
-int libnvme_mi_mi_config_get(libnvme_mi_ep_t ep, __u32 dw0, __u32 dw1,
+int libnvme_mi_mi_config_get(struct libnvme_mi_ep *ep, __u32 dw0, __u32 dw1,
 			  __u32 *nmresp);
 
 /**
@@ -529,9 +617,9 @@ int libnvme_mi_mi_config_get(libnvme_mi_ep_t ep, __u32 dw0, __u32 dw1,
  * See &enum nvme_mi_config_id for identifiers.
  *
  * Return: The nvme command status if a response was received (see
- * &enum nvme_status_field) or -1 with errno set otherwise..
+ * &enum nvme_status_field) or negative error code otherwise.
  */
-int libnvme_mi_mi_config_set(libnvme_mi_ep_t ep, __u32 dw0, __u32 dw1);
+int libnvme_mi_mi_config_set(struct libnvme_mi_ep *ep, __u32 dw0, __u32 dw1);
 
 /**
  * libnvme_mi_mi_config_get_smbus_freq - get configuration: SMBus port frequency
@@ -544,9 +632,9 @@ int libnvme_mi_mi_config_set(libnvme_mi_ep_t ep, __u32 dw0, __u32 dw1);
  * frequency
  *
  * Return: The nvme command status if a response was received (see
- * &enum nvme_status_field) or -1 with errno set otherwise..
+ * &enum nvme_status_field) or negative error code otherwise.
  */
-static inline int libnvme_mi_mi_config_get_smbus_freq(libnvme_mi_ep_t ep, __u8 port,
+static inline int libnvme_mi_mi_config_get_smbus_freq(struct libnvme_mi_ep *ep, __u8 port,
 						   enum nvme_mi_config_smbus_freq *freq)
 {
 	__u32 tmp, dw0;
@@ -573,9 +661,9 @@ static inline int libnvme_mi_mi_config_get_smbus_freq(libnvme_mi_ep_t ep, __u8 p
  * for the port.
  *
  * Return: The nvme command status if a response was received (see
- * &enum nvme_status_field) or -1 with errno set otherwise..
+ * &enum nvme_status_field) or negative error code otherwise.
  */
-static inline int libnvme_mi_mi_config_set_smbus_freq(libnvme_mi_ep_t ep, __u8 port,
+static inline int libnvme_mi_mi_config_set_smbus_freq(struct libnvme_mi_ep *ep, __u8 port,
 						   enum nvme_mi_config_smbus_freq freq)
 {
 	__u32 dw0 = port << 24 |
@@ -586,22 +674,22 @@ static inline int libnvme_mi_mi_config_set_smbus_freq(libnvme_mi_ep_t ep, __u8 p
 }
 
 /**
- * libnvme_mi_mi_config_set_health_status_change - clear CCS bits in health status
+ * libnvme_mi_mi_config_set_health_status_change - clear CCSF bits in health status
  * @ep: endpoint for MI communication
  * @mask: bitmask to clear
  *
  * Performs a MI Configuration Set, to update the current health status poll
- * values of the Composite Controller Status bits. Bits set in @mask will
+ * values of the Composite Controller Status Flags. Bits set in @mask will
  * be cleared from future health status poll data, and may be re-triggered by
  * a future health change event.
  *
- * See &libnvme_mi_mi_subsystem_health_status_poll(), &enum nvme_mi_ccs for
+ * See &libnvme_mi_mi_subsystem_health_status_poll(), &enum nvme_mi_ccsf for
  * values in @mask.
  *
  * Return: The nvme command status if a response was received (see
- * &enum nvme_status_field) or -1 with errno set otherwise..
+ * &enum nvme_status_field) or negative error code otherwise.
  */
-static inline int libnvme_mi_mi_config_set_health_status_change(libnvme_mi_ep_t ep,
+static inline int libnvme_mi_mi_config_set_health_status_change(struct libnvme_mi_ep *ep,
 							     __u32 mask)
 {
 	return libnvme_mi_mi_config_set(ep, NVME_MI_CONFIG_HEALTH_STATUS_CHANGE,
@@ -624,9 +712,9 @@ static inline int libnvme_mi_mi_config_set_health_status_change(libnvme_mi_ep_t 
  * may not accept MCTP messages larger than the configured MTU.
  *
  * Return: The nvme command status if a response was received (see
- * &enum nvme_status_field) or -1 with errno set otherwise..
+ * &enum nvme_status_field) or negative error code otherwise.
  */
-static inline int libnvme_mi_mi_config_get_mctp_mtu(libnvme_mi_ep_t ep, __u8 port,
+static inline int libnvme_mi_mi_config_get_mctp_mtu(struct libnvme_mi_ep *ep, __u8 port,
 						 __u16 *mtu)
 {
 	__u32 tmp, dw0;
@@ -655,9 +743,9 @@ static inline int libnvme_mi_mi_config_get_mctp_mtu(libnvme_mi_ep_t ep, __u8 por
  * interface(s) to match.
  *
  * Return: The nvme command status if a response was received (see
- * &enum nvme_status_field) or -1 with errno set otherwise..
+ * &enum nvme_status_field) or negative error code otherwise.
  */
-static inline int libnvme_mi_mi_config_set_mctp_mtu(libnvme_mi_ep_t ep, __u8 port,
+static inline int libnvme_mi_mi_config_set_mctp_mtu(struct libnvme_mi_ep *ep, __u8 port,
 						 __u16 mtu)
 {
 	__u32 dw0 = port << 24 | NVME_MI_CONFIG_MCTP_MTU;
@@ -678,9 +766,9 @@ static inline int libnvme_mi_mi_config_set_mctp_mtu(libnvme_mi_ep_t ep, __u8 por
  * Events.  On success, populates @aeelver and the @list with current info,
  *
  * Return: The nvme command status if a response was received (see
- * &enum nvme_status_field) or -1 with errno set otherwise..
+ * &enum nvme_status_field) or negative error code otherwise.
  */
-int libnvme_mi_mi_config_get_async_event(libnvme_mi_ep_t ep,
+int libnvme_mi_mi_config_get_async_event(struct libnvme_mi_ep *ep,
 				__u8 *aeelver,
 				struct nvme_mi_aem_supported_list *list,
 				size_t *list_num_bytes);
@@ -709,9 +797,9 @@ int libnvme_mi_mi_config_get_async_event(libnvme_mi_ep_t ep,
  * ACK versus Sync conditions
  *
  * Return: The nvme command status if a response was received (see
- * &enum nvme_status_field) or -1 with errno set otherwise..
+ * &enum nvme_status_field) or negative error code otherwise.
  */
-int libnvme_mi_mi_config_set_async_event(libnvme_mi_ep_t ep,
+int libnvme_mi_mi_config_set_async_event(struct libnvme_mi_ep *ep,
 				bool envfa,
 				bool empfa,
 				bool encfa,
@@ -722,7 +810,7 @@ int libnvme_mi_mi_config_set_async_event(libnvme_mi_ep_t ep,
 				struct nvme_mi_aem_occ_list_hdr *occ_list,
 				size_t *occ_list_size);
 
-static inline int libnvme_mi_aem_ack(libnvme_mi_ep_t ep,
+static inline int libnvme_mi_aem_ack(struct libnvme_mi_ep *ep,
 				struct nvme_mi_aem_occ_list_hdr *occ_list,
 				size_t *occ_list_size)
 {
@@ -766,7 +854,7 @@ static inline int libnvme_mi_aem_ack(libnvme_mi_ep_t ep,
  * See: &struct nvme_mi_admin_req_hdr and &struct nvme_mi_admin_resp_hdr.
  *
  * Return: The nvme command status if a response was received (see
- * &enum nvme_status_field) or -1 with errno set otherwise..
+ * &enum nvme_status_field) or negative error code otherwise.
  */
 int libnvme_mi_admin_xfer(struct libnvme_transport_handle *hdl,
 		       struct nvme_mi_admin_req_hdr *admin_req,
@@ -785,12 +873,12 @@ int libnvme_mi_admin_xfer(struct libnvme_transport_handle *hdl,
  * Perform a Control Primitive command, using the opcode specified in @opcode
  * Stores the result from the CPSR field in @result_cpsr if set.
  *
- * Return: 0 on success, non-zero on failure
+ * Return: 0 on success, negative error code otherwise.
  *
  * See: &enum nvme_mi_control_opcode
  *
  */
-int libnvme_mi_control(libnvme_mi_ep_t ep, __u8 opcode,
+int libnvme_mi_control(struct libnvme_mi_ep *ep, __u8 opcode,
 		    __u16 cpsp, __u16 *result_cpsr);
 
 /**
@@ -840,7 +928,7 @@ struct libnvme_mi_event {
  *
  * Return: Pointer no next libnvme_mi_event or NULL if this is the last one
  */
-struct libnvme_mi_event *libnvme_mi_aem_get_next_event(libnvme_mi_ep_t ep);
+struct libnvme_mi_event *libnvme_mi_aem_get_next_event(struct libnvme_mi_ep *ep);
 
 struct libnvme_mi_aem_enabled_map {
 	bool enabled[256];
@@ -867,7 +955,7 @@ struct libnvme_mi_aem_config {
 	 *  the callback to parse event data.
 	 */
 	enum libnvme_mi_aem_handler_next_action (*aem_handler)(
-							libnvme_mi_ep_t ep,
+							struct libnvme_mi_ep *ep,
 							size_t num_events,
 							void *userdata);
 
@@ -889,7 +977,7 @@ struct libnvme_mi_aem_config {
  *
  * Return: The fd value or -1 if error
  */
-int libnvme_mi_aem_get_fd(libnvme_mi_ep_t ep);
+int libnvme_mi_aem_get_fd(struct libnvme_mi_ep *ep);
 
 /**
  * libnvme_mi_aem_enable() - Enable AE on the provided endpoint
@@ -908,9 +996,9 @@ int libnvme_mi_aem_get_fd(libnvme_mi_ep_t ep);
  * At this point the application can call libnvme_mi_aem_get_next_event() to get information for
  * each triggered event.
  *
- * Return: 0 is a success, nonzero is an error and errno may be read for further details
+ * Return: 0 on success, negative error code otherwise.
  */
-int libnvme_mi_aem_enable(libnvme_mi_ep_t ep,
+int libnvme_mi_aem_enable(struct libnvme_mi_ep *ep,
 	struct libnvme_mi_aem_config *config,
 	void *userdata);
 
@@ -920,18 +1008,18 @@ int libnvme_mi_aem_enable(libnvme_mi_ep_t ep,
  * @ep: Endpoint to check enabled status
  * @enabled: libnvme_mi_aem_enabled_map indexed by AE event ID of enabled state
  *
- * Return: 0 is a success, nonzero is an error and errno may be read for further details
+ * Return: 0 on success, negative error code otherwise.
  */
-int libnvme_mi_aem_get_enabled(libnvme_mi_ep_t ep,
+int libnvme_mi_aem_get_enabled(struct libnvme_mi_ep *ep,
 	struct libnvme_mi_aem_enabled_map *enabled);
 
 /**
  * libnvme_mi_aem_disable() - Disable AE on the provided endpoint
  * @ep: Endpoint to disable AEs
  *
- * Return: 0 is a success, nonzero is an error and errno may be read for further details
+ * Return: 0 on success, negative error code otherwise.
  */
-int libnvme_mi_aem_disable(libnvme_mi_ep_t ep);
+int libnvme_mi_aem_disable(struct libnvme_mi_ep *ep);
 
 /**
  * libnvme_mi_aem_process() - Process AEM on the provided endpoint
@@ -944,9 +1032,9 @@ int libnvme_mi_aem_disable(libnvme_mi_ep_t ep);
  * application can call libnvme_mi_aem_get_next_event() from within this callback to get
  * aem event data.  The callback function should return NVME_MI_AEM_HNA_ACK for normal operation.
  *
- * Return: 0 is a success, nonzero is an error and errno may be read for further details
+ * Return: 0 on success, negative error code otherwise.
  */
-int libnvme_mi_aem_process(libnvme_mi_ep_t ep, void *userdata);
+int libnvme_mi_aem_process(struct libnvme_mi_ep *ep, void *userdata);
 
 /**
  * libnvme_mi_submit_entry() - Weak hook called before an MI message is sent.

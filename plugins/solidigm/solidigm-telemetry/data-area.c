@@ -5,10 +5,7 @@
  * Author: leonardo.da.cunha@solidigm.com
  */
 
-#include <ctype.h>
-
 #include "cod.h"
-#include "common.h"
 #include "config.h"
 #include "data-area.h"
 #include "header.h"
@@ -22,36 +19,6 @@
 #define MAX_WARNING_SIZE 1024
 #define MAX_ARRAY_RANK 16
 #define NLOG_HEADER_ID 101
-
-static bool uint8_array_try_string(const struct telemetry_log *tl,
-				  uint64_t offset_bit, uint32_t size_bit,
-				  uint32_t array_size,
-				  struct json_object **str_obj)
-{
-	uint32_t offset_byte = (uint32_t)offset_bit / NUM_BITS_IN_BYTE;
-
-	if (size_bit != 8) {
-		*str_obj = json_object_new_string(
-			"Error: Only UINT8 arrays can be converted to strings");
-		return false;
-	}
-
-	if (offset_byte > (tl->log_size - array_size)) {
-		char err_msg[MAX_WARNING_SIZE];
-
-		snprintf(err_msg, MAX_WARNING_SIZE,
-			"String offset greater than binary size (%u > %zu).",
-			offset_byte, tl->log_size);
-		*str_obj = json_object_new_string(err_msg);
-		return false;
-	}
-
-	// Get direct pointer to the UINT8 array in the telemetry log
-	const uint8_t *data_ptr = (const uint8_t *)tl->log + offset_byte;
-
-	// Use the generic converter function
-	return sldm_uint8_array_to_string(data_ptr, array_size, str_obj);
-}
 
 static void reverse_string(char *buff, size_t len)
 {
@@ -118,8 +85,8 @@ static bool telemetry_log_get_value(const struct telemetry_log *tl,
 	if (size_bit < 64)
 		val &= (1ULL << size_bit) - 1;
 	if (is_signed) {
-		if (val >> (size_bit - 1))
-			val |= (0ULL - 1) << size_bit;
+		if (size_bit < 64 && val >> (size_bit - 1))
+			val |= ~((1ULL << size_bit) - 1);
 		*val_obj = json_object_new_int64(val);
 	} else {
 		*val_obj = json_object_new_uint64(val);
@@ -157,19 +124,32 @@ int sldm_telemetry_structure_parse(const struct telemetry_log *tl,
 	}
 
 	name = json_object_get_string(obj);
+	if (!name) {
+		SOLIDIGM_LOG_WARNING(
+			"Warning: Structure definition property 'name' is NULL: %s",
+				     json_object_to_json_string(struct_def));
+		return  -1;
+	}
 
 	if (metadata) {
 		json_object_get(obj);
 		json_object_object_add(metadata, "objName", obj);
 	}
 
-	if (json_object_object_get_ex(struct_def, "type", &obj))
+	if (json_object_object_get_ex(struct_def, "type", &obj)) {
 		type = json_object_get_string(obj);
+		if (!type) {
+			SOLIDIGM_LOG_WARNING(
+				"Warning: Structure '%s' property 'type' is not a string.",
+				name);
+			return -1;
+		}
+	}
 
 	if (!json_object_object_get_ex(struct_def, "offsetBit", &obj)) {
 		SOLIDIGM_LOG_WARNING(
-		    "Warning: Structure definition missing property 'offsetBit': %s",
-		    json_object_to_json_string(struct_def));
+			    "Warning: Structure '%s' missing property 'offsetBit'.",
+			    name);
 		return  -1;
 	}
 
@@ -177,8 +157,8 @@ int sldm_telemetry_structure_parse(const struct telemetry_log *tl,
 
 	if (!json_object_object_get_ex(struct_def, "sizeBit", &obj)) {
 		SOLIDIGM_LOG_WARNING(
-		    "Warning: Structure definition missing property 'sizeBit': %s",
-		    json_object_to_json_string(struct_def));
+			    "Warning: Structure '%s' missing property 'sizeBit'.",
+			    name);
 		return  -1;
 	}
 
@@ -189,27 +169,28 @@ int sldm_telemetry_structure_parse(const struct telemetry_log *tl,
 
 	has_member_list = json_object_object_get_ex(struct_def,
 						    "memberList",
-						    &obj_memberList);
+						    &obj_memberList) &&
+			  json_object_array_length(obj_memberList) > 0;
 
 	if (!json_object_object_get_ex(struct_def, "arraySize",
 				       &obj_arraySizeArray)) {
 		SOLIDIGM_LOG_WARNING(
-		    "Warning: Structure definition missing property 'arraySize': %s",
-		    json_object_to_json_string(struct_def));
+			    "Warning: Structure '%s' missing property 'arraySize'.",
+			    name);
 		return  -1;
 	}
 
 	array_rank = json_object_array_length(obj_arraySizeArray);
 	if (!array_rank) {
 		SOLIDIGM_LOG_WARNING(
-		    "Warning: Structure property 'arraySize' don't support flexible array: %s",
-		    json_object_to_json_string(struct_def));
+			    "Warning: '%s' arraySize does not support flexible arrays.",
+			    name);
 		return -1;
 	}
 	if (array_rank > MAX_ARRAY_RANK) {
 		SOLIDIGM_LOG_WARNING(
-		    "Warning: Structure property 'arraySize' don't support more than %d dimensions: %s",
-		    MAX_ARRAY_RANK, json_object_to_json_string(struct_def));
+		    "Warning: Structure '%s' 'arraySize' exceeds maximum %d dimensions.",
+		    name, MAX_ARRAY_RANK);
 		return -1;
 	}
 
@@ -240,12 +221,17 @@ int sldm_telemetry_structure_parse(const struct telemetry_log *tl,
 
 	if (array_rank > 1) {
 		uint32_t linear_pos_per_index = 1;
+		uint32_t outer_size = array_size_dimension[array_rank - 1];
 		uint32_t prev_index_offset_bit = 0;
 		struct json_object *dimension_output;
 		struct json_object *inner_dim_array;
 
-		/* Stride = product of all inner dimensions (1..rank-1) */
-		for (unsigned int i = 1; i < array_rank; i++)
+		/*
+		 * arraySize convention: the last element is the outermost
+		 * (major) dimension. Stride = product of all inner dims
+		 * [0..rank-2].
+		 */
+		for (unsigned int i = 0; i < array_rank - 1; i++)
 			linear_pos_per_index *= array_size_dimension[i];
 
 		/*
@@ -260,11 +246,11 @@ int sldm_telemetry_structure_parse(const struct telemetry_log *tl,
 		}
 
 		/*
-		 * Build a copy of arraySize without the first dimension
-		 * so recursive calls see only the inner dimensions.
+		 * Build a copy of arraySize without the last (outermost)
+		 * dimension so recursive calls see only the inner dimensions.
 		 */
 		inner_dim_array = json_create_array();
-		for (size_t i = 1; i < array_rank; i++) {
+		for (size_t i = 0; i < array_rank - 1; i++) {
 			struct json_object *dim =
 				json_object_array_get_idx(
 					obj_arraySizeArray, i);
@@ -276,15 +262,16 @@ int sldm_telemetry_structure_parse(const struct telemetry_log *tl,
 		json_object_object_add(struct_def, "arraySize",
 				      inner_dim_array);
 
-		for (unsigned int i = 0 ; i < array_size_dimension[0]; i++) {
+		for (unsigned int i = 0 ; i < outer_size; i++) {
 			struct json_object *sub_array = json_create_array();
 			uint64_t offset;
 
 			offset = parent_offset_bit + prev_index_offset_bit;
 
 			json_object_array_add(dimension_output, sub_array);
-			sldm_telemetry_structure_parse(tl, struct_def,
-						       offset, sub_array, NULL);
+			if (sldm_telemetry_structure_parse(tl, struct_def,
+						       offset, sub_array, NULL))
+				break;
 			prev_index_offset_bit += linear_pos_per_index * size_bit;
 		}
 
@@ -298,23 +285,6 @@ int sldm_telemetry_structure_parse(const struct telemetry_log *tl,
 	sub_output = output;
 
 	if (array_size_dimension[0] > 1 || force_array) {
-		// Check if this is a UINT8 array that should be treated as a string
-		if (json_object_is_type(output, json_type_object) &&
-		    (strcmp(type, "UINT8") == 0 || strcmp(type, "uint8_t") == 0) && !force_array) {
-			// Handle UINT8 arrays as strings
-			struct json_object *str_obj = NULL;
-			uint64_t offset = parent_offset_bit + offset_bit;
-
-			if (uint8_array_try_string(tl, offset, size_bit,
-						  array_size_dimension[0], &str_obj)) {
-				json_object_object_add(output, name, str_obj);
-				return 0;
-			}
-
-			// If string conversion failed, fall back to normal array processing
-			json_object_put(str_obj);
-		}
-
 		/*
 		 * When output is already an array (from an outer
 		 * multi-dim call), fill it directly to avoid extra wrap.
@@ -338,7 +308,8 @@ int sldm_telemetry_structure_parse(const struct telemetry_log *tl,
 
 			offset = parent_offset_bit + offset_bit + linear_array_pos_bit;
 			if (telemetry_log_get_value(tl, offset, size_bit, is_signed, &val_obj)) {
-				if (array_size_dimension[0] > 1 || force_array)
+				if (json_object_is_type(sub_output,
+							json_type_array))
 					json_object_array_put_idx(sub_output, j, val_obj);
 				else
 					json_object_object_add(sub_output, name, val_obj);
@@ -353,19 +324,19 @@ int sldm_telemetry_structure_parse(const struct telemetry_log *tl,
 			struct json_object *sub_sub_output = json_object_new_object();
 			int num_members;
 
-			if (array_size_dimension[0] > 1 || force_array)
+			if (json_object_is_type(sub_output, json_type_array))
 				json_object_array_put_idx(sub_output, j, sub_sub_output);
 			else
 				json_object_add_value_object(sub_output, name, sub_sub_output);
-
 			num_members = json_object_array_length(obj_memberList);
 			for (int k = 0; k < num_members; k++) {
 				struct json_object *member = json_object_array_get_idx(obj_memberList, k);
 				uint64_t offset;
 
 				offset = parent_offset_bit + offset_bit + linear_array_pos_bit;
-				sldm_telemetry_structure_parse(tl, member, offset,
-								  sub_sub_output, NULL);
+				if (sldm_telemetry_structure_parse(tl, member, offset,
+								  sub_sub_output, NULL))
+					break;
 			}
 		}
 		linear_array_pos_bit += size_bit;
@@ -378,7 +349,7 @@ static int telemetry_log_data_area_get_offset(const struct telemetry_log *tl,
 					      uint32_t *offset, uint32_t *size)
 {
 	uint32_t offset_blocks = 1;
-	uint32_t last_block = tl->log->dalb1;
+	uint32_t last_block;
 	uint32_t last;
 
 	switch (da) {
@@ -405,7 +376,9 @@ static int telemetry_log_data_area_get_offset(const struct telemetry_log *tl,
 	*offset = offset_blocks * NVME_LOG_TELEM_BLOCK_SIZE;
 	last = (last_block + 1) * NVME_LOG_TELEM_BLOCK_SIZE;
 	*size = last - *offset;
-	if ((*offset > tl->log_size) || (last > tl->log_size) || (last <= *offset)) {
+	if (last < *offset)
+		return -1; /* DA is absent or empty, skip silently */
+	if ((*offset > tl->log_size) || (last > tl->log_size)) {
 		SOLIDIGM_LOG_WARNING("Warning: Data Area %d don't fit this Telemetry log.", da);
 		return -1;
 	}
@@ -560,9 +533,10 @@ static void telemetry_log_data_area_toc_parse(const struct telemetry_log *tl,
 		}
 		object_file_offset = ((uint64_t)da_offset) + obj_offset + header_offset;
 		if (has_struct) {
-			sldm_telemetry_structure_parse(tl, structure_definition,
-						NUM_BITS_IN_BYTE * object_file_offset,
-						parsed_struct, toc_item);
+			if (sldm_telemetry_structure_parse(tl, structure_definition,
+							NUM_BITS_IN_BYTE * object_file_offset,
+							parsed_struct, toc_item))
+				continue;
 		}
 		// NLOGs have different parser from other Telemetry objects
 		if (nlog_name) {
@@ -654,7 +628,8 @@ int solidigm_telemetry_log_data_areas_parse(struct telemetry_log *tl,
 	struct json_object *toc_array = NULL;
 
 	solidigm_telemetry_log_da1_check_ocp(tl);
-	sldm_telemetry_da2_check_skhT(tl);
+	sldm_telemetry_check_for_skhT(tl);
+
 	// if TELEMETRY_CONFIG_META available copy it to the output for better
 	// context in the output data
 	if (tl->configuration) {
@@ -662,10 +637,12 @@ int solidigm_telemetry_log_data_areas_parse(struct telemetry_log *tl,
 
 		if (json_object_object_get_ex(tl->configuration,
 					     "TELEMETRY_CONFIG_META",
-					      &config_meta))
+					      &config_meta)) {
+			json_object_get(config_meta);
 			json_object_object_add(tl->root,
 					       "TELEMETRY_CONFIG_META",
 					       config_meta);
+		}
 	}
 	solidigm_telemetry_log_header_parse(tl);
 	solidigm_telemetry_log_cod_parse(tl);
@@ -675,7 +652,7 @@ int solidigm_telemetry_log_data_areas_parse(struct telemetry_log *tl,
 		if (tl->is_ocp)
 			first_da = NVME_TELEMETRY_DA_3;
 
-		if (tl->is_skhT) {
+		if (tl->skhT_offset) {
 			if (last_da >= NVME_TELEMETRY_DA_2)
 				sldm_telemetry_skhT_parse(tl);
 			if (last_da >= NVME_TELEMETRY_DA_3)

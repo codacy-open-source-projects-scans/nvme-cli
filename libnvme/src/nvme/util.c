@@ -16,19 +16,25 @@
 #include <string.h>
 #include <unistd.h>
 
-#if defined(HAVE_NETDB) || defined(CONFIG_FABRICS)
+#ifdef CONFIG_FABRICS
 #include <ifaddrs.h>
 
-#include <arpa/inet.h>
-#include <netdb.h>
+#include <shared/net-util.h>
 #endif
 
 #include <sys/param.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 
+#if NVME_HAVE_BCRYPT
+#include <windows.h>
+#include <bcrypt.h>
+#endif
+
 #include <ccan/endian/endian.h>
-#include <ccan/minmax/minmax.h>
+
+#include <shared/compiler-attributes-util.h>
+#include <shared/fs-util.h>
 
 #include <libnvme.h>
 
@@ -36,11 +42,21 @@
 #include "cleanup-linux.h"
 #include "private.h"
 #include "util.h"
-#include "compiler-attributes.h"
 
 /* The bionic libc implementation doesn't define LINE_MAX */
 #ifndef LINE_MAX
 #define LINE_MAX 2048
+#endif
+
+/* Some error codes aren't defined on all platforms. Use best equivalents. */
+#ifndef EREMOTEIO
+#define EREMOTEIO ENXIO
+#endif
+#ifndef EDQUOT
+#define EDQUOT    ENOSPC
+#endif
+#ifndef ERESTART
+#define ERESTART  EAGAIN
 #endif
 
 /* Source Code Control System, query version of binary with 'what' */
@@ -181,7 +197,7 @@ static inline __u8 nvme_fabrics_status_to_errno(__u16 status)
 	return EIO;
 }
 
-__public __u8 libnvme_status_to_errno(int status, bool fabrics)
+__shr_public __u8 libnvme_status_to_errno(int status, bool fabrics)
 {
 	__u16 sc;
 
@@ -244,6 +260,7 @@ static const char * const generic_status[] = {
 	[NVME_SC_HOST_DISPERSED_NS_NOT_ENABLED]	  = "The command is prohibited while the Host Disperesed Namespace Support (HDISNS) field is not set to 1h in the Host Behavior Support feature",
 	[NVME_SC_HOST_ID_NOT_INITIALIZED]	  = "Host Identifier Not Initialized",
 	[NVME_SC_INCORRECT_KEY]			  = "The command was aborted due to the key associated with the KEYTAG field being incorrect",
+	[NVME_SC_FAILED_TO_RESTORE_CONFIG]	  = "Failed to Restore Configuration: The command was aborted due to the command failing to restore configuration",
 	[NVME_SC_LBA_RANGE]			  = "LBA Out of Range: The command references an LBA that exceeds the size of the namespace",
 	[NVME_SC_CAP_EXCEEDED]			  = "Capacity Exceeded: Execution of the command has caused the capacity of the namespace to be exceeded",
 	[NVME_SC_NS_NOT_READY]			  = "Namespace Not Ready: The namespace is not ready to be accessed",
@@ -380,7 +397,7 @@ static const char *arg_str(const char * const *strings,
 	return "unrecognized";
 }
 
-__public const char *libnvme_status_to_string(int status, bool fabrics)
+__shr_public const char *libnvme_status_to_string(int status, bool fabrics)
 {
 	const char *s = "Unknown status";
 	__u16 sc, sct;
@@ -419,7 +436,6 @@ __public const char *libnvme_status_to_string(int status, bool fabrics)
 	return s;
 }
 
-
 static const char * const libnvme_status[] = {
 	[ENVME_CONNECT_RESOLVE] = "failed to resolve host",
 	[ENVME_CONNECT_ADDRFAM] = "unrecognized address family",
@@ -441,282 +457,56 @@ static const char * const libnvme_status[] = {
 	[ENVME_CONNECT_CONNREFUSED] = "connection refused",
 	[ENVME_CONNECT_ADDRNOTAVAIL] = "cannot assign requested address",
 	[ENVME_CONNECT_IGNORED] = "connection ignored",
-	[ENVME_CONNECT_NOKEY] = "pre-shared TLS key is missing"
+	[ENVME_CONNECT_NOKEY] = "TLS PSK or KX-HMAC-CHAP secret not available"
 };
 
-__public const char *libnvme_errno_to_string(int status)
+__shr_public const char *libnvme_errno_to_string(int status)
 {
 	const char *s = ARGSTR(libnvme_status, status);
 
 	return s;
 }
 
-__public const char *libnvme_strerror(int errnum)
+__shr_public const char *libnvme_strerror(int errnum)
 {
 	if (errnum >= ENVME_CONNECT_RESOLVE)
 		return libnvme_errno_to_string(errnum);
 	return strerror(errnum);
 }
 
-#ifdef HAVE_NETDB
-static inline DEFINE_CLEANUP_FUNC(cleanup_addrinfo, struct addrinfo *,
-		freeaddrinfo)
-#define __cleanup_addrinfo __cleanup(cleanup_addrinfo)
+static const char *const mi_status[] = {
+	[NVME_MI_RESP_SUCCESS]               = "Success",
+	[NVME_MI_RESP_MPR]                   = "More Processing Required: The command message is in progress and requires more time to complete processing",
+	[NVME_MI_RESP_INTERNAL_ERR]          = "Internal Error: The request message could not be processed due to a vendor-specific error",
+	[NVME_MI_RESP_INVALID_OPCODE]        = "Invalid Command Opcode",
+	[NVME_MI_RESP_INVALID_PARAM]         = "Invalid Parameter",
+	[NVME_MI_RESP_INVALID_CMD_SIZE]      = "Invalid Command Size: The size of the message body of the request was different than expected",
+	[NVME_MI_RESP_INVALID_INPUT_SIZE]    = "Invalid Command Input Data Size: The command requires data and contains too much or too little data",
+	[NVME_MI_RESP_ACCESS_DENIED]         = "Access Denied. Processing prohibited due to a vendor-specific mechanism of the Command and Feature lockdown function",
+	[NVME_MI_RESP_VPD_UPDATES_EXCEEDED]  = "VPD Updates Exceeded",
+	[NVME_MI_RESP_PCIE_INACCESSIBLE]     = "PCIe Inaccessible. The PCIe functionality is not available at this time",
+	[NVME_MI_RESP_MEB_SANITIZED]         = "Management Endpoint Buffer Cleared Due to Sanitize",
+	[NVME_MI_RESP_ENC_SERV_FAILURE]      = "Enclosure Services Failure",
+	[NVME_MI_RESP_ENC_SERV_XFER_FAILURE] = "Enclosure Services Transfer Failure: Communication with the Enclosure Services Process has failed",
+	[NVME_MI_RESP_ENC_FAILURE]           = "An unrecoverable enclosure failure has been detected by the Enclosure Services Process",
+	[NVME_MI_RESP_ENC_XFER_REFUSED]      = "Enclosure Services Transfer Refused: The NVM Subsystem or Enclosure Services Process indicated an error or an invalid format in communication",
+	[NVME_MI_RESP_ENC_FUNC_UNSUP]        = "Unsupported Enclosure Function: An SES Send command has been attempted to a simple Subenclosure",
+	[NVME_MI_RESP_ENC_SERV_UNAVAIL]      = "Enclosure Services Unavailable: The NVM Subsystem or Enclosure Services Process has encountered an error but may become available again",
+	[NVME_MI_RESP_ENC_DEGRADED]          = "Enclosure Degraded: A noncritical failure has been detected by the Enclosure Services Process",
+	[NVME_MI_RESP_SANITIZE_IN_PROGRESS]  = "Sanitize In Progress: The requested command is prohibited while a sanitize operation is in progress",
+};
 
-int hostname2traddr(struct libnvme_global_ctx *ctx, const char *traddr,
-		    char **hostname)
+__shr_public const char *libnvme_mi_status_to_string(int status)
 {
-	__cleanup_addrinfo struct addrinfo *host_info = NULL;
-	struct addrinfo hints = {.ai_family = AF_UNSPEC};
-	char addrstr[NVMF_TRADDR_SIZE];
-	const char *p;
-	int ret;
+	const char *s = "Unknown status";
 
-	ret = getaddrinfo(traddr, NULL, &hints, &host_info);
-	if (ret) {
-		libnvme_msg(ctx, LIBNVME_LOG_ERR, "failed to resolve host %s info\n",
-			 traddr);
-		return -errno;
-	}
+	if (status < ARRAY_SIZE(mi_status) && mi_status[status])
+		s = mi_status[status];
 
-	switch (host_info->ai_family) {
-	case AF_INET:
-		p = inet_ntop(host_info->ai_family,
-			&(((struct sockaddr_in *)host_info->ai_addr)->sin_addr),
-			addrstr, NVMF_TRADDR_SIZE);
-		break;
-	case AF_INET6:
-		p = inet_ntop(host_info->ai_family,
-			&(((struct sockaddr_in6 *)host_info->ai_addr)->sin6_addr),
-			addrstr, NVMF_TRADDR_SIZE);
-		break;
-	default:
-		libnvme_msg(ctx, LIBNVME_LOG_ERR, "unrecognized address family (%d) %s\n",
-			 host_info->ai_family, traddr);
-		return -EINVAL;
-	}
-
-	if (!p) {
-		libnvme_msg(ctx, LIBNVME_LOG_ERR, "failed to get traddr for %s\n",
-			 traddr);
-		return -EIO;
-	}
-	*hostname = strdup(addrstr);
-	if (!*hostname)
-		return -ENOMEM;
-
-	return 0;
-}
-#else /* HAVE_NETDB */
-int hostname2traddr(struct libnvme_global_ctx *ctx, const char *traddr, char **hostname)
-{
-	libnvme_msg(ctx, LIBNVME_LOG_ERR, "No support for hostname IP address resolution; " \
-		"recompile with libnss support.\n");
-
-	return -ENOTSUP;
-}
-#endif /* HAVE_NETDB */
-
-char *startswith(const char *s, const char *prefix)
-{
-	size_t l;
-
-	l = strlen(prefix);
-	if (!strncmp(s, prefix, l))
-		return (char *)s + l;
-
-	return NULL;
+	return s;
 }
 
-char *kv_strip(char *kv)
-{
-	char *s;
-
-	kv[strcspn(kv, "\n\r")] = '\0';
-
-	/* Remove leading newline and spaces */
-	kv += strspn(kv, " \t\n\r");
-
-	/* Skip comments and empty lines */
-	if (*kv == '#' || *kv == '\0') {
-		*kv = '\0';
-		return kv;
-	}
-
-	/* Remove trailing newline chars */
-	kv[strcspn(kv, "\n\r")] = '\0';
-
-	/* Delete trailing comments (including spaces/tabs that precede the #)*/
-	s = &kv[strcspn(kv, "#")];
-	*s-- = '\0';
-	while ((s >= kv) && ((*s == ' ') || (*s == '\t'))) {
-		*s-- = '\0';
-	}
-
-	return kv;
-}
-
-char *kv_keymatch(const char *kv, const char *key)
-{
-	char *value;
-
-	value = startswith(kv, key);
-	if (value) {
-		/* Make sure key is a whole word.  I.e. it should be
-		 * followed by spaces, tabs, or a equal sign. Skip
-		 * leading spaces, tabs, and equal sign (=) */
-		switch (*value) {
-		case ' ':
-		case '\t':
-		case '=':
-			value += strspn(value, " \t=");
-			return value;
-		default: ;
-		}
-	}
-
-	return NULL;
-}
-
-/**
- * read_file - read contents of file into @buffer.
- * @fname:  File name
- * @buffer: Where to save file's contents
- * @bufsz:  Size of @buffer. On success, @bufsz gets decremented by the
- *          number of characters that were writtent to @buffer.
- *
- * Return: The number of characters read. If the file cannot be opened or
- * nothing is read from the file, then this function returns 0.
- */
-static size_t read_file(const char * fname, char *buffer, size_t *bufsz)
-{
-	char   *p;
-	__cleanup_file FILE *file = NULL;
-	size_t len;
-
-	file = fopen(fname, "re");
-	if (!file)
-		return 0;
-
-	p = fgets(buffer, *bufsz, file);
-
-	if (!p)
-		return 0;
-
-	 /* Strip unwanted trailing chars */
-	len = strcspn(buffer, " \t\n\r");
-	*bufsz -= len;
-
-	return len;
-}
-
-static size_t copy_value(char *buf, size_t buflen, const char *value)
-{
-	size_t val_len;
-
-	memset(buf, 0, buflen);
-
-	/* Remove leading " */
-	if (value[0] == '"')
-		value++;
-
-	 /* Remove trailing " */
-	val_len = strcspn(value, "\"");
-
-	memcpy(buf, value, min(val_len, buflen-1));
-
-	return val_len;
-}
-
-size_t get_entity_name(char *buffer, size_t bufsz)
-{
-	size_t len = !gethostname(buffer, bufsz) ? strlen(buffer) : 0;
-
-	/* Fill the rest of buffer with zeros */
-	memset(&buffer[len], '\0', bufsz-len);
-
-	return len;
-}
-
-size_t get_entity_version(char *buffer, size_t bufsz)
-{
-	__cleanup_file FILE *file = NULL;
-	size_t  num_bytes = 0;
-
-	/* /proc/sys/kernel/ostype typically contains the string "Linux" */
-	num_bytes += read_file("/proc/sys/kernel/ostype",
-			       &buffer[num_bytes], &bufsz);
-
-	/* /proc/sys/kernel/osrelease contains the Linux
-	 * version (e.g. 5.8.0-63-generic)
-	 */
-	buffer[num_bytes++] = ' '; /* Append a space */
-	num_bytes += read_file("/proc/sys/kernel/osrelease",
-			       &buffer[num_bytes], &bufsz);
-
-	/* /etc/os-release contains Key-Value pairs. We only care about the key
-	 * PRETTY_NAME, which contains the Distro's version. For example:
-	 * "SUSE Linux Enterprise Server 15 SP4", "Ubuntu 20.04.3 LTS", or
-	 * "Fedora Linux 35 (Server Edition)"
-	 */
-	file = fopen("/etc/os-release", "re");
-	if (file) {
-		char    name[64] = {0};
-		size_t  name_len = 0;
-		char    ver_id[64] = {0};
-		size_t  ver_id_len = 0;
-		char    line[LINE_MAX];
-		char    *p;
-		char    *s;
-
-		/* Read key-value pairs one line at a time */
-		while ((!name_len || !ver_id_len) &&
-		       (p = fgets(line, sizeof(line), file)) != NULL) {
-			/* Clean up string by removing leading/trailing blanks
-			 * and new line characters. Also eliminate trailing
-			 * comments, if any.
-			 */
-			p = kv_strip(p);
-
-			 /* Empty string? */
-			if (*p == '\0')
-				continue;
-
-			s = kv_keymatch(p, "NAME");
-			if (s)
-				name_len = copy_value(name, sizeof(name), s);
-
-			s = kv_keymatch(p, "VERSION_ID");
-			if (s)
-				ver_id_len = copy_value(ver_id, sizeof(ver_id), s);
-		}
-
-		if (name_len) {
-			/* Append a space */
-			buffer[num_bytes++] = ' ';
-			name_len = min(name_len, bufsz);
-			memcpy(&buffer[num_bytes], name, name_len);
-			bufsz -= name_len;
-			num_bytes += name_len;
-		}
-
-		if (ver_id_len) {
-			/* Append a space */
-			buffer[num_bytes++] = ' ';
-			ver_id_len = min(ver_id_len, bufsz);
-			memcpy(&buffer[num_bytes], ver_id, ver_id_len);
-			bufsz -= ver_id_len;
-			num_bytes += ver_id_len;
-		}
-	}
-
-	/* Fill the rest of buffer with zeros */
-	memset(&buffer[num_bytes], '\0', bufsz);
-
-	return num_bytes;
-}
-
-__public const char *libnvme_get_version(enum libnvme_version type)
+__shr_public const char *libnvme_get_version(enum libnvme_version type)
 {
 	switch(type) {
 	case LIBNVME_VERSION_PROJECT:
@@ -728,7 +518,8 @@ __public const char *libnvme_get_version(enum libnvme_version type)
 	}
 }
 
-__public int libnvme_uuid_to_string(unsigned char uuid[NVME_UUID_LEN], char *str)
+__shr_public int libnvme_uuid_to_string(
+		unsigned char uuid[NVME_UUID_LEN], char *str)
 {
 	int n;
 	n = snprintf(str, NVME_UUID_LEN_STRING,
@@ -740,7 +531,8 @@ __public int libnvme_uuid_to_string(unsigned char uuid[NVME_UUID_LEN], char *str
 	return n != NVME_UUID_LEN_STRING - 1 ? -EINVAL : 0;
 }
 
-__public int libnvme_uuid_from_string(const char *str, unsigned char uuid[NVME_UUID_LEN])
+__shr_public int libnvme_uuid_from_string(
+		const char *str, unsigned char uuid[NVME_UUID_LEN])
 {
 	int n;
 
@@ -754,19 +546,39 @@ __public int libnvme_uuid_from_string(const char *str, unsigned char uuid[NVME_U
 
 }
 
-__public int libnvme_random_uuid(unsigned char uuid[NVME_UUID_LEN])
+static int random_bytes(void *buf, size_t buflen)
 {
-	__cleanup_fd int f = -1;
+#if NVME_HAVE_BCRYPT
+	NTSTATUS status = BCryptGenRandom(NULL, buf, (ULONG)buflen,
+				 BCRYPT_USE_SYSTEM_PREFERRED_RNG);
+
+	if (!BCRYPT_SUCCESS(status))
+		return -EIO;
+#else
+	__cleanup_fd int fd = -1;
 	ssize_t n;
 
-	f = open("/dev/urandom", O_RDONLY);
-	if (f < 0)
+	fd = open("/dev/urandom", O_RDONLY);
+	if (fd < 0)
 		return -errno;
-	n = read(f, uuid, NVME_UUID_LEN);
+
+	n = read(fd, buf, buflen);
 	if (n < 0)
 		return -errno;
-	else if (n != NVME_UUID_LEN)
+	else if ((size_t)n != buflen)
 		return -EIO;
+#endif
+	return 0;
+}
+
+__shr_public int libnvme_random_uuid(unsigned char uuid[NVME_UUID_LEN])
+{
+	int ret;
+
+	/* Generate random bytes using platform-specific implementation */
+	ret = random_bytes(uuid, NVME_UUID_LEN);
+	if (ret < 0)
+		return ret;
 
 	/*
 	 * See https://www.rfc-editor.org/rfc/rfc4122#section-4.4
@@ -779,7 +591,7 @@ __public int libnvme_random_uuid(unsigned char uuid[NVME_UUID_LEN])
 	return 0;
 }
 
-__public int libnvme_find_uuid(struct nvme_id_uuid_list *uuid_list,
+__shr_public int libnvme_find_uuid(struct nvme_id_uuid_list *uuid_list,
 		const unsigned char uuid[NVME_UUID_LEN])
 {
 	const unsigned char uuid_end[NVME_UUID_LEN] = {0};
@@ -796,195 +608,40 @@ __public int libnvme_find_uuid(struct nvme_id_uuid_list *uuid_list,
 	return -ENOENT;
 }
 
-#ifdef HAVE_NETDB
-static bool _nvme_ipaddrs_eq(struct sockaddr *addr1, struct sockaddr *addr2)
-{
-	struct sockaddr_in *sockaddr_v4;
-	struct sockaddr_in6 *sockaddr_v6;
-
-	if (addr1->sa_family == AF_INET && addr2->sa_family == AF_INET) {
-		struct sockaddr_in *sockaddr1 = (struct sockaddr_in *)addr1;
-		struct sockaddr_in *sockaddr2 = (struct sockaddr_in *)addr2;
-		return sockaddr1->sin_addr.s_addr == sockaddr2->sin_addr.s_addr;
-	}
-
-	if (addr1->sa_family == AF_INET6 && addr2->sa_family == AF_INET6) {
-		struct sockaddr_in6 *sockaddr1 = (struct sockaddr_in6 *)addr1;
-		struct sockaddr_in6 *sockaddr2 = (struct sockaddr_in6 *)addr2;
-		return !memcmp(&sockaddr1->sin6_addr, &sockaddr2->sin6_addr, sizeof(struct in6_addr));
-	}
-
-	switch (addr1->sa_family) {
-	case AF_INET:
-		sockaddr_v6 = (struct sockaddr_in6 *)addr2;
-		if (IN6_IS_ADDR_V4MAPPED(&sockaddr_v6->sin6_addr)) {
-			sockaddr_v4 = (struct sockaddr_in *)addr1;
-			return sockaddr_v4->sin_addr.s_addr == sockaddr_v6->sin6_addr.s6_addr32[3];
-		}
-		break;
-
-	case AF_INET6:
-		sockaddr_v6 = (struct sockaddr_in6 *)addr1;
-		if (IN6_IS_ADDR_V4MAPPED(&sockaddr_v6->sin6_addr)) {
-			sockaddr_v4 = (struct sockaddr_in *)addr2;
-			return sockaddr_v4->sin_addr.s_addr == sockaddr_v6->sin6_addr.s6_addr32[3];
-		}
-		break;
-
-	default: ;
-	}
-
-	return false;
-}
-
+#ifdef CONFIG_FABRICS
 bool libnvme_ipaddrs_eq(const char *addr1, const char *addr2)
 {
-	bool result = false;
-	struct addrinfo *info1 = NULL, hint1 = { .ai_flags=AI_NUMERICHOST, .ai_family=AF_UNSPEC };
-	struct addrinfo *info2 = NULL, hint2 = { .ai_flags=AI_NUMERICHOST, .ai_family=AF_UNSPEC };
-
-	if (addr1 == addr2)
-		return true;
-
-	if (!addr1 || !addr2)
-		return false;
-
-	if (getaddrinfo(addr1, 0, &hint1, &info1) || !info1)
-		goto ipaddrs_eq_fail;
-
-	if (getaddrinfo(addr2, 0, &hint2, &info2) || !info2)
-		goto ipaddrs_eq_fail;
-
-	result = _nvme_ipaddrs_eq(info1->ai_addr, info2->ai_addr);
-
-ipaddrs_eq_fail:
-	if (info1)
-		freeaddrinfo(info1);
-	if (info2)
-		freeaddrinfo(info2);
-	return result;
+	return shr_ipaddrs_eq(addr1, addr2);
 }
-#else /* HAVE_NETDB */
+#else /* CONFIG_FABRICS */
 bool libnvme_ipaddrs_eq(const char *addr1, const char *addr2)
 {
-	libnvme_msg(NULL, LIBNVME_LOG_ERR, "no support for hostname ip address resolution; " \
-		"recompile with libnss support.\n");
-
 	return false;
 }
-#endif /* HAVE_NETDB */
+#endif /* CONFIG_FABRICS */
 
-#ifdef HAVE_NETDB
+#ifdef CONFIG_FABRICS
 const char *libnvme_iface_matching_addr(const struct ifaddrs *iface_list,
 		const char *addr)
 {
-	const struct ifaddrs *iface_it;
-	struct addrinfo *info = NULL, hint = { .ai_flags = AI_NUMERICHOST, .ai_family = AF_UNSPEC };
-	const char *iface_name = NULL;
-
-	if (!iface_list || !addr || getaddrinfo(addr, 0, &hint, &info) || !info)
-		return NULL;
-
-	/* Walk through the linked list */
-	for (iface_it = iface_list; iface_it != NULL; iface_it = iface_it->ifa_next) {
-		struct sockaddr *ifaddr = iface_it->ifa_addr;
-
-		if (ifaddr && (ifaddr->sa_family == AF_INET || ifaddr->sa_family == AF_INET6) &&
-		    _nvme_ipaddrs_eq(info->ai_addr, ifaddr)) {
-			iface_name = iface_it->ifa_name;
-			break;
-		}
-	}
-
-	freeaddrinfo(info);
-
-	return iface_name;
+	return shr_iface_matching_addr(iface_list, addr);
 }
 
 bool libnvme_iface_primary_addr_matches(const struct ifaddrs *iface_list,
 		const char *iface, const char *addr)
 {
-	const struct ifaddrs *iface_it;
-	struct addrinfo *info = NULL, hint = { .ai_flags = AI_NUMERICHOST, .ai_family = AF_UNSPEC };
-	bool match_found = false;
-
-	if (!iface_list || !addr || getaddrinfo(addr, 0, &hint, &info) || !info)
-		return false;
-
-	/* Walk through the linked list */
-	for (iface_it = iface_list; iface_it != NULL; iface_it = iface_it->ifa_next) {
-		if (strcmp(iface, iface_it->ifa_name))
-			continue; /* Not the interface we're looking for*/
-
-		/* The interface list is ordered in a way that the primary
-		 * address is listed first. As soon as the parsed address
-		 * matches the family of the address we're looking for, we
-		 * have found the primary address for that family.
-		 */
-		if (iface_it->ifa_addr && (iface_it->ifa_addr->sa_family == info->ai_addr->sa_family)) {
-			match_found = _nvme_ipaddrs_eq(info->ai_addr, iface_it->ifa_addr);
-			break;
-		}
-	}
-
-	freeaddrinfo(info);
-
-	return match_found;
+	return shr_iface_primary_addr_matches(iface_list, iface, addr);
 }
+#endif /* CONFIG_FABRICS */
 
-#elif defined(CONFIG_FABRICS)
-
-const char *libnvme_iface_matching_addr(const struct ifaddrs *iface_list,
-		const char *addr)
+/*
+ * libnvme_fabrics_config currently contains only scalar fields, so a
+ * shallow copy is correct. This function exists as a single point of
+ * change: if a string or pointer field is ever added, update only this
+ * function to perform a deep copy rather than patching every call site.
+ */
+void libnvme_fabrics_config_copy(struct libnvme_fabrics_config *dst,
+		const struct libnvme_fabrics_config *src)
 {
-	libnvme_msg(NULL, LIBNVME_LOG_ERR, "no support for interface lookup; "
-		"recompile with libnss support.\n");
-
-	return NULL;
-}
-
-bool libnvme_iface_primary_addr_matches(const struct ifaddrs *iface_list,
-		const char *iface, const char *addr)
-{
-	libnvme_msg(NULL, LIBNVME_LOG_ERR, "no support for interface lookup; "
-		"recompile with libnss support.\n");
-
-	return false;
-}
-
-#endif /* HAVE_NETDB || CONFIG_FABRICS */
-
-void *__libnvme_alloc(size_t len)
-{
-	size_t _len = round_up(len, 0x1000);
-	void *p;
-
-	if (posix_memalign((void *)&p, getpagesize(), _len))
-		return NULL;
-
-	memset(p, 0, _len);
-	return p;
-}
-
-void *__libnvme_realloc(void *p, size_t len)
-{
-	size_t old_len = malloc_usable_size(p);
-
-	void *result = __libnvme_alloc(len);
-
-	if (p && result) {
-		memcpy(result, p, min(old_len, len));
-		free(p);
-	}
-
-	return result;
-}
-
-/* This used instead of basename() due to behavioral differences between
- * the POSIX and the GNU version. This is the glibc implementation.
- * Original source: https://github.com/bminor/glibc/blob/master/string/basename.c */
-char *libnvme_basename(const char *path)
-{
-	char *p = (char *) strrchr(path, '/');
-	return p ? p + 1 : (char *) path;
+	*dst = *src;
 }

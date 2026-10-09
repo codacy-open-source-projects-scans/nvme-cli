@@ -9,31 +9,64 @@
 
 #include <errno.h>
 
+#include <shared/compiler-attributes-util.h>
+
 #include <libnvme.h>
 
 #include "private.h"
 
-int libnvme_open_uring(struct libnvme_global_ctx *ctx)
+int libnvme_open_uring(__shr_unused struct libnvme_transport_handle *hdl)
 {
 	return -ENOTSUP;
 }
-void libnvme_close_uring(struct libnvme_global_ctx *ctx)
+void libnvme_close_uring(__shr_unused struct libnvme_transport_handle *hdl)
 {
 }
 
 int __libnvme_transport_handle_open_uring(struct libnvme_transport_handle *hdl)
 {
-	hdl->ctx->uring_state = LIBNVME_IO_URING_STATE_NOT_AVAILABLE;
+	hdl->uring_state = LIBNVME_IO_URING_STATE_NOT_AVAILABLE;
+
 	return -ENOTSUP;
 }
 
-int libnvme_submit_admin_passthru_async(struct libnvme_transport_handle *hdl,
-		struct libnvme_passthru_cmd *cmd)
+__shr_public int libnvme_submit_admin_passthru(
+		__shr_unused struct libnvme_transport_handle *hdl,
+		__shr_unused struct libnvme_passthru_cmd *cmd,
+		__shr_unused void *cookie)
+{
+	if (!hdl)
+		return -ENODEV;
+
+	if (hdl->uring_state == LIBNVME_IO_URING_STATE_UNKNOWN)
+		return __libnvme_transport_handle_open_uring(hdl);
+
+	return -ENOTSUP;
+}
+
+__shr_public int libnvme_submit_io_passthru(
+		__shr_unused struct libnvme_transport_handle *hdl,
+		__shr_unused struct libnvme_passthru_cmd *cmd,
+		__shr_unused void *cookie)
+{
+	if (!hdl)
+		return -ENODEV;
+
+	if (hdl->uring_state == LIBNVME_IO_URING_STATE_UNKNOWN)
+		return __libnvme_transport_handle_open_uring(hdl);
+
+	return -ENOTSUP;
+}
+
+__shr_public int libnvme_reap_passthru(
+		__shr_unused struct libnvme_transport_handle *hdl,
+		__shr_unused struct libnvme_passthru_completion *completion)
 {
 	return -ENOTSUP;
 }
 
-int libnvme_wait_complete_passthru(struct libnvme_transport_handle *hdl)
+__shr_public int libnvme_wait_passthru(
+		__shr_unused struct libnvme_transport_handle *hdl)
 {
 	return -ENOTSUP;
 }

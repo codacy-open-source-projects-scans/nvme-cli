@@ -8,9 +8,7 @@ nvme-id-uuid - Send a Identify UUID List command to the specified device
 SYNOPSIS
 --------
 [verse]
-'nvme id-uuid' <device> [--raw-binary | -b]
-			[--human-readable | -H]
-			[<global-options>]
+'nvme' [<global-options>] 'id uuid' <device> [--raw-binary | -b]
 
 DESCRIPTION
 -----------
@@ -22,17 +20,16 @@ device (ex: /dev/nvme0) or block device (ex: /dev/nvme0n1).
 
 On success it returns 0, error code otherwise.
 
+The bare 'nvme id-uuid' form (without a space) still works as a deprecated
+alias and will be removed in a future major version. New scripts should
+use 'nvme id uuid' instead.
+
 OPTIONS
 -------
 -b::
 --raw-binary::
 	Print the raw buffer to stdout. Structure is not parsed by
 	program. This overrides the vendor specific and human readable options.
-
--H::
---human-readable::
-	Display values in a human-readable format where possible.
-	(deprecated, use --verbose)
 
 include::global-options.txt[]
 
@@ -41,7 +38,7 @@ EXAMPLES
 * Has the program issue a id-uuid to display structure.
 +
 ------------
-# nvme id-uuid /dev/nvme0
+# nvme id uuid /dev/nvme0
 ------------
 
 NVME

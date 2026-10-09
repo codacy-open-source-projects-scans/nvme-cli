@@ -74,7 +74,7 @@ libnvme utility functions
   connect attempt is ignored due to configuration
 
 ``ENVME_CONNECT_NOKEY``
-  the TLS key is missing
+  TLS PSK or KX-HMAC-CHAP secret not available
 
 
 .. c:function:: __u8 libnvme_status_to_errno (int status, bool fabrics)
@@ -111,6 +111,28 @@ or unchanged status is < 0 since errno is already set.
 
 String representation of the nvme status if it is an nvme status field,
 or a standard errno string if status is < 0.
+
+
+.. c:function:: const char * libnvme_mi_status_to_string (int status)
+
+   return a string representation of the MI status.
+
+**Parameters**
+
+``int status``
+  MI response status
+
+**Description**
+
+Gives a string description of **status**, as per section 4.1.2 of the NVMe-MI
+spec. The status value should be of type NVME_STATUS_MI, and extracted
+from the return value using nvme_status_get_value().
+
+Returned string is const, and should not be free()ed.
+
+**Return**
+
+A string representing the status value
 
 
 .. c:function:: const char * libnvme_sanitize_ns_status_to_string (__u16 sc)
@@ -160,6 +182,20 @@ The set features status string if it is a specific status code.
 
 The nvme opcode status string if it is an nvme status field,
 or a standard errno string if status is < 0.
+
+
+.. c:function:: bool libnvme_status_is_invalid_field (int status)
+
+   Checks nvme status if invalid field.
+
+**Parameters**
+
+``int status``
+  Return status from an nvme command
+
+**Return**
+
+true if it is an nvme status invalid field or false if not.
 
 
 .. c:function:: const char * libnvme_errno_to_string (int err)
@@ -309,21 +345,7 @@ Returns error code if generating of random number fails.
 
 **Return**
 
-The array position where given UUID is present, or -1 on failure
- with errno set.
-
-
-.. c:function:: char * libnvme_basename (const char *path)
-
-   Return the final path component (the one after the last '/')
-
-**Parameters**
-
-``const char *path``
-  A string containing a filesystem path
-
-**Return**
-
-A pointer into the original null-terminated path string.
+The array position where given UUID is present, or negative
+error code otherwise.
 
 

@@ -1,0 +1,240 @@
+/* SPDX-License-Identifier: LGPL-2.1-or-later */
+/*
+ * This file is part of nvme-cli.
+ * Copyright (c) 2026 Dell Technologies Inc. or its subsidiaries.
+ *
+ * Authors: Martin Belanger <martin.belanger@dell.com>
+ */
+#pragma once
+
+#include <ctype.h>
+#include <stdbool.h>
+#include <stdio.h>
+#include <string.h>
+#include <strings.h>
+
+#ifndef HAVE_STRSEP
+/* strsep() is missing on some platforms (e.g. mingw/MSVC runtimes). */
+static inline char *strsep(char **stringp, const char *delim)
+{
+	char *s, *end;
+
+	if (!stringp || !*stringp)
+		return NULL;
+
+	s = *stringp;
+	end = s + strcspn(s, delim);
+
+	if (*end)
+		*end++ = '\0';
+	else
+		end = NULL;
+
+	*stringp = end;
+	return s;
+}
+#endif
+
+/*
+ * NULL-safe string equality: two NULLs are equal, one NULL and one
+ * non-NULL are never equal, otherwise this is strcmp() == 0.
+ */
+static inline bool shr_streq0(const char *s1, const char *s2)
+{
+	if (s1 == s2)
+		return true;
+	if (!s1 || !s2)
+		return false;
+	return !strcmp(s1, s2);
+}
+
+/* Case-insensitive sibling of shr_streq0(). */
+static inline bool shr_streqcase0(const char *s1, const char *s2)
+{
+	if (s1 == s2)
+		return true;
+	if (!s1 || !s2)
+		return false;
+	return !strcasecmp(s1, s2);
+}
+
+/* Allocation-checking strdup() that returns NULL for a NULL input. */
+static inline char *shr_xstrdup(const char *s)
+{
+	return s ? strdup(s) : NULL;
+}
+
+/* Lower-cases str in place. */
+static inline void shr_strtolower(char *str)
+{
+	for (; *str; str++)
+		*str = tolower((unsigned char)*str);
+}
+
+/*
+ * Trim trailing whitespace from s in place: the byte after the last
+ * non-whitespace character is overwritten with '\0'. Returns s.
+ */
+static inline char *shr_rtrim(char *s)
+{
+	char *end = s + strlen(s);
+
+	while (end > s && isspace((unsigned char)end[-1]))
+		end--;
+	*end = '\0';
+	return s;
+}
+
+/*
+ * Copy a fixed-size, not-necessarily-NUL-terminated wire field @s of
+ * size @sz into a newly allocated, NUL-terminated, right-trimmed C
+ * string. "%.*s" bounds the read to @sz regardless of whether s
+ * contains a NUL. Returns NULL on allocation failure.
+ */
+static inline char *shr_buf2str(const char s[], size_t sz)
+{
+	char *p;
+
+	if (asprintf(&p, "%.*s", (int)sz, s) < 0)
+		return NULL;
+
+	return shr_rtrim(p);
+}
+
+/*
+ * Return a pointer to the first non-whitespace character in s. s itself
+ * is not modified.
+ */
+static inline char *shr_ltrim(char *s)
+{
+	return s + strspn(s, " \t\n\r\v\f");
+}
+
+/*
+ * Trim leading and trailing whitespace from s in place and return a
+ * pointer to the first non-whitespace character. s itself is modified:
+ * the byte after the last non-whitespace character is overwritten with
+ * '\0'.
+ */
+static inline char *shr_trim(char *s)
+{
+	return shr_ltrim(shr_rtrim(s));
+}
+
+/* True if c may appear in a name: alphanumeric, '_', or '-'. */
+static inline bool shr_name_char(char c)
+{
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+	       (c >= '0' && c <= '9') || c == '_' || c == '-';
+}
+
+/* True if s is non-empty and every character is alphanumeric, '_', or '-'. */
+static inline bool shr_valid_name(const char *s)
+{
+	const char *p;
+
+	if (!s || !*s)
+		return false;
+	for (p = s; *p; p++) {
+		if (!shr_name_char(*p))
+			return false;
+	}
+	return true;
+}
+
+/*
+ * Replace every character shr_valid_name() would reject with '_', in place,
+ * and return s. This turns a field a device supplies, such as a serial
+ * number, into something that can go into a file name; pair it with
+ * shr_rtrim() so that trailing padding does not become underscores.
+ * A NULL s is returned unchanged.
+ */
+static inline char *shr_sanitize_name(char *s)
+{
+	char *p;
+
+	if (!s)
+		return s;
+	for (p = s; *p; p++) {
+		if (!shr_name_char(*p))
+			*p = '_';
+	}
+	return s;
+}
+
+/*
+ * If s starts with prefix, return a pointer within s just past the match.
+ * NULL otherwise.
+ */
+static inline char *shr_startswith(const char *s, const char *prefix)
+{
+	size_t l = strlen(prefix);
+
+	if (!strncmp(s, prefix, l))
+		return (char *)s + l;
+
+	return NULL;
+}
+
+/*
+ * Strip leading/trailing blanks and a trailing "# comment" from the
+ * key=value line kv, in place. Return a pointer to the stripped string.
+ */
+static inline char *shr_kv_strip(char *kv)
+{
+	char *s;
+
+	kv[strcspn(kv, "\n\r")] = '\0';
+
+	/* Remove leading newline and spaces */
+	kv += strspn(kv, " \t\n\r");
+
+	/* Skip comments and empty lines */
+	if (*kv == '#' || *kv == '\0') {
+		*kv = '\0';
+		return kv;
+	}
+
+	/* Remove trailing newline chars */
+	kv[strcspn(kv, "\n\r")] = '\0';
+
+	/* Delete trailing comments (including spaces/tabs that precede the #)*/
+	s = &kv[strcspn(kv, "#")];
+	*s-- = '\0';
+	while (s >= kv && (*s == ' ' || *s == '\t'))
+		*s-- = '\0';
+
+	return kv;
+}
+
+/*
+ * If kv is a whole-word match for "key" at the start of a key=value line,
+ * return a pointer to the first character of value (past spaces/tabs/'=').
+ * NULL otherwise.
+ */
+static inline char *shr_kv_keymatch(const char *kv, const char *key)
+{
+	char *value;
+
+	value = shr_startswith(kv, key);
+	if (value && (*value == ' ' || *value == '\t' || *value == '='))
+		return value + strspn(value, " \t=");
+
+	return NULL;
+}
+
+/*
+ * Return string line length.
+ */
+static inline size_t shr_linelen(char *s)
+{
+	size_t len = s ? strlen(s) : 0;
+	size_t i;
+
+	for (i = 0; i < len; i++) {
+		if (s[i] == '\n')
+			break;
+	}
+
+	return i;
+}

@@ -2,12 +2,12 @@
 .\"     Title: nvme-toshiba-vs-internal-log
 .\"    Author: [FIXME: author] [see http://www.docbook.org/tdg5/en/html/author]
 .\" Generator: DocBook XSL Stylesheets vsnapshot <http://docbook.sf.net/>
-.\"      Date: 04/17/2026
+.\"      Date: 09/18/2026
 .\"    Manual: NVMe Manual
 .\"    Source: NVMe
 .\"  Language: English
 .\"
-.TH "NVME\-TOSHIBA\-VS\-I" "1" "04/17/2026" "NVMe" "NVMe Manual"
+.TH "NVME\-TOSHIBA\-VS\-I" "1" "09/18/2026" "NVMe" "NVMe Manual"
 .\" -----------------------------------------------------------------
 .\" * Define some portability stuff
 .\" -----------------------------------------------------------------
@@ -32,10 +32,9 @@ nvme-toshiba-vs-internal-log \- Retrieve a Toshiba device\*(Aqs vendor specific 
 .SH "SYNOPSIS"
 .sp
 .nf
-\*(Aqnvme toshiba vs\-internal\-log \*(Aq <device>
-                        [\-\-output\-file=<FILE>, \-o <FILE>] (optional)
+\fInvme\fR [<global\-options>] \fItoshiba vs\-internal\-log\fR <device>
+                        [\-\-output\-file=<FILE>, \-O <FILE>] (optional)
                         [\-\-saved\-log, \-s] (optional)
-                        [<global\-options>]
 .fi
 .SH "DESCRIPTION"
 .sp
@@ -52,7 +51,7 @@ This will only work on Toshiba devices supporting this feature\&.
 Note: The logs are quite large \- typically 100\(cqs of MB\&. This command can take several minutes to complete\&. A progress runner is included when data is written to file and a page count is included in the stdout dump\&.
 .SH "OPTIONS"
 .PP
-\-o <FILE>, \-\-output\-file=<FILE>
+\-O <FILE>, \-\-output\-file=<FILE>
 .RS 4
 Output binary file\&. Defaults to text\-formatted dump to stdout
 .RE
@@ -106,6 +105,8 @@ Set the timeout for the command in milliseconds\&.
 .RS 4
 Increase the level of detail in the output\&. May be specified multiple times to further increase verbosity\&.
 .RE
+.sp
+These options can also be set as machine\-wide defaults in nvme\-cli\&.conf(5)\&. A command\-line flag always overrides the file\&.
 .SH "EXAMPLES"
 .sp
 .RS 4

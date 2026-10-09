@@ -10,45 +10,69 @@
 #include <ccan/endian/endian.h>
 #include <ccan/minmax/minmax.h>
 
+#include <shared/compiler-attributes-util.h>
+
 #include <libnvme.h>
 
 #include "cleanup.h"
 #include "private.h"
-#include "compiler-attributes.h"
 
-static bool force_4k;
-
-__attribute__((constructor))
-static void nvme_init_env(void)
+static int submit_get_log_cmd(struct libnvme_transport_handle *hdl,
+	struct libnvme_passthru_cmd *cmd)
 {
-	char *val;
+	int err;
 
-	val = getenv("LIBNVME_FORCE_4K");
-	if (!val)
-		return;
-	if (!strcmp(val, "1") ||
-	    !strcasecmp(val, "true") ||
-	    !strncasecmp(val, "enable", 6))
-		force_4k = true;
+	if (hdl->type != LIBNVME_TRANSPORT_HANDLE_TYPE_DIRECT)
+		goto no_uring;
+
+	if (hdl->uring_state == LIBNVME_IO_URING_STATE_NOT_AVAILABLE)
+		goto no_uring;
+
+	err = libnvme_submit_admin_passthru(hdl, cmd, NULL);
+	if (err && err == -ENOTSUP)
+		goto no_uring;
+
+	return err;
+
+no_uring:
+	return libnvme_exec_admin_passthru(hdl, cmd);
 }
 
-__public int libnvme_get_log(struct libnvme_transport_handle *hdl,
+static int wait_get_log_cmd(struct libnvme_transport_handle *hdl)
+{
+	if (hdl->type != LIBNVME_TRANSPORT_HANDLE_TYPE_DIRECT)
+		return 0;
+
+	if (hdl->uring_state == LIBNVME_IO_URING_STATE_NOT_AVAILABLE)
+		return 0;
+
+	return libnvme_wait_passthru(hdl);
+}
+
+__shr_public int libnvme_get_log(struct libnvme_transport_handle *hdl,
 		struct libnvme_passthru_cmd *cmd, bool rae,
 		__u32 xfer_len)
 {
-	__u64 offset = 0, xfer, data_len = cmd->data_len;
-	__u64 start = (__u64)cmd->cdw13 << 32 | cmd->cdw12;
-	__u64 lpo;
-	void *ptr = (void *)(uintptr_t)cmd->addr;
-	int ret;
-	bool _rae;
-	__u32 numd;
+	__u64 offset = 0, xfer, data_len, start, lpo;
+	__u32 numd, cdw10, cdw11;
 	__u16 numdu, numdl;
-	__u32 cdw10 = cmd->cdw10 & (NVME_VAL(LOG_CDW10_LID) |
-				    NVME_VAL(LOG_CDW10_LSP));
-	__u32 cdw11 = cmd->cdw11 & NVME_VAL(LOG_CDW11_LSI);
+	bool _rae;
+	void *ptr;
+	int ret;
 
-	if (force_4k)
+	if (!hdl)
+		return -ENODEV;
+	if (!cmd || xfer_len < 4)
+		return -EINVAL;
+
+	data_len = cmd->data_len;
+	start = (__u64)cmd->cdw13 << 32 | cmd->cdw12;
+	ptr = (void *)(uintptr_t)cmd->addr;
+	cdw10 = cmd->cdw10 & (NVME_VAL(LOG_CDW10_LID) |
+			      NVME_VAL(LOG_CDW10_LSP));
+	cdw11 = cmd->cdw11 & NVME_VAL(LOG_CDW11_LSI);
+
+	if (hdl->ctx->force_4k)
 		xfer_len = NVME_LOG_PAGE_PDU_SIZE;
 
 	/*
@@ -56,7 +80,7 @@ __public int libnvme_get_log(struct libnvme_transport_handle *hdl,
 	 * avoids having to check the MDTS value of the controller.
 	 */
 	do {
-		if (!force_4k) {
+		if (!hdl->ctx->force_4k) {
 			xfer = data_len - offset;
 			if (xfer > xfer_len)
 				xfer  = xfer_len;
@@ -85,10 +109,7 @@ __public int libnvme_get_log(struct libnvme_transport_handle *hdl,
 		cmd->data_len = xfer;
 		cmd->addr = (__u64)(uintptr_t)ptr;
 
-		if (hdl->uring_enabled)
-			ret = libnvme_submit_admin_passthru_async(hdl, cmd);
-		else
-			ret = libnvme_submit_admin_passthru(hdl, cmd);
+		ret = submit_get_log_cmd(hdl, cmd);
 		if (ret)
 			return ret;
 
@@ -96,11 +117,88 @@ __public int libnvme_get_log(struct libnvme_transport_handle *hdl,
 		ptr += xfer;
 	} while (offset < data_len);
 
-	if (hdl->uring_enabled) {
-		ret = libnvme_wait_complete_passthru(hdl);
+	return wait_get_log_cmd(hdl);
+}
+
+__shr_public int libnvme_get_log_dynamic_chunk(
+			      struct libnvme_transport_handle *hdl,
+			      struct libnvme_passthru_cmd *cmd, bool rae,
+			      __u32 xfer_len)
+{
+	__u64 offset = 0, xfer, data_len, start, lpo;
+	__u32 numd, cdw10, cdw11;
+	__u16 numdu, numdl;
+	bool _rae;
+	void *ptr;
+	int ret;
+
+	if (!hdl)
+		return -ENODEV;
+	if (!cmd || xfer_len < 4)
+		return -EINVAL;
+
+	data_len = cmd->data_len;
+	start = (__u64)cmd->cdw13 << 32 | cmd->cdw12;
+	ptr = (void *)(uintptr_t)cmd->addr;
+	cdw10 = cmd->cdw10 & (NVME_VAL(LOG_CDW10_LID) |
+			      NVME_VAL(LOG_CDW10_LSP));
+	cdw11 = cmd->cdw11 & NVME_VAL(LOG_CDW11_LSI);
+
+	if (hdl->ctx->force_4k)
+		xfer_len = NVME_LOG_PAGE_PDU_SIZE;
+
+	do {
+		xfer = data_len - offset;
+		if (xfer > xfer_len)
+			xfer  = xfer_len;
+
+		/*
+		 * Always retain regardless of the RAE parameter until the very
+		 * last portion of this log page so the data remains latched
+		 * during the fetch sequence.
+		 */
+		lpo = start + offset;
+		numd = (xfer >> 2) - 1;
+		numdu = numd >> 16;
+		numdl = numd & 0xffff;
+		_rae = offset + xfer < data_len || rae;
+
+		cmd->cdw10 = cdw10 |
+			NVME_SET(!!_rae, LOG_CDW10_RAE) |
+			NVME_SET(numdl, LOG_CDW10_NUMDL);
+		cmd->cdw11 = cdw11 |
+			NVME_SET(numdu, LOG_CDW11_NUMDU);
+		cmd->cdw12 = lpo & 0xffffffff;
+		cmd->cdw13 = lpo >> 32;
+		cmd->data_len = xfer;
+		cmd->addr = (__u64)(uintptr_t)ptr;
+
+		ret = submit_get_log_cmd(hdl, cmd);
+		if (!ret)
+			ret = wait_get_log_cmd(hdl);
+		/*
+		 * Retry with a smaller chunk on OS errors (negative errno,
+		 * e.g. the kernel rejecting an oversized transfer) and on
+		 * NVMe command errors (positive status) with Generic (SCT=0)
+		 * or Command Specific (SCT=1) status types. Path errors
+		 * (SCT=3) and media errors (SCT=2) are not recoverable by
+		 * reducing the transfer size.
+		 */
+		if (ret < 0 ||
+		    (ret > 0 &&
+		     (nvme_status_code_type(ret) <= NVME_SCT_CMD_SPECIFIC))) {
+			xfer_len = (xfer_len / 2) &
+				   ~(__u32)(NVME_LOG_PAGE_PDU_SIZE - 1);
+			if (xfer_len < NVME_LOG_PAGE_PDU_SIZE)
+				return ret;
+			continue;
+		}
 		if (ret)
 			return ret;
-	}
+
+		offset += xfer;
+		ptr += xfer;
+	} while (offset < data_len);
 
 	return 0;
 }
@@ -176,9 +274,9 @@ static int try_read_ana(struct libnvme_transport_handle *hdl,
 	return 0;
 }
 
-__public int libnvme_get_ana_log_atomic(struct libnvme_transport_handle *hdl,
-		bool rae, bool rgo, struct nvme_ana_log *log, __u32 *len,
-		unsigned int retries)
+__shr_public int libnvme_get_ana_log_atomic(
+		struct libnvme_transport_handle *hdl, bool rae, bool rgo,
+		struct nvme_ana_log *log, __u32 *len, unsigned int retries)
 {
 	const enum nvme_log_ana_lsp lsp =
 		rgo ? NVME_LOG_ANA_LSP_RGO_GROUPS_ONLY : 0;
@@ -232,14 +330,15 @@ __public int libnvme_get_ana_log_atomic(struct libnvme_transport_handle *hdl,
 	return -EAGAIN;
 }
 
-__public int libnvme_set_etdas(struct libnvme_transport_handle *hdl, bool *changed)
+__shr_public int libnvme_set_etdas(
+		struct libnvme_transport_handle *hdl, bool *changed)
 {
 	struct nvme_feat_host_behavior da4;
 	struct libnvme_passthru_cmd cmd;
 	int err;
 
 	nvme_init_get_features_host_behavior(&cmd, 0, &da4);
-	err = libnvme_submit_admin_passthru(hdl, &cmd);
+	err = libnvme_exec_admin_passthru(hdl, &cmd);
 	if (err)
 		return err;
 
@@ -251,7 +350,7 @@ __public int libnvme_set_etdas(struct libnvme_transport_handle *hdl, bool *chang
 	da4.etdas = 1;
 
 	nvme_init_set_features_host_behavior(&cmd, false, &da4);
-	err = libnvme_submit_admin_passthru(hdl, &cmd);
+	err = libnvme_exec_admin_passthru(hdl, &cmd);
 	if (err)
 		return err;
 
@@ -259,14 +358,15 @@ __public int libnvme_set_etdas(struct libnvme_transport_handle *hdl, bool *chang
 	return 0;
 }
 
-__public int libnvme_clear_etdas(struct libnvme_transport_handle *hdl, bool *changed)
+__shr_public int libnvme_clear_etdas(
+		struct libnvme_transport_handle *hdl, bool *changed)
 {
 	struct nvme_feat_host_behavior da4;
 	struct libnvme_passthru_cmd cmd;
 	int err;
 
 	nvme_init_get_features_host_behavior(&cmd, 0, &da4);
-	err = libnvme_submit_admin_passthru(hdl, &cmd);
+	err = libnvme_exec_admin_passthru(hdl, &cmd);
 	if (err)
 		return err;
 
@@ -277,7 +377,7 @@ __public int libnvme_clear_etdas(struct libnvme_transport_handle *hdl, bool *cha
 
 	da4.etdas = 0;
 	nvme_init_set_features_host_behavior(&cmd, false, &da4);
-	err = libnvme_submit_admin_passthru(hdl, &cmd);
+	err = libnvme_exec_admin_passthru(hdl, &cmd);
 	if (err)
 		return err;
 
@@ -285,16 +385,21 @@ __public int libnvme_clear_etdas(struct libnvme_transport_handle *hdl, bool *cha
 	return 0;
 }
 
-__public int libnvme_get_uuid_list(struct libnvme_transport_handle *hdl,
+__shr_public int libnvme_get_uuid_list(struct libnvme_transport_handle *hdl,
 		struct nvme_id_uuid_list *uuid_list)
 {
 	struct libnvme_passthru_cmd cmd;
 	struct nvme_id_ctrl ctrl;
 	int err;
 
+	if (!hdl)
+		return -ENODEV;
+	if (!uuid_list)
+		return -EINVAL;
+
 	memset(&ctrl, 0, sizeof(struct nvme_id_ctrl));
 	nvme_init_identify_ctrl(&cmd, &ctrl);
-	err = libnvme_submit_admin_passthru(hdl, &cmd);
+	err = libnvme_exec_admin_passthru(hdl, &cmd);
 	if (err) {
 		libnvme_msg(hdl->ctx, LIBNVME_LOG_ERR,
 			 "ERROR: nvme_identify_ctrl() failed 0x%x\n", err);
@@ -304,25 +409,26 @@ __public int libnvme_get_uuid_list(struct libnvme_transport_handle *hdl,
 	if ((ctrl.ctratt & NVME_CTRL_CTRATT_UUID_LIST) ==
 			NVME_CTRL_CTRATT_UUID_LIST) {
 		nvme_init_identify_uuid_list(&cmd, uuid_list);
-		err = libnvme_submit_admin_passthru(hdl, &cmd);
+		err = libnvme_exec_admin_passthru(hdl, &cmd);
 	}
 
 	return err;
 }
 
-__public int libnvme_get_telemetry_max(struct libnvme_transport_handle *hdl,
+__shr_public int libnvme_get_telemetry_max(
+		struct libnvme_transport_handle *hdl,
 		enum nvme_telemetry_da *da, size_t *data_tx)
 {
-	__cleanup_free struct nvme_id_ctrl *id_ctrl = NULL;
+	__cleanup_libnvme_free struct nvme_id_ctrl *id_ctrl = NULL;
 	struct libnvme_passthru_cmd cmd;
 	int err;
 
-	id_ctrl = __libnvme_alloc(sizeof(*id_ctrl));
+	id_ctrl = libnvme_alloc(sizeof(*id_ctrl));
 	if (!id_ctrl)
 		return -ENOMEM;
 
 	nvme_init_identify_ctrl(&cmd, id_ctrl);
-	err = libnvme_submit_admin_passthru(hdl, &cmd);
+	err = libnvme_exec_admin_passthru(hdl, &cmd);
 	if (err)
 		return err;
 
@@ -346,22 +452,22 @@ __public int libnvme_get_telemetry_max(struct libnvme_transport_handle *hdl,
 	return err;
 }
 
-__public int libnvme_get_telemetry_log(struct libnvme_transport_handle *hdl, bool create,
-		bool ctrl, bool rae, size_t max_data_tx,
-		enum nvme_telemetry_da da, struct nvme_telemetry_log **buf,
-		size_t *size)
+__shr_public int libnvme_get_telemetry_log(
+		struct libnvme_transport_handle *hdl, bool create, bool ctrl,
+		bool rae, size_t max_data_tx, enum nvme_telemetry_da da,
+		struct nvme_telemetry_log **buf, size_t *size)
 {
 	static const __u32 xfer = NVME_LOG_TELEM_BLOCK_SIZE;
 	struct nvme_telemetry_log *telem;
 	struct libnvme_passthru_cmd cmd;
-	__cleanup_free void *log = NULL;
+	__cleanup_libnvme_free void *log = NULL;
 	void *tmp;
 	int err;
 	size_t dalb;
 
 	*size = 0;
 
-	log = __libnvme_alloc(xfer);
+	log = libnvme_alloc(xfer);
 	if (!log)
 		return -ENOMEM;
 
@@ -412,7 +518,7 @@ __public int libnvme_get_telemetry_log(struct libnvme_transport_handle *hdl, boo
 		return -ENOENT;
 
 	*size = (dalb + 1) * xfer;
-	tmp = __libnvme_realloc(log, *size);
+	tmp = libnvme_realloc(log, *size);
 	if (!tmp)
 		return -ENOMEM;
 	log = tmp;
@@ -450,25 +556,28 @@ static int nvme_check_get_telemetry_log(struct libnvme_transport_handle *hdl,
 }
 
 
-__public int libnvme_get_ctrl_telemetry(struct libnvme_transport_handle *hdl, bool rae,
-		struct nvme_telemetry_log **log,
-		enum nvme_telemetry_da da, size_t *size)
+__shr_public int libnvme_get_ctrl_telemetry(
+		struct libnvme_transport_handle *hdl, bool rae,
+		struct nvme_telemetry_log **log, enum nvme_telemetry_da da,
+		size_t *size)
 {
 	return nvme_check_get_telemetry_log(hdl, false, true, rae, log,
 		da, size);
 }
 
-__public int libnvme_get_host_telemetry(struct libnvme_transport_handle *hdl,
-		struct nvme_telemetry_log **log,
-		enum nvme_telemetry_da da, size_t *size)
+__shr_public int libnvme_get_host_telemetry(
+		struct libnvme_transport_handle *hdl,
+		struct nvme_telemetry_log **log, enum nvme_telemetry_da da,
+		size_t *size)
 {
 	return nvme_check_get_telemetry_log(hdl, false, false, false, log,
 		da, size);
 }
 
-__public int libnvme_get_new_host_telemetry(struct libnvme_transport_handle *hdl,
-		struct nvme_telemetry_log **log,
-		enum nvme_telemetry_da da, size_t *size)
+__shr_public int libnvme_get_new_host_telemetry(
+		struct libnvme_transport_handle *hdl,
+		struct nvme_telemetry_log **log, enum nvme_telemetry_da da,
+		size_t *size)
 {
 	return nvme_check_get_telemetry_log(hdl, true, false, false, log,
 		da, size);
@@ -487,7 +596,7 @@ int libnvme_get_lba_status_log(struct libnvme_transport_handle *hdl, bool rae,
 	if (!buf)
 		return -ENOMEM;
 
-	nvme_init_get_log_lba_status(&cmd, 0, log, sizeof(*buf));
+	nvme_init_get_log_lba_status(&cmd, 0, buf, sizeof(*buf));
 	err = libnvme_get_log(hdl, &cmd, true, sizeof(*buf));
 	if (err) {
 		*log = NULL;
@@ -520,8 +629,8 @@ int libnvme_get_lba_status_log(struct libnvme_transport_handle *hdl, bool rae,
 	return 0;
 }
 
-__public size_t libnvme_get_ana_log_len_from_id_ctrl(const struct nvme_id_ctrl *id_ctrl,
-					 bool rgo)
+__shr_public size_t libnvme_get_ana_log_len_from_id_ctrl(
+		const struct nvme_id_ctrl *id_ctrl, bool rgo)
 {
 	__u32 nanagrpid = le32_to_cpu(id_ctrl->nanagrpid);
 	size_t size = sizeof(struct nvme_ana_log) +
@@ -530,18 +639,19 @@ __public size_t libnvme_get_ana_log_len_from_id_ctrl(const struct nvme_id_ctrl *
 	return rgo ? size : size + le32_to_cpu(id_ctrl->mnan) * sizeof(__le32);
 }
 
-__public int libnvme_get_ana_log_len(struct libnvme_transport_handle *hdl, size_t *analen)
+__shr_public int libnvme_get_ana_log_len(
+		struct libnvme_transport_handle *hdl, size_t *analen)
 {
-	__cleanup_free struct nvme_id_ctrl *ctrl = NULL;
+	__cleanup_libnvme_free struct nvme_id_ctrl *ctrl = NULL;
 	struct libnvme_passthru_cmd cmd;
 	int ret;
 
-	ctrl = __libnvme_alloc(sizeof(*ctrl));
+	ctrl = libnvme_alloc(sizeof(*ctrl));
 	if (!ctrl)
 		return -ENOMEM;
 
 	nvme_init_identify_ctrl(&cmd, ctrl);
-	ret = libnvme_submit_admin_passthru(hdl, &cmd);
+	ret = libnvme_exec_admin_passthru(hdl, &cmd);
 	if (ret)
 		return ret;
 
@@ -549,20 +659,20 @@ __public int libnvme_get_ana_log_len(struct libnvme_transport_handle *hdl, size_
 	return 0;
 }
 
-__public int libnvme_get_logical_block_size(struct libnvme_transport_handle *hdl,
-		__u32 nsid, int *blksize)
+__shr_public int libnvme_get_logical_block_size(
+		struct libnvme_transport_handle *hdl, __u32 nsid, int *blksize)
 {
-	__cleanup_free struct nvme_id_ns *ns = NULL;
+	__cleanup_libnvme_free struct nvme_id_ns *ns = NULL;
 	struct libnvme_passthru_cmd cmd;
 	__u8 flbas;
 	int ret;
 
-	ns = __libnvme_alloc(sizeof(*ns));
+	ns = libnvme_alloc(sizeof(*ns));
 	if (!ns)
 		return -ENOMEM;
 
 	nvme_init_identify_ns(&cmd, nsid, ns);
-	ret = libnvme_submit_admin_passthru(hdl, &cmd);
+	ret = libnvme_exec_admin_passthru(hdl, &cmd);
 	if (ret)
 		return ret;
 
@@ -572,8 +682,8 @@ __public int libnvme_get_logical_block_size(struct libnvme_transport_handle *hdl
 	return 0;
 }
 
-__public int libnvme_get_feature_length(int fid, __u32 cdw11, enum nvme_data_tfr dir,
-			     __u32 *len)
+__shr_public int libnvme_get_feature_length(
+		int fid, __u32 cdw11, enum nvme_data_tfr dir, __u32 *len)
 {
 	switch (fid) {
 	case NVME_FEAT_FID_LBA_RANGE:
@@ -620,7 +730,7 @@ __public int libnvme_get_feature_length(int fid, __u32 cdw11, enum nvme_data_tfr
 	case NVME_FEAT_FID_SANITIZE:
 	case NVME_FEAT_FID_ENDURANCE_EVT_CFG:
 	case NVME_FEAT_FID_SW_PROGRESS:
-	case NVME_FEAT_FID_RESV_MASK:
+	case NVME_FEAT_FID_RESV_NF_MASK:
 	case NVME_FEAT_FID_RESV_PERSIST:
 	case NVME_FEAT_FID_WRITE_PROTECT:
 	case NVME_FEAT_FID_POWER_LIMIT:
@@ -645,7 +755,8 @@ __public int libnvme_get_feature_length(int fid, __u32 cdw11, enum nvme_data_tfr
 	return 0;
 }
 
-__public int libnvme_get_directive_receive_length(enum nvme_directive_dtype dtype,
+__shr_public int libnvme_get_directive_receive_length(
+		enum nvme_directive_dtype dtype,
 		enum nvme_directive_receive_doper doper, __u32 *len)
 {
 	switch (dtype) {

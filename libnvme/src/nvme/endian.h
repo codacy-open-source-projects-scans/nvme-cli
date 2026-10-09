@@ -8,7 +8,7 @@
 
 #pragma once
 
-#if defined(_WIN32) || defined(_WIN64)
+#if defined(_WIN32)
 #if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
 	#define htobe16(x) (x)
 	#define htobe32(x) (x)
@@ -19,6 +19,9 @@
 	#define le16toh(x) __builtin_bswap16(x)
 	#define le32toh(x) __builtin_bswap32(x)
 	#define le64toh(x) __builtin_bswap64(x)
+	#define be16toh(x) (x)
+	#define be32toh(x) (x)
+	#define be64toh(x) (x)
 #else
 	/* Little-endian (most common case for Windows) */
 	#define htobe16(x) __builtin_bswap16(x)
@@ -30,6 +33,9 @@
 	#define le16toh(x) (x)
 	#define le32toh(x) (x)
 	#define le64toh(x) (x)
+	#define be16toh(x) __builtin_bswap16(x)
+	#define be32toh(x) __builtin_bswap32(x)
+	#define be64toh(x) __builtin_bswap64(x)
 #endif
 #else
 #include <endian.h>

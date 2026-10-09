@@ -8,10 +8,11 @@ nvme-fw-download - Download all or a portion of an nvme firmware image.
 SYNOPSIS
 --------
 [verse]
-'nvme fw-download' <device> [--fw=<firmware-file> | -f <firmware-file>]
+'nvme' [<global-options>] 'fw download' <device>
+			[--fw=<firmware-file> | -f <firmware-file>]
 			[--xfer=<transfer-size> | -x <transfer-size>]
 			[--offset=<offset> | -O <offset>]
-			[<global-options>]
+			[--stream]
 
 DESCRIPTION
 -----------
@@ -38,8 +39,12 @@ the Firmware Commit command (nvme fw-commit <args>).
 Note: nvme-cli must allocate a contiguous (linear) memory buffer and map
 the firmware binary into it. To do this, nvme-cli first attempts to
 allocate the buffer using huge TLB pages. If allocation using huge pages
-fails, it falls back to using posix_memalign() combined with madvise(),
-though this is also likely to fail.
+fails, it falls back to using posix_memalign() combined with madvise(). If
+the kernel rejects the huge page advice, nvme-cli keeps the aligned buffer
+and lets the I/O path attempt to map it.
+
+The optional `--stream` mode avoids allocating a buffer for the complete
+firmware image. It reads and downloads one transfer-sized portion at a time.
 
 To increase the likelihood of success, you may want to pre-allocate a
 number of huge pages before initiating the firmware download:
@@ -48,6 +53,10 @@ number of huge pages before initiating the firmware download:
 
 For more details, refer to:
 https://www.kernel.org/doc/Documentation/vm/hugetlbpage.txt
+
+The bare 'nvme fw-download' form (without a space) still works as a deprecated
+alias and will be removed in a future major version. New scripts should
+use 'nvme fw download' instead.
 
 OPTIONS
 -------
@@ -70,6 +79,11 @@ OPTIONS
 	the offset starts at zero and automatically adjusts based on the
 	'xfer' size given.
 
+--stream::
+	Read and download one transfer-sized portion of the firmware image at
+	a time instead of mapping the complete image into memory. This avoids
+	the huge page requirement and limits memory use to the transfer size.
+
 include::global-options.txt[]
 
 EXAMPLES
@@ -77,7 +91,13 @@ EXAMPLES
 * Transfer a firmware size 128KiB at a time:
 +
 ------------
-# nvme fw-download /dev/nvme0 --fw=/path/to/nvme.fw --xfer=0x20000
+# nvme fw download /dev/nvme0 --fw=/path/to/nvme.fw --xfer=0x20000
+------------
+
+* Read and download a firmware image one transfer-sized portion at a time:
++
+------------
+# nvme fw download /dev/nvme0 --fw=/path/to/nvme.fw --stream
 ------------
 
 NVME

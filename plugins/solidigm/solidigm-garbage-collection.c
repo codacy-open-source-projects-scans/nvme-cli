@@ -5,19 +5,22 @@
  * Author: leonardo.da.cunha@solidigm.com
  */
 
-#include <fcntl.h>
 #include <errno.h>
+#include <fcntl.h>
+#include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
-#include <inttypes.h>
 
 #include <libnvme.h>
 
-#include "common.h"
-#include "nvme.h"
-#include "plugin.h"
+#include <ccan/endian/endian.h>
+#include <shared/compiler-attributes-util.h>
+
+#include "cleanup.h"
+#include "global-ctx.h"
 #include "nvme-print.h"
+#include "plugin.h"
 #include "solidigm-garbage-collection.h"
 #include "solidigm-util.h"
 
@@ -83,7 +86,7 @@ int solidigm_get_garbage_collection_log(int argc, char **argv, struct command *a
 
 	err = validate_output_format(nvme_args.output_format, &flags);
 	if (err) {
-		fprintf(stderr, "Invalid output format '%s'\n",
+		nvme_show_error("Invalid output format '%s'",
 			nvme_args.output_format);
 		return -EINVAL;
 	}

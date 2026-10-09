@@ -5,37 +5,6 @@
 
 libnvme tree object interface
 
-.. c:function:: void libnvme_set_application (struct libnvme_global_ctx *ctx, const char *a)
-
-   Specify managing application
-
-**Parameters**
-
-``struct libnvme_global_ctx *ctx``
-  struct libnvme_global_ctx object
-
-``const char *a``
-  Application string
-
-**Description**
-
-Sets the managing application string for **r**.
-
-
-.. c:function:: const char * libnvme_get_application (struct libnvme_global_ctx *ctx)
-
-   Get managing application
-
-**Parameters**
-
-``struct libnvme_global_ctx *ctx``
-  struct libnvme_global_ctx object
-
-**Description**
-
-Returns the managing application string for **r** or NULL if not set.
-
-
 .. c:function:: void libnvme_skip_namespaces (struct libnvme_global_ctx *ctx)
 
    Skip namespace scanning
@@ -66,7 +35,7 @@ of opened nvme devices. This API can be used to close and
 clear all cached fds in the tree.
 
 
-.. c:function:: libnvme_host_t libnvme_first_host (struct libnvme_global_ctx *ctx)
+.. c:function:: struct libnvme_host * libnvme_first_host (struct libnvme_global_ctx *ctx)
 
    Start host iterator
 
@@ -77,10 +46,10 @@ clear all cached fds in the tree.
 
 **Return**
 
-First :c:type:`libnvme_host_t` object in an iterator
+First :c:type:`struct libnvme_host <libnvme_host>` object in an iterator
 
 
-.. c:function:: libnvme_host_t libnvme_next_host (struct libnvme_global_ctx *ctx, libnvme_host_t h)
+.. c:function:: struct libnvme_host * libnvme_next_host (struct libnvme_global_ctx *ctx, struct libnvme_host *h)
 
    Next host iterator
 
@@ -89,67 +58,29 @@ First :c:type:`libnvme_host_t` object in an iterator
 ``struct libnvme_global_ctx *ctx``
   struct libnvme_global_ctx object
 
-``libnvme_host_t h``
-  Previous :c:type:`libnvme_host_t` iterator
+``struct libnvme_host *h``
+  Previous :c:type:`struct libnvme_host <libnvme_host>` iterator
 
 **Return**
 
-Next :c:type:`libnvme_host_t` object in an iterator
+Next :c:type:`struct libnvme_host <libnvme_host>` object in an iterator
 
 
-.. c:function:: struct libnvme_global_ctx * libnvme_host_get_global_ctx (libnvme_host_t h)
+.. c:function:: struct libnvme_global_ctx * libnvme_host_get_global_ctx (struct libnvme_host *h)
 
    Returns libnvme_global_ctx object
 
 **Parameters**
 
-``libnvme_host_t h``
-  :c:type:`libnvme_host_t` object
+``struct libnvme_host *h``
+  :c:type:`struct libnvme_host <libnvme_host>` object
 
 **Return**
 
 :c:type:`struct libnvme_global_ctx <libnvme_global_ctx>` object from **h**
 
 
-.. c:function:: void libnvme_host_set_pdc_enabled (libnvme_host_t h, bool enabled)
-
-   Set Persistent Discovery Controller flag
-
-**Parameters**
-
-``libnvme_host_t h``
-  Host for which the falg should be set
-
-``bool enabled``
-  The bool to set the enabled flag
-
-**Description**
-
-When libnvme_host_set_pdc_enabled() is not used to set the PDC flag,
-libnvme_host_is_pdc_enabled() will return the default value which was
-passed into the function and not the undefined flag value.
-
-
-.. c:function:: bool libnvme_host_is_pdc_enabled (libnvme_host_t h, bool fallback)
-
-   Is Persistenct Discovery Controller enabled
-
-**Parameters**
-
-``libnvme_host_t h``
-  Host which to check if PDC is enabled
-
-``bool fallback``
-  The fallback default value of the flag when
-  **libnvme_host_set_pdc_enabled** has not be used
-  to set the flag.
-
-**Return**
-
-true if PDC is enabled for **h**, else false
-
-
-.. c:function:: int libnvme_get_host (struct libnvme_global_ctx *ctx, const char *hostnqn, const char *hostid, libnvme_host_t *h)
+.. c:function:: int libnvme_get_host (struct libnvme_global_ctx *ctx, const char *hostnqn, const char *hostid, struct libnvme_host **h)
 
    Returns a host object
 
@@ -164,8 +95,8 @@ true if PDC is enabled for **h**, else false
 ``const char *hostid``
   Host ID (optional)
 
-``libnvme_host_t *h``
-  :c:type:`libnvme_host_t` object to return
+``struct libnvme_host **h``
+  :c:type:`struct libnvme_host <libnvme_host>` object to return
 
 **Description**
 
@@ -174,91 +105,43 @@ hostnqn/hostid are NULL.
 
 **Return**
 
-0 on success or negative error code otherwise
+0 on success, negative error code otherwise.
 
 
-.. c:function:: int libnvme_host_get_ids (struct libnvme_global_ctx *ctx, const char *hostnqn_arg, const char *hostid_arg, char **hostnqn, char **hostid)
-
-   Retrieve host ids from various sources
-
-**Parameters**
-
-``struct libnvme_global_ctx *ctx``
-  struct libnvme_global_ctx object
-
-``const char *hostnqn_arg``
-  Input hostnqn (command line) argument
-
-``const char *hostid_arg``
-  Input hostid (command line) argument
-
-``char **hostnqn``
-  Output hostnqn
-
-``char **hostid``
-  Output hostid
-
-**Description**
-
-libnvme_host_get_ids figures out which hostnqn/hostid is to be used.
-There are several sources where this information can be retrieved.
-
-The order is:
-
- - Start with informartion from DMI or device-tree
- - Override hostnqn and hostid from /etc/nvme files
- - Override hostnqn or hostid with values from JSON
-   configuration file. The first host entry in the file is
-   considered the default host.
- - Override hostnqn or hostid with values from the command line
-   (**hostnqn_arg**, **hostid_arg**).
-
- If the IDs are still NULL after the lookup algorithm, the function
- will generate random IDs.
-
- The function also verifies that hostnqn and hostid matches. The Linux
- NVMe implementation expects a 1:1 matching between the IDs.
-
-**Return**
-
-0 on success (**hostnqn** and **hostid** contain valid strings
- which the caller needs to free), or negative error code otherwise.
-
-
-.. c:function:: libnvme_subsystem_t libnvme_first_subsystem (libnvme_host_t h)
+.. c:function:: struct libnvme_subsystem * libnvme_first_subsystem (struct libnvme_host *h)
 
    Start subsystem iterator
 
 **Parameters**
 
-``libnvme_host_t h``
-  :c:type:`libnvme_host_t` object
+``struct libnvme_host *h``
+  :c:type:`struct libnvme_host <libnvme_host>` object
 
 **Return**
 
-first :c:type:`libnvme_subsystem_t` object in an iterator
+first :c:type:`struct libnvme_subsystem <libnvme_subsystem>` object in an iterator
 
 
-.. c:function:: libnvme_subsystem_t libnvme_next_subsystem (libnvme_host_t h, libnvme_subsystem_t s)
+.. c:function:: struct libnvme_subsystem * libnvme_next_subsystem (struct libnvme_host *h, struct libnvme_subsystem *s)
 
    Next subsystem iterator
 
 **Parameters**
 
-``libnvme_host_t h``
-  :c:type:`libnvme_host_t` object
+``struct libnvme_host *h``
+  :c:type:`struct libnvme_host <libnvme_host>` object
 
-``libnvme_subsystem_t s``
-  Previous :c:type:`libnvme_subsystem_t` iterator
+``struct libnvme_subsystem *s``
+  Previous :c:type:`struct libnvme_subsystem <libnvme_subsystem>` iterator
 
 **Return**
 
-next :c:type:`libnvme_subsystem_t` object in an iterator
+next :c:type:`struct libnvme_subsystem <libnvme_subsystem>` object in an iterator
 
 
 .. c:function:: int libnvme_get_subsystem (struct libnvme_global_ctx *ctx, struct libnvme_host *h, const char *name, const char *subsysnqn, struct libnvme_subsystem **s)
 
-   Returns libnvme_subsystem_t object
+   Returns struct libnvme_subsystem object
 
 **Parameters**
 
@@ -266,7 +149,7 @@ next :c:type:`libnvme_subsystem_t` object in an iterator
   struct libnvme_global_ctx object
 
 ``struct libnvme_host *h``
-  :c:type:`libnvme_host_t` object
+  :c:type:`struct libnvme_host <libnvme_host>` object
 
 ``const char *name``
   Name of the subsystem (may be NULL)
@@ -275,11 +158,11 @@ next :c:type:`libnvme_subsystem_t` object in an iterator
   Subsystem NQN
 
 ``struct libnvme_subsystem **s``
-  libnvme_subsystem_t object
+  struct libnvme_subsystem object
 
 **Description**
 
-Returns an :c:type:`libnvme_subsystem_t` object in **h** base on **name** (if present)
+Returns an :c:type:`struct libnvme_subsystem <libnvme_subsystem>` object in **h** base on **name** (if present)
 and **subsysnqn** or create one if not found.
 
 
@@ -297,106 +180,106 @@ and **subsysnqn** or create one if not found.
 Frees **s** and all related objects.
 
 
-.. c:function:: libnvme_host_t libnvme_subsystem_get_host (libnvme_subsystem_t s)
+.. c:function:: struct libnvme_host * libnvme_subsystem_get_host (struct libnvme_subsystem *s)
 
-   Returns libnvme_host_t object
+   Returns struct libnvme_host object
 
 **Parameters**
 
-``libnvme_subsystem_t s``
+``struct libnvme_subsystem *s``
   subsystem
 
 **Return**
 
-:c:type:`libnvme_host_t` object from **s**
+:c:type:`struct libnvme_host <libnvme_host>` object from **s**
 
 
-.. c:function:: libnvme_ns_t libnvme_ctrl_first_ns (libnvme_ctrl_t c)
+.. c:function:: struct libnvme_ns * libnvme_ctrl_first_ns (struct libnvme_ctrl *c)
 
    Start namespace iterator
 
 **Parameters**
 
-``libnvme_ctrl_t c``
+``struct libnvme_ctrl *c``
   Controller instance
 
 **Return**
 
-First :c:type:`libnvme_ns_t` object of an **c** iterator
+First :c:type:`struct libnvme_ns <libnvme_ns>` object of an **c** iterator
 
 
-.. c:function:: libnvme_ns_t libnvme_ctrl_next_ns (libnvme_ctrl_t c, libnvme_ns_t n)
+.. c:function:: struct libnvme_ns * libnvme_ctrl_next_ns (struct libnvme_ctrl *c, struct libnvme_ns *n)
 
    Next namespace iterator
 
 **Parameters**
 
-``libnvme_ctrl_t c``
+``struct libnvme_ctrl *c``
   Controller instance
 
-``libnvme_ns_t n``
-  Previous libnvme_ns_t iterator
+``struct libnvme_ns *n``
+  Previous struct libnvme_ns iterator
 
 **Return**
 
-Next libnvme_ns_t object of an **c** iterator
+Next struct libnvme_ns object of an **c** iterator
 
 
-.. c:function:: libnvme_path_t libnvme_ctrl_first_path (libnvme_ctrl_t c)
+.. c:function:: struct libnvme_path * libnvme_ctrl_first_path (struct libnvme_ctrl *c)
 
    Start path iterator
 
 **Parameters**
 
-``libnvme_ctrl_t c``
+``struct libnvme_ctrl *c``
   Controller instance
 
 **Return**
 
-First :c:type:`libnvme_path_t` object of an **c** iterator
+First :c:type:`struct libnvme_path <libnvme_path>` object of an **c** iterator
 
 
-.. c:function:: libnvme_path_t libnvme_ctrl_next_path (libnvme_ctrl_t c, libnvme_path_t p)
+.. c:function:: struct libnvme_path * libnvme_ctrl_next_path (struct libnvme_ctrl *c, struct libnvme_path *p)
 
    Next path iterator
 
 **Parameters**
 
-``libnvme_ctrl_t c``
+``struct libnvme_ctrl *c``
   Controller instance
 
-``libnvme_path_t p``
-  Previous :c:type:`libnvme_path_t` object of an **c** iterator
+``struct libnvme_path *p``
+  Previous :c:type:`struct libnvme_path <libnvme_path>` object of an **c** iterator
 
 **Return**
 
-Next :c:type:`libnvme_path_t` object of an **c** iterator
+Next :c:type:`struct libnvme_path <libnvme_path>` object of an **c** iterator
 
 
-.. c:function:: libnvme_ctrl_t libnvme_subsystem_first_ctrl (libnvme_subsystem_t s)
+.. c:function:: struct libnvme_ctrl * libnvme_subsystem_first_ctrl (struct libnvme_subsystem *s)
 
    First ctrl iterator
 
 **Parameters**
 
-``libnvme_subsystem_t s``
-  :c:type:`libnvme_subsystem_t` object
+``struct libnvme_subsystem *s``
+  :c:type:`struct libnvme_subsystem <libnvme_subsystem>` object
 
 **Return**
 
 First controller of an **s** iterator
 
 
-.. c:function:: libnvme_ctrl_t libnvme_subsystem_next_ctrl (libnvme_subsystem_t s, libnvme_ctrl_t c)
+.. c:function:: struct libnvme_ctrl * libnvme_subsystem_next_ctrl (struct libnvme_subsystem *s, struct libnvme_ctrl *c)
 
    Next ctrl iterator
 
 **Parameters**
 
-``libnvme_subsystem_t s``
-  :c:type:`libnvme_subsystem_t` object
+``struct libnvme_subsystem *s``
+  :c:type:`struct libnvme_subsystem <libnvme_subsystem>` object
 
-``libnvme_ctrl_t c``
+``struct libnvme_ctrl *c``
   Previous controller instance of an **s** iterator
 
 **Return**
@@ -404,104 +287,66 @@ First controller of an **s** iterator
 Next controller of an **s** iterator
 
 
-.. c:function:: libnvme_path_t libnvme_namespace_first_path (libnvme_ns_t ns)
+.. c:function:: struct libnvme_path * libnvme_namespace_first_path (struct libnvme_ns *ns)
 
    Start path iterator
 
 **Parameters**
 
-``libnvme_ns_t ns``
+``struct libnvme_ns *ns``
   Namespace instance
 
 **Return**
 
-First :c:type:`libnvme_path_t` object of an **ns** iterator
+First :c:type:`struct libnvme_path <libnvme_path>` object of an **ns** iterator
 
 
-.. c:function:: libnvme_path_t libnvme_namespace_next_path (libnvme_ns_t ns, libnvme_path_t p)
+.. c:function:: struct libnvme_path * libnvme_namespace_next_path (struct libnvme_ns *ns, struct libnvme_path *p)
 
    Next path iterator
 
 **Parameters**
 
-``libnvme_ns_t ns``
+``struct libnvme_ns *ns``
   Namespace instance
 
-``libnvme_path_t p``
-  Previous :c:type:`libnvme_path_t` object of an **ns** iterator
+``struct libnvme_path *p``
+  Previous :c:type:`struct libnvme_path <libnvme_path>` object of an **ns** iterator
 
 **Return**
 
-Next :c:type:`libnvme_path_t` object of an **ns** iterator
+Next :c:type:`struct libnvme_path <libnvme_path>` object of an **ns** iterator
 
 
-.. c:function:: bool libnvme_ctrl_match_config (struct libnvme_ctrl *c, const char *transport, const char *traddr, const char *trsvcid, const char *subsysnqn, const char *host_traddr, const char *host_iface)
-
-   Check if ctrl **c** matches config params
-
-**Parameters**
-
-``struct libnvme_ctrl *c``
-  An existing controller instance
-
-``const char *transport``
-  Transport name
-
-``const char *traddr``
-  Transport address
-
-``const char *trsvcid``
-  Transport service identifier
-
-``const char *subsysnqn``
-  Subsystem NQN
-
-``const char *host_traddr``
-  Host transport address
-
-``const char *host_iface``
-  Host interface name
-
-**Description**
-
-Check that controller **c** matches parameters: **transport**, **traddr**,
-**trsvcid**, **subsysnqn**, **host_traddr**, and **host_iface**. Parameters set
-to NULL will be ignored.
-
-**Return**
-
-true if there's a match, false otherwise.
-
-
-.. c:function:: libnvme_ns_t libnvme_subsystem_first_ns (libnvme_subsystem_t s)
+.. c:function:: struct libnvme_ns * libnvme_subsystem_first_ns (struct libnvme_subsystem *s)
 
    Start namespace iterator
 
 **Parameters**
 
-``libnvme_subsystem_t s``
-  :c:type:`libnvme_subsystem_t` object
+``struct libnvme_subsystem *s``
+  :c:type:`struct libnvme_subsystem <libnvme_subsystem>` object
 
 **Return**
 
-First :c:type:`libnvme_ns_t` object of an **s** iterator
+First :c:type:`struct libnvme_ns <libnvme_ns>` object of an **s** iterator
 
 
-.. c:function:: libnvme_ns_t libnvme_subsystem_next_ns (libnvme_subsystem_t s, libnvme_ns_t n)
+.. c:function:: struct libnvme_ns * libnvme_subsystem_next_ns (struct libnvme_subsystem *s, struct libnvme_ns *n)
 
    Next namespace iterator
 
 **Parameters**
 
-``libnvme_subsystem_t s``
-  :c:type:`libnvme_subsystem_t` object
+``struct libnvme_subsystem *s``
+  :c:type:`struct libnvme_subsystem <libnvme_subsystem>` object
 
-``libnvme_ns_t n``
-  Previous :c:type:`libnvme_ns_t` iterator
+``struct libnvme_ns *n``
+  Previous :c:type:`struct libnvme_ns <libnvme_ns>` iterator
 
 **Return**
 
-Next :c:type:`libnvme_ns_t` object of an **s** iterator
+Next :c:type:`struct libnvme_ns <libnvme_ns>` object of an **s** iterator
 
 
 .. c:macro:: libnvme_for_each_host_safe
@@ -516,10 +361,10 @@ Next :c:type:`libnvme_ns_t` object of an **s** iterator
   :c:type:`libnvme_root_t` object
 
 ``h``
-  :c:type:`libnvme_host_t` object
+  :c:type:`struct libnvme_host <libnvme_host>` object
 
 ``_h``
-  Temporary :c:type:`libnvme_host_t` object
+  Temporary :c:type:`struct libnvme_host <libnvme_host>` object
 
 
 .. c:macro:: libnvme_for_each_host
@@ -534,7 +379,7 @@ Next :c:type:`libnvme_ns_t` object of an **s** iterator
   :c:type:`libnvme_root_t` object
 
 ``h``
-  :c:type:`libnvme_host_t` object
+  :c:type:`struct libnvme_host <libnvme_host>` object
 
 
 .. c:macro:: libnvme_for_each_subsystem_safe
@@ -546,13 +391,13 @@ Next :c:type:`libnvme_ns_t` object of an **s** iterator
 **Parameters**
 
 ``h``
-  :c:type:`libnvme_host_t` object
+  :c:type:`struct libnvme_host <libnvme_host>` object
 
 ``s``
-  :c:type:`libnvme_subsystem_t` object
+  :c:type:`struct libnvme_subsystem <libnvme_subsystem>` object
 
 ``_s``
-  Temporary :c:type:`libnvme_subsystem_t` object
+  Temporary :c:type:`struct libnvme_subsystem <libnvme_subsystem>` object
 
 
 .. c:macro:: libnvme_for_each_subsystem
@@ -564,10 +409,10 @@ Next :c:type:`libnvme_ns_t` object of an **s** iterator
 **Parameters**
 
 ``h``
-  :c:type:`libnvme_host_t` object
+  :c:type:`struct libnvme_host <libnvme_host>` object
 
 ``s``
-  :c:type:`libnvme_subsystem_t` object
+  :c:type:`struct libnvme_subsystem <libnvme_subsystem>` object
 
 
 .. c:macro:: libnvme_subsystem_for_each_ctrl_safe
@@ -579,13 +424,13 @@ Next :c:type:`libnvme_ns_t` object of an **s** iterator
 **Parameters**
 
 ``s``
-  :c:type:`libnvme_subsystem_t` object
+  :c:type:`struct libnvme_subsystem <libnvme_subsystem>` object
 
 ``c``
   Controller instance
 
 ``_c``
-  A :c:type:`libnvme_ctrl_t_node` to use as temporary storage
+  A :c:type:`struct libnvme_ctrl <libnvme_ctrl>` node to use as temporary storage
 
 
 .. c:macro:: libnvme_subsystem_for_each_ctrl
@@ -597,7 +442,7 @@ Next :c:type:`libnvme_ns_t` object of an **s** iterator
 **Parameters**
 
 ``s``
-  :c:type:`libnvme_subsystem_t` object
+  :c:type:`struct libnvme_subsystem <libnvme_subsystem>` object
 
 ``c``
   Controller instance
@@ -615,10 +460,10 @@ Next :c:type:`libnvme_ns_t` object of an **s** iterator
   Controller instance
 
 ``n``
-  :c:type:`libnvme_ns_t` object
+  :c:type:`struct libnvme_ns <libnvme_ns>` object
 
 ``_n``
-  A :c:type:`libnvme_ns_t_node` to use as temporary storage
+  A :c:type:`struct libnvme_ns <libnvme_ns>` node to use as temporary storage
 
 
 .. c:macro:: libnvme_ctrl_for_each_ns
@@ -633,7 +478,7 @@ Next :c:type:`libnvme_ns_t` object of an **s** iterator
   Controller instance
 
 ``n``
-  :c:type:`libnvme_ns_t` object
+  :c:type:`struct libnvme_ns <libnvme_ns>` object
 
 
 .. c:macro:: libnvme_ctrl_for_each_path_safe
@@ -648,10 +493,10 @@ Next :c:type:`libnvme_ns_t` object of an **s** iterator
   Controller instance
 
 ``p``
-  :c:type:`libnvme_path_t` object
+  :c:type:`struct libnvme_path <libnvme_path>` object
 
 ``_p``
-  A :c:type:`libnvme_path_t_node` to use as temporary storage
+  A :c:type:`struct libnvme_path <libnvme_path>` node to use as temporary storage
 
 
 .. c:macro:: libnvme_ctrl_for_each_path
@@ -666,7 +511,7 @@ Next :c:type:`libnvme_ns_t` object of an **s** iterator
   Controller instance
 
 ``p``
-  :c:type:`libnvme_path_t` object
+  :c:type:`struct libnvme_path <libnvme_path>` object
 
 
 .. c:macro:: libnvme_subsystem_for_each_ns_safe
@@ -678,13 +523,13 @@ Next :c:type:`libnvme_ns_t` object of an **s** iterator
 **Parameters**
 
 ``s``
-  :c:type:`libnvme_subsystem_t` object
+  :c:type:`struct libnvme_subsystem <libnvme_subsystem>` object
 
 ``n``
-  :c:type:`libnvme_ns_t` object
+  :c:type:`struct libnvme_ns <libnvme_ns>` object
 
 ``_n``
-  A :c:type:`libnvme_ns_t_node` to use as temporary storage
+  A :c:type:`struct libnvme_ns <libnvme_ns>` node to use as temporary storage
 
 
 .. c:macro:: libnvme_subsystem_for_each_ns
@@ -696,10 +541,10 @@ Next :c:type:`libnvme_ns_t` object of an **s** iterator
 **Parameters**
 
 ``s``
-  :c:type:`libnvme_subsystem_t` object
+  :c:type:`struct libnvme_subsystem <libnvme_subsystem>` object
 
 ``n``
-  :c:type:`libnvme_ns_t` object
+  :c:type:`struct libnvme_ns <libnvme_ns>` object
 
 
 .. c:macro:: libnvme_namespace_for_each_path_safe
@@ -714,10 +559,10 @@ Next :c:type:`libnvme_ns_t` object of an **s** iterator
   Namespace instance
 
 ``p``
-  :c:type:`libnvme_path_t` object
+  :c:type:`struct libnvme_path <libnvme_path>` object
 
 ``_p``
-  A :c:type:`libnvme_path_t_node` to use as temporary storage
+  A :c:type:`struct libnvme_path <libnvme_path>` node to use as temporary storage
 
 
 .. c:macro:: libnvme_namespace_for_each_path
@@ -732,89 +577,16 @@ Next :c:type:`libnvme_ns_t` object of an **s** iterator
   Namespace instance
 
 ``p``
-  :c:type:`libnvme_path_t` object
+  :c:type:`struct libnvme_path <libnvme_path>` object
 
 
-.. c:function:: enum nvme_csi libnvme_ns_get_csi (libnvme_ns_t n)
-
-   Command set identifier of a namespace
-
-**Parameters**
-
-``libnvme_ns_t n``
-  Namespace instance
-
-**Return**
-
-The namespace's command set identifier in use
-
-
-.. c:function:: const uint8_t * libnvme_ns_get_eui64 (libnvme_ns_t n)
-
-   64-bit eui of a namespace
-
-**Parameters**
-
-``libnvme_ns_t n``
-  Namespace instance
-
-**Return**
-
-A pointer to the 64-bit eui
-
-
-.. c:function:: const uint8_t * libnvme_ns_get_nguid (libnvme_ns_t n)
-
-   128-bit nguid of a namespace
-
-**Parameters**
-
-``libnvme_ns_t n``
-  Namespace instance
-
-**Return**
-
-A pointer to the 128-bit nguid
-
-
-.. c:function:: void libnvme_ns_get_uuid (libnvme_ns_t n, unsigned char out[NVME_UUID_LEN])
-
-   UUID of a namespace
-
-**Parameters**
-
-``libnvme_ns_t n``
-  Namespace instance
-
-``unsigned char out[NVME_UUID_LEN]``
-  buffer for the UUID
-
-**Description**
-
-Copies the namespace's uuid into **out**
-
-
-.. c:function:: const char * libnvme_ns_get_generic_name (libnvme_ns_t n)
-
-   Returns name of generic namespace chardev.
-
-**Parameters**
-
-``libnvme_ns_t n``
-  Namespace instance
-
-**Return**
-
-Name of generic namespace chardev
-
-
-.. c:function:: const char * libnvme_ns_get_firmware (libnvme_ns_t n)
+.. c:function:: const char * libnvme_ns_get_firmware (struct libnvme_ns *n)
 
    Firmware string of a namespace
 
 **Parameters**
 
-``libnvme_ns_t n``
+``struct libnvme_ns *n``
   Namespace instance
 
 **Return**
@@ -822,13 +594,13 @@ Name of generic namespace chardev
 Firmware string of **n**
 
 
-.. c:function:: const char * libnvme_ns_get_serial (libnvme_ns_t n)
+.. c:function:: const char * libnvme_ns_get_serial (struct libnvme_ns *n)
 
    Serial number of a namespace
 
 **Parameters**
 
-``libnvme_ns_t n``
+``struct libnvme_ns *n``
   Namespace instance
 
 **Return**
@@ -836,13 +608,13 @@ Firmware string of **n**
 Serial number string of **n**
 
 
-.. c:function:: const char * libnvme_ns_get_model (libnvme_ns_t n)
+.. c:function:: const char * libnvme_ns_get_model (struct libnvme_ns *n)
 
    Model of a namespace
 
 **Parameters**
 
-``libnvme_ns_t n``
+``struct libnvme_ns *n``
   Namespace instance
 
 **Return**
@@ -850,36 +622,36 @@ Serial number string of **n**
 Model string of **n**
 
 
-.. c:function:: libnvme_subsystem_t libnvme_ns_get_subsystem (libnvme_ns_t n)
+.. c:function:: struct libnvme_subsystem * libnvme_ns_get_subsystem (struct libnvme_ns *n)
 
-   :c:type:`libnvme_subsystem_t` of a namespace
+   :c:type:`struct libnvme_subsystem <libnvme_subsystem>` of a namespace
 
 **Parameters**
 
-``libnvme_ns_t n``
+``struct libnvme_ns *n``
   Namespace instance
 
 **Return**
 
-libnvme_subsystem_t object of **n**
+struct libnvme_subsystem object of **n**
 
 
-.. c:function:: libnvme_ctrl_t libnvme_ns_get_ctrl (libnvme_ns_t n)
+.. c:function:: struct libnvme_ctrl * libnvme_ns_get_ctrl (struct libnvme_ns *n)
 
-   :c:type:`libnvme_ctrl_t` of a namespace
+   :c:type:`struct libnvme_ctrl <libnvme_ctrl>` of a namespace
 
 **Parameters**
 
-``libnvme_ns_t n``
+``struct libnvme_ns *n``
   Namespace instance
 
 **Description**
 
-libnvme_ctrl_t object may be NULL for a multipathed namespace
+struct libnvme_ctrl object may be NULL for a multipathed namespace
 
 **Return**
 
-libnvme_ctrl_t object of **n** if present
+struct libnvme_ctrl object of **n** if present
 
 
 .. c:function:: void libnvme_free_ns (struct libnvme_ns *n)
@@ -892,13 +664,13 @@ libnvme_ctrl_t object of **n** if present
   Namespace instance
 
 
-.. c:function:: int libnvme_ns_read (libnvme_ns_t n, void *buf, off_t offset, size_t count)
+.. c:function:: int libnvme_ns_read (struct libnvme_ns *n, void *buf, off_t offset, size_t count)
 
    Read from a namespace
 
 **Parameters**
 
-``libnvme_ns_t n``
+``struct libnvme_ns *n``
   Namespace instance
 
 ``void *buf``
@@ -915,13 +687,13 @@ libnvme_ctrl_t object of **n** if present
 Number of sectors read or -1 on error.
 
 
-.. c:function:: int libnvme_ns_write (libnvme_ns_t n, void *buf, off_t offset, size_t count)
+.. c:function:: int libnvme_ns_write (struct libnvme_ns *n, void *buf, off_t offset, size_t count)
 
    Write to a namespace
 
 **Parameters**
 
-``libnvme_ns_t n``
+``struct libnvme_ns *n``
   Namespace instance
 
 ``void *buf``
@@ -938,13 +710,13 @@ Number of sectors read or -1 on error.
 Number of sectors written or -1 on error
 
 
-.. c:function:: int libnvme_ns_verify (libnvme_ns_t n, off_t offset, size_t count)
+.. c:function:: int libnvme_ns_verify (struct libnvme_ns *n, off_t offset, size_t count)
 
    Verify data on a namespace
 
 **Parameters**
 
-``libnvme_ns_t n``
+``struct libnvme_ns *n``
   Namespace instance
 
 ``off_t offset``
@@ -958,13 +730,13 @@ Number of sectors written or -1 on error
 Number of sectors verified
 
 
-.. c:function:: int libnvme_ns_compare (libnvme_ns_t n, void *buf, off_t offset, size_t count)
+.. c:function:: int libnvme_ns_compare (struct libnvme_ns *n, void *buf, off_t offset, size_t count)
 
    Compare data on a namespace
 
 **Parameters**
 
-``libnvme_ns_t n``
+``struct libnvme_ns *n``
   Namespace instance
 
 ``void *buf``
@@ -981,13 +753,13 @@ Number of sectors verified
 Number of sectors compared
 
 
-.. c:function:: int libnvme_ns_write_zeros (libnvme_ns_t n, off_t offset, size_t count)
+.. c:function:: int libnvme_ns_write_zeros (struct libnvme_ns *n, off_t offset, size_t count)
 
    Write zeros to a namespace
 
 **Parameters**
 
-``libnvme_ns_t n``
+``struct libnvme_ns *n``
   Namespace instance
 
 ``off_t offset``
@@ -1001,13 +773,13 @@ Number of sectors compared
 Number of sectors written
 
 
-.. c:function:: int libnvme_ns_write_uncorrectable (libnvme_ns_t n, off_t offset, size_t count)
+.. c:function:: int libnvme_ns_write_uncorrectable (struct libnvme_ns *n, off_t offset, size_t count)
 
    Issus a 'write uncorrectable' command
 
 **Parameters**
 
-``libnvme_ns_t n``
+``struct libnvme_ns *n``
   Namespace instance
 
 ``off_t offset``
@@ -1021,27 +793,27 @@ Number of sectors written
 Number of sectors written
 
 
-.. c:function:: int libnvme_ns_flush (libnvme_ns_t n)
+.. c:function:: int libnvme_ns_flush (struct libnvme_ns *n)
 
    Flush data to a namespace
 
 **Parameters**
 
-``libnvme_ns_t n``
+``struct libnvme_ns *n``
   Namespace instance
 
 **Return**
 
-0 on success, -1 on error.
+0 on success, negative error code otherwise.
 
 
-.. c:function:: int libnvme_ns_identify (libnvme_ns_t n, struct nvme_id_ns *ns)
+.. c:function:: int libnvme_ns_identify (struct libnvme_ns *n, struct nvme_id_ns *ns)
 
    Issue an 'identify namespace' command
 
 **Parameters**
 
-``libnvme_ns_t n``
+``struct libnvme_ns *n``
   Namespace instance
 
 ``struct nvme_id_ns *ns``
@@ -1054,16 +826,16 @@ into **ns**.
 
 **Return**
 
-0 on success, -1 on error.
+0 on success, negative error code otherwise.
 
 
-.. c:function:: int libnvme_ns_identify_descs (libnvme_ns_t n, struct nvme_ns_id_desc *descs)
+.. c:function:: int libnvme_ns_identify_descs (struct libnvme_ns *n, struct nvme_ns_id_desc *descs)
 
    Issue an 'identify descriptors' command
 
 **Parameters**
 
-``libnvme_ns_t n``
+``struct libnvme_ns *n``
   Namespace instance
 
 ``struct nvme_ns_id_desc *descs``
@@ -1076,58 +848,202 @@ into **descs**.
 
 **Return**
 
-0 on success, -1 on error.
+0 on success, negative error code otherwise.
 
 
-.. c:function:: int libnvme_path_get_queue_depth (libnvme_path_t p)
+.. c:function:: struct libnvme_ctrl * libnvme_path_get_ctrl (struct libnvme_path *p)
 
-   Queue depth of an libnvme_path_t object
-
-**Parameters**
-
-``libnvme_path_t p``
-  :c:type:`libnvme_path_t` object
-
-**Return**
-
-Queue depth of **p**
-
-
-.. c:function:: libnvme_ctrl_t libnvme_path_get_ctrl (libnvme_path_t p)
-
-   Parent controller of an libnvme_path_t object
+   Parent controller of an struct libnvme_path object
 
 **Parameters**
 
-``libnvme_path_t p``
-  :c:type:`libnvme_path_t` object
+``struct libnvme_path *p``
+  :c:type:`struct libnvme_path <libnvme_path>` object
 
 **Return**
 
 Parent controller if present
 
 
-.. c:function:: libnvme_ns_t libnvme_path_get_ns (libnvme_path_t p)
+.. c:function:: struct libnvme_ns * libnvme_path_get_ns (struct libnvme_path *p)
 
-   Parent namespace of an libnvme_path_t object
+   Parent namespace of an struct libnvme_path object
 
 **Parameters**
 
-``libnvme_path_t p``
-  :c:type:`libnvme_path_t` object
+``struct libnvme_path *p``
+  :c:type:`struct libnvme_path <libnvme_path>` object
 
 **Return**
 
 Parent namespace if present
 
 
-.. c:function:: struct libnvme_transport_handle * libnvme_ctrl_get_transport_handle (libnvme_ctrl_t c)
+.. c:function:: void libnvme_path_reset_stat (struct libnvme_path *p)
+
+   Resets namespace path nvme stat
+
+**Parameters**
+
+``struct libnvme_path *p``
+  :c:type:`struct libnvme_path <libnvme_path>` object
+
+
+.. c:function:: int libnvme_path_update_stat (struct libnvme_path *p, bool diffstat)
+
+   Update stat of an nvme_path_t object
+
+**Parameters**
+
+``struct libnvme_path *p``
+  :c:type:`struct libnvme_path <libnvme_path>` object
+
+``bool diffstat``
+  If set to true then getters return the diff stat otherwise
+  return the current absolute stat
+
+**Return**
+
+0 on success, negative error code otherwise.
+
+
+.. c:function:: unsigned long libnvme_path_get_read_ios (struct libnvme_path *p)
+
+   Calculate and return read IOs
+
+**Parameters**
+
+``struct libnvme_path *p``
+  :c:type:`struct libnvme_path <libnvme_path>` object
+
+**Return**
+
+Num of read IOs processed between two stat samples
+
+
+.. c:function:: unsigned long libnvme_path_get_write_ios (struct libnvme_path *p)
+
+   Get write I/Os
+
+**Parameters**
+
+``struct libnvme_path *p``
+  :c:type:`struct libnvme_path <libnvme_path>` object
+
+**Return**
+
+Num of write I/Os processed between two stat samples
+
+
+.. c:function:: unsigned int libnvme_path_get_read_ticks (struct libnvme_path *p)
+
+   Get read I/O ticks
+
+**Parameters**
+
+``struct libnvme_path *p``
+  :c:type:`struct libnvme_path <libnvme_path>` object
+
+**Return**
+
+Time, in milliseconds, sepnt processing read I/O requests
+             between two stat samples
+
+
+.. c:function:: unsigned long long libnvme_path_get_read_sectors (struct libnvme_path *p)
+
+   Get read I/O sectors
+
+**Parameters**
+
+``struct libnvme_path *p``
+  :c:type:`struct libnvme_path <libnvme_path>` object
+
+**Return**
+
+Number of sectors read from the device between two stat samples
+
+
+.. c:function:: unsigned long long libnvme_path_get_write_sectors (struct libnvme_path *p)
+
+   Get write I/O sectors
+
+**Parameters**
+
+``struct libnvme_path *p``
+  :c:type:`struct libnvme_path <libnvme_path>` object
+
+**Return**
+
+Num of sectors written to the device between two stat samples
+
+
+.. c:function:: unsigned int libnvme_path_get_write_ticks (struct libnvme_path *p)
+
+   Get write I/O ticks
+
+**Parameters**
+
+``struct libnvme_path *p``
+  :c:type:`struct libnvme_path <libnvme_path>` object
+
+**Return**
+
+Time, in milliseconds, sepnt processing write I/O requests
+             between two stat samples
+
+
+.. c:function:: double libnvme_path_get_stat_interval (struct libnvme_path *p)
+
+   Get interval between two stat samples
+
+**Parameters**
+
+``struct libnvme_path *p``
+  :c:type:`struct libnvme_path <libnvme_path>` object
+
+**Return**
+
+Interval, in milliseconds between collection of two consecutive
+             stat samples
+
+
+.. c:function:: unsigned int libnvme_path_get_io_ticks (struct libnvme_path *p)
+
+   Get I/O ticks
+
+**Parameters**
+
+``struct libnvme_path *p``
+  :c:type:`struct libnvme_path <libnvme_path>` object
+
+**Return**
+
+Time consumed, in milliseconds, processing I/O requests between
+             two stat samples
+
+
+.. c:function:: unsigned int libnvme_path_get_inflights (struct libnvme_path *p)
+
+   Inflight IOs for nvme_path_t object
+
+**Parameters**
+
+``struct libnvme_path *p``
+  :c:type:`struct libnvme_path <libnvme_path>` object
+
+**Return**
+
+Inflight number of IOs
+
+
+.. c:function:: struct libnvme_transport_handle * libnvme_ctrl_get_transport_handle (struct libnvme_ctrl *c)
 
    Get associated transport handle
 
 **Parameters**
 
-``libnvme_ctrl_t c``
+``struct libnvme_ctrl *c``
   Controller instance
 
 **Description**
@@ -1143,23 +1059,23 @@ is deleted or libnvme_ctrl_release_transport_handle() is called.
 Link handle associated with **c** or NULL
 
 
-.. c:function:: void libnvme_ctrl_release_transport_handle (libnvme_ctrl_t c)
+.. c:function:: void libnvme_ctrl_release_transport_handle (struct libnvme_ctrl *c)
 
    Free transport handle from controller object
 
 **Parameters**
 
-``libnvme_ctrl_t c``
+``struct libnvme_ctrl *c``
   Controller instance
 
 
-.. c:function:: char * libnvme_ctrl_get_src_addr (libnvme_ctrl_t c, char *src_addr, size_t src_addr_len)
+.. c:function:: char * libnvme_ctrl_get_src_addr (struct libnvme_ctrl *c, char *src_addr, size_t src_addr_len)
 
    Extract src_addr from the c->address string
 
 **Parameters**
 
-``libnvme_ctrl_t c``
+``struct libnvme_ctrl *c``
   Controller instance
 
 ``char *src_addr``
@@ -1175,13 +1091,13 @@ Pointer to **src_addr** on success. NULL on failure to extract the
 src_addr.
 
 
-.. c:function:: const char * libnvme_ctrl_get_state (libnvme_ctrl_t c)
+.. c:function:: const char * libnvme_ctrl_get_state (struct libnvme_ctrl *c)
 
    Running state of a controller
 
 **Parameters**
 
-``libnvme_ctrl_t c``
+``struct libnvme_ctrl *c``
   Controller instance
 
 **Return**
@@ -1189,27 +1105,87 @@ src_addr.
 String indicating the running state of **c**
 
 
-.. c:function:: libnvme_subsystem_t libnvme_ctrl_get_subsystem (libnvme_ctrl_t c)
+.. c:function:: bool libnvme_transport_is_fabric (const char *transport)
+
+   True for a fabrics transport string
+
+**Parameters**
+
+``const char *transport``
+  Transport name, e.g. "tcp", "pcie"
+
+**Description**
+
+A transport is either local (pcie, apple-nvme) or NVMe-over-Fabrics
+(tcp, rdma, fc, loop). Use this when only the transport string is
+available, e.g. before a controller exists to ask
+libnvme_ctrl_is_transport_fabric() instead.
+
+**Return**
+
+true if **transport** is a fabrics transport, false if local.
+
+
+.. c:function:: bool libnvme_ctrl_is_transport_fabric (struct libnvme_ctrl *c)
+
+   True for a fabrics transport
+
+**Parameters**
+
+``struct libnvme_ctrl *c``
+  Controller instance
+
+**Description**
+
+A controller is reachable either over a local transport (pcie,
+apple-nvme) or over NVMe-over-Fabrics (tcp, rdma, fc, loop).
+
+**Return**
+
+true if **c** uses a fabrics transport, false if local.
+
+
+.. c:function:: char * libnvme_ctrl_owner (struct libnvme_ctrl *c)
+
+   Registered orchestrator owner of a controller
+
+**Parameters**
+
+``struct libnvme_ctrl *c``
+  Controller instance
+
+**Description**
+
+Looks up the controller's "owner" entry in the ownership registry.  In a
+build without fabrics support this always returns NULL.
+
+**Return**
+
+a newly allocated owner string (the caller frees), or NULL if the
+controller is unowned, local (non-fabrics), or the registry is unreadable.
+
+
+.. c:function:: struct libnvme_subsystem * libnvme_ctrl_get_subsystem (struct libnvme_ctrl *c)
 
    Parent subsystem of a controller
 
 **Parameters**
 
-``libnvme_ctrl_t c``
+``struct libnvme_ctrl *c``
   Controller instance
 
 **Return**
 
-Parent libnvme_subsystem_t object
+Parent struct libnvme_subsystem object
 
 
-.. c:function:: const char * libnvme_ns_head_get_sysfs_dir (libnvme_ns_head_t head)
+.. c:function:: const char * libnvme_ns_head_get_sysfs_dir (struct libnvme_ns_head *head)
 
    sysfs dir of namespave head
 
 **Parameters**
 
-``libnvme_ns_head_t head``
+``struct libnvme_ns_head *head``
   namespace head instance
 
 **Return**
@@ -1217,13 +1193,171 @@ Parent libnvme_subsystem_t object
 sysfs directory name of **head**
 
 
-.. c:function:: int libnvme_ctrl_identify (libnvme_ctrl_t c, struct nvme_id_ctrl *id)
+.. c:function:: int libnvme_ns_update_stat (struct libnvme_ns *n, bool diffstat)
+
+   update the nvme namespace stat
+
+**Parameters**
+
+``struct libnvme_ns *n``
+  :c:type:`struct libnvme_ns <libnvme_ns>` object
+
+``bool diffstat``
+  If set to true then getters return the diff stat otherwise
+  return the current absolute stat
+
+**Return**
+
+0 on success, negative error code otherwise.
+
+
+.. c:function:: void libnvme_ns_reset_stat (struct libnvme_ns *n)
+
+   Resets nvme namespace stat
+
+**Parameters**
+
+``struct libnvme_ns *n``
+  :c:type:`struct libnvme_ns <libnvme_ns>` object
+
+
+.. c:function:: unsigned int libnvme_ns_get_inflights (struct libnvme_ns *n)
+
+   Inflight IOs for nvme_ns_t object
+
+**Parameters**
+
+``struct libnvme_ns *n``
+  :c:type:`struct libnvme_ns <libnvme_ns>` object
+
+**Return**
+
+Inflight number of IOs
+
+
+.. c:function:: unsigned int libnvme_ns_get_io_ticks (struct libnvme_ns *n)
+
+   Get IO ticks
+
+**Parameters**
+
+``struct libnvme_ns *n``
+  :c:type:`struct libnvme_ns <libnvme_ns>` object
+
+**Return**
+
+Time consumed, in milliseconds, processing I/O requests between
+             two stat samples
+
+
+.. c:function:: unsigned int libnvme_ns_get_read_ticks (struct libnvme_ns *n)
+
+   Get read I/O ticks
+
+**Parameters**
+
+``struct libnvme_ns *n``
+  :c:type:`struct libnvme_ns <libnvme_ns>` object
+
+**Return**
+
+Time, in milliseconds, sepnt processing read I/O requests
+             between two stat samples
+
+
+.. c:function:: unsigned int libnvme_ns_get_write_ticks (struct libnvme_ns *n)
+
+   Get write I/O ticks
+
+**Parameters**
+
+``struct libnvme_ns *n``
+  :c:type:`struct libnvme_ns <libnvme_ns>` object
+
+**Return**
+
+Time, in milliseconds, sepnt processing write I/O requests
+             between two stat samples
+
+
+.. c:function:: double libnvme_ns_get_stat_interval (struct libnvme_ns *n)
+
+   Get interval between two stat samples
+
+**Parameters**
+
+``struct libnvme_ns *n``
+  :c:type:`struct libnvme_ns <libnvme_ns>` object
+
+**Return**
+
+Interval, in milliseconds, between collection of two consecutive
+             stat samples
+
+
+.. c:function:: unsigned long libnvme_ns_get_read_ios (struct libnvme_ns *n)
+
+   Get num of read I/Os
+
+**Parameters**
+
+``struct libnvme_ns *n``
+  :c:type:`struct libnvme_ns <libnvme_ns>` object
+
+**Return**
+
+Num of read IOs processed between two stat samples
+
+
+.. c:function:: unsigned long libnvme_ns_get_write_ios (struct libnvme_ns *n)
+
+   Get num of write I/Os
+
+**Parameters**
+
+``struct libnvme_ns *n``
+  :c:type:`struct libnvme_ns <libnvme_ns>` object
+
+**Return**
+
+Num of write IOs processed between two consecutive stat samples
+
+
+.. c:function:: unsigned long long libnvme_ns_get_read_sectors (struct libnvme_ns *n)
+
+   Get num of read sectors
+
+**Parameters**
+
+``struct libnvme_ns *n``
+  :c:type:`struct libnvme_ns <libnvme_ns>` object
+
+**Return**
+
+Num of sectors read from the device between two stat samples
+
+
+.. c:function:: unsigned long long libnvme_ns_get_write_sectors (struct libnvme_ns *n)
+
+   Get num of write sectors
+
+**Parameters**
+
+``struct libnvme_ns *n``
+  :c:type:`struct libnvme_ns <libnvme_ns>` object
+
+**Return**
+
+Num of sectors written to the device between two stat samples
+
+
+.. c:function:: int libnvme_ctrl_identify (struct libnvme_ctrl *c, struct nvme_id_ctrl *id)
 
    Issues an 'identify controller' command
 
 **Parameters**
 
-``libnvme_ctrl_t c``
+``struct libnvme_ctrl *c``
   Controller instance
 
 ``struct nvme_id_ctrl *id``
@@ -1236,10 +1370,10 @@ data into **id**.
 
 **Return**
 
-0 on success or -1 on failure.
+0 on success, negative error code otherwise.
 
 
-.. c:function:: int libnvme_scan_ctrl (struct libnvme_global_ctx *ctx, const char *name, libnvme_ctrl_t *c)
+.. c:function:: int libnvme_scan_ctrl (struct libnvme_global_ctx *ctx, const char *name, struct libnvme_ctrl **c)
 
    Scan on a controller
 
@@ -1251,8 +1385,8 @@ data into **id**.
 ``const char *name``
   Name of the controller
 
-``libnvme_ctrl_t *c``
-  **libnvme_ctrl_t** object to return
+``struct libnvme_ctrl **c``
+  **struct** libnvme_ctrl object to return
 
 **Description**
 
@@ -1260,37 +1394,37 @@ Scans a controller with sysfs name **name** and add it to **r**.
 
 **Return**
 
-0 on success or negative error code otherwise
+0 on success, negative error code otherwise.
 
 
-.. c:function:: void libnvme_rescan_ctrl (libnvme_ctrl_t c)
+.. c:function:: void libnvme_rescan_ctrl (struct libnvme_ctrl *c)
 
    Rescan an existing controller
 
 **Parameters**
 
-``libnvme_ctrl_t c``
+``struct libnvme_ctrl *c``
   Controller instance
 
 
-.. c:function:: int libnvme_init_ctrl (libnvme_host_t h, libnvme_ctrl_t c, int instance)
+.. c:function:: int libnvme_init_ctrl (struct libnvme_host *h, struct libnvme_ctrl *c, int instance)
 
-   Initialize libnvme_ctrl_t object for an existing controller.
+   Initialize struct libnvme_ctrl object for an existing controller.
 
 **Parameters**
 
-``libnvme_host_t h``
-  libnvme_host_t object
+``struct libnvme_host *h``
+  struct libnvme_host object
 
-``libnvme_ctrl_t c``
-  libnvme_ctrl_t object
+``struct libnvme_ctrl *c``
+  struct libnvme_ctrl object
 
 ``int instance``
   Instance number (e.g. 1 for nvme1)
 
 **Return**
 
-0 on success or negative error code otherwise
+0 on success, negative error code otherwise.
 
 
 .. c:function:: void libnvme_free_ctrl (struct libnvme_ctrl *c)
@@ -1335,7 +1469,7 @@ by applying **f**.
 
 **Return**
 
-0 on success, or negative error code otherwise.
+0 on success, negative error code otherwise.
 
 
 .. c:function:: void libnvme_host_release_fds (struct libnvme_host *h)
@@ -1345,7 +1479,7 @@ by applying **f**.
 **Parameters**
 
 ``struct libnvme_host *h``
-  libnvme_host_t object
+  struct libnvme_host object
 
 **Description**
 
@@ -1354,39 +1488,17 @@ of opened nvme devices. This API can be used to close and
 clear all cached fds under this host.
 
 
-.. c:function:: void libnvme_free_host (libnvme_host_t h)
+.. c:function:: void libnvme_free_host (struct libnvme_host *h)
 
-   Free libnvme_host_t object
-
-**Parameters**
-
-``libnvme_host_t h``
-  libnvme_host_t object
-
-
-.. c:function:: int libnvme_read_config (struct libnvme_global_ctx *ctx, const char *config_file)
-
-   Read NVMe JSON configuration file
+   Free struct libnvme_host object
 
 **Parameters**
 
-``struct libnvme_global_ctx *ctx``
-  :c:type:`struct libnvme_global_ctx <libnvme_global_ctx>` object
-
-``const char *config_file``
-  JSON configuration file
-
-**Description**
-
-Read in the contents of **config_file** and merge them with
-the elements in **r**.
-
-**Return**
-
-0 on success or negative error code otherwise
+``struct libnvme_host *h``
+  struct libnvme_host object
 
 
-.. c:function:: void libnvme_refresh_topology (struct libnvme_global_ctx *ctx)
+.. c:function:: int libnvme_refresh_topology (struct libnvme_global_ctx *ctx)
 
    Refresh libnvme_root_t object contents
 
@@ -1399,46 +1511,9 @@ the elements in **r**.
 
 Removes all elements in **r** and rescans the existing topology.
 
-
-.. c:function:: int libnvme_dump_config (struct libnvme_global_ctx *ctx, int fd)
-
-   Print the JSON configuration
-
-**Parameters**
-
-``struct libnvme_global_ctx *ctx``
-  :c:type:`struct libnvme_global_ctx <libnvme_global_ctx>` object
-
-``int fd``
-  File descriptor to write the JSON configuration.
-
-**Description**
-
-Writes the current contents of the JSON configuration
-to the file descriptor fd.
-
 **Return**
 
-0 on success, or negative error code otherwise.
-
-
-.. c:function:: int libnvme_dump_tree (struct libnvme_global_ctx *ctx)
-
-   Dump internal object tree
-
-**Parameters**
-
-``struct libnvme_global_ctx *ctx``
-  :c:type:`struct libnvme_global_ctx <libnvme_global_ctx>` object
-
-**Description**
-
-Prints the internal object tree in JSON format
-to stdout.
-
-**Return**
-
-0 on success or negative error code otherwise
+0 on success, negative error code otherwise.
 
 
 .. c:function:: char * libnvme_get_attr (const char *d, const char *attr)
@@ -1455,35 +1530,35 @@ to stdout.
 
 **Return**
 
-String with the contents of **attr** or ``NULL`` in case of an empty
-        value or error.
+A newly allocated string with the contents of **attr** (the caller
+        frees), or ``NULL`` in case of an empty value or error.
 
 
-.. c:function:: char * libnvme_get_subsys_attr (libnvme_subsystem_t s, const char *attr)
+.. c:function:: char * libnvme_get_subsys_attr (struct libnvme_subsystem *s, const char *attr)
 
    Read subsystem sysfs attribute
 
 **Parameters**
 
-``libnvme_subsystem_t s``
-  libnvme_subsystem_t object
+``struct libnvme_subsystem *s``
+  struct libnvme_subsystem object
 
 ``const char *attr``
   sysfs attribute name
 
 **Return**
 
-String with the contents of **attr** or ``NULL`` in case of an empty
-        value or error.
+A newly allocated string with the contents of **attr** (the caller
+        frees), or ``NULL`` in case of an empty value or error.
 
 
-.. c:function:: char * libnvme_get_ctrl_attr (libnvme_ctrl_t c, const char *attr)
+.. c:function:: char * libnvme_get_ctrl_attr (struct libnvme_ctrl *c, const char *attr)
 
    Read controller sysfs attribute
 
 **Parameters**
 
-``libnvme_ctrl_t c``
+``struct libnvme_ctrl *c``
   Controller instance
 
 ``const char *attr``
@@ -1491,43 +1566,43 @@ String with the contents of **attr** or ``NULL`` in case of an empty
 
 **Return**
 
-String with the contents of **attr** or ``NULL`` in case of an empty value
-        or in case of an error.
+A newly allocated string with the contents of **attr** (the caller
+        frees), or ``NULL`` in case of an empty value or error.
 
 
-.. c:function:: char * libnvme_get_ns_attr (libnvme_ns_t n, const char *attr)
+.. c:function:: char * libnvme_get_ns_attr (struct libnvme_ns *n, const char *attr)
 
    Read namespace sysfs attribute
 
 **Parameters**
 
-``libnvme_ns_t n``
-  libnvme_ns_t object
+``struct libnvme_ns *n``
+  struct libnvme_ns object
 
 ``const char *attr``
   sysfs attribute name
 
 **Return**
 
-String with the contents of **attr** or ``NULL`` in case of an empty value
-        or in case of an error.
+A newly allocated string with the contents of **attr** (the caller
+        frees), or ``NULL`` in case of an empty value or error.
 
 
-.. c:function:: libnvme_ns_t libnvme_subsystem_lookup_namespace (struct libnvme_subsystem *s, __u32 nsid)
+.. c:function:: struct libnvme_ns * libnvme_subsystem_lookup_namespace (struct libnvme_subsystem *s, __u32 nsid)
 
    lookup namespace by NSID
 
 **Parameters**
 
 ``struct libnvme_subsystem *s``
-  libnvme_subsystem_t object
+  struct libnvme_subsystem object
 
 ``__u32 nsid``
   Namespace id
 
 **Return**
 
-libnvme_ns_t of the namespace with id **nsid** in subsystem **s**
+struct libnvme_ns of the namespace with id **nsid** in subsystem **s**
 
 
 .. c:function:: void libnvme_subsystem_release_fds (struct libnvme_subsystem *s)
@@ -1537,7 +1612,7 @@ libnvme_ns_t of the namespace with id **nsid** in subsystem **s**
 **Parameters**
 
 ``struct libnvme_subsystem *s``
-  libnvme_subsystem_t object
+  struct libnvme_subsystem object
 
 **Description**
 
@@ -1546,25 +1621,25 @@ of opened nvme devices. This API can be used to close and
 clear all cached fds under this subsystem.
 
 
-.. c:function:: char * libnvme_get_path_attr (libnvme_path_t p, const char *attr)
+.. c:function:: char * libnvme_get_path_attr (struct libnvme_path *p, const char *attr)
 
    Read path sysfs attribute
 
 **Parameters**
 
-``libnvme_path_t p``
-  libnvme_path_t object
+``struct libnvme_path *p``
+  struct libnvme_path object
 
 ``const char *attr``
   sysfs attribute name
 
 **Return**
 
-String with the contents of **attr** or ``NULL`` in case of an empty value
-        or in case of an error.
+A newly allocated string with the contents of **attr** (the caller
+        frees), or ``NULL`` in case of an empty value or error.
 
 
-.. c:function:: int libnvme_scan_namespace (struct libnvme_global_ctx *ctx, const char *name, libnvme_ns_t *ns)
+.. c:function:: int libnvme_scan_namespace (struct libnvme_global_ctx *ctx, const char *name, struct libnvme_ns **ns)
 
    scan namespace based on sysfs name
 
@@ -1576,11 +1651,11 @@ String with the contents of **attr** or ``NULL`` in case of an empty value
 ``const char *name``
   sysfs name of the namespace to scan
 
-``libnvme_ns_t *ns``
-  :c:type:`libnvme_ns_t` object to return
+``struct libnvme_ns **ns``
+  :c:type:`struct libnvme_ns <libnvme_ns>` object to return
 
 **Return**
 
-0 on success or negative error code otherwise
+0 on success, negative error code otherwise.
 
 

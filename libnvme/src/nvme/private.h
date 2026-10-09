@@ -9,20 +9,41 @@
 
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <string.h>
+
+#ifdef CONFIG_FABRICS
+#include <ifaddrs.h>
+#endif
 
 #include <ccan/list/list.h>
+
+#include <shared/string-util.h>
 
 #include "nvme/nvme-types.h"
 #include "nvme/lib-types.h"
 
 #include <nvme/tree.h>
 
-const char *libnvme_subsys_sysfs_dir(void);
-const char *libnvme_ctrl_sysfs_dir(void);
-const char *libnvme_ns_sysfs_dir(void);
-const char *libnvme_slots_sysfs_dir(void);
-const char *libnvme_uuid_ibm_filename(void);
-const char *libnvme_dmi_entries_dir(void);
+struct libnvme_passthru_completion;
+struct libnvme_async_req;
+struct libnvme_loopback_cmd;
+
+/* Opaque: each is defined only in its own generated .c file -- see
+ * generate_attr_accessors.py. No other file may see their layout.
+ */
+struct libnvme_ctrl_attrs;
+struct libnvme_path_attrs;
+struct libnvme_ns_attrs;
+struct libnvme_subsystem_attrs;
+
+const char *libnvme_subsys_sysfs_dir(struct libnvme_global_ctx *ctx);
+const char *libnvme_ctrl_sysfs_dir(struct libnvme_global_ctx *ctx);
+const char *libnvme_ns_sysfs_dir(struct libnvme_global_ctx *ctx);
+const char *libnvme_slots_sysfs_dir(struct libnvme_global_ctx *ctx);
+const char *libnvme_uuid_ibm_filename(struct libnvme_global_ctx *ctx);
+const char *libnvme_dmi_entries_dir(struct libnvme_global_ctx *ctx);
+const char *libnvme_dmi_product_uuid_filename(struct libnvme_global_ctx *ctx);
+const char *libnvme_machine_id_filename(struct libnvme_global_ctx *ctx);
 
 struct linux_passthru_cmd32 {
 	__u8    opcode;
@@ -104,7 +125,7 @@ struct linux_passthru_cmd64 {
  * @tls:		Start TLS on the connection (TCP)
  * @concat:		Enable secure concatenation (TCP)
  */
-struct libnvme_fabrics_config { // !generate-accessors
+struct libnvme_fabrics_config { // !generate-dict-table !nested-accessors
 	int queue_size;
 	int nr_io_queues;
 	int reconnect_delay;
@@ -126,6 +147,29 @@ struct libnvme_fabrics_config { // !generate-accessors
 	bool concat;
 };
 
+/**
+ * struct libnvme_ctrl_params - Parameters for creating a controller instance
+ * @transport:		Transport type: loop, fc, rdma, tcp, pcie, apple-nvme
+ * @traddr:		Transport address (destination address)
+ * @host_traddr:	Host transport address (source address)
+ * @host_iface:		Host interface for connection (tcp only)
+ * @trsvcid:		Transport service ID
+ * @subsysnqn:		Subsystem NQN
+ * @cfg:		Fabrics tuning parameters
+ */
+struct libnvme_ctrl_params { // !nested-accessors
+	const char *transport;
+	const char *traddr;
+	const char *host_traddr;
+	const char *host_iface;
+	const char *trsvcid;
+	const char *subsysnqn;
+	struct libnvme_fabrics_config cfg; // !access:nested
+};
+
+void libnvme_fabrics_config_copy(struct libnvme_fabrics_config *dst,
+		const struct libnvme_fabrics_config *src);
+
 struct libnvme_log {
 	int fd;
 	int level;
@@ -137,6 +181,19 @@ enum libnvme_transport_handle_type {
 	LIBNVME_TRANSPORT_HANDLE_TYPE_UNKNOWN = 0,
 	LIBNVME_TRANSPORT_HANDLE_TYPE_DIRECT,
 	LIBNVME_TRANSPORT_HANDLE_TYPE_MI,
+	LIBNVME_TRANSPORT_HANDLE_TYPE_LOOPBACK,
+};
+
+enum ioctl_state {
+	IOCTL_STATE_UNKNOWN = 0,
+	IOCTL_STATE_IOCTL32 = 1,
+	IOCTL_STATE_IOCTL64 = 2,
+};
+
+enum libnvme_io_uring_state {
+	LIBNVME_IO_URING_STATE_UNKNOWN = 0,
+	LIBNVME_IO_URING_STATE_NOT_AVAILABLE,
+	LIBNVME_IO_URING_STATE_AVAILABLE,
 };
 
 struct libnvme_transport_handle {
@@ -156,17 +213,31 @@ struct libnvme_transport_handle {
 	__u32 timeout;
 
 	/* direct */
-	int fd;
+	libnvme_fd_t fd;
 	struct stat stat;
-	bool ioctl_admin64;
-	bool ioctl_io64;
-	bool uring_enabled;
+	enum ioctl_state ioctl_admin_state;
+	enum ioctl_state ioctl_io_state;
+	enum libnvme_io_uring_state uring_state;
+#ifdef CONFIG_LIBURING
+	unsigned int uring_pending;
+	struct io_uring *ring;
+	struct libnvme_async_req *dry_run_head;
+	struct libnvme_async_req *dry_run_tail;
+#endif
 
 #ifdef CONFIG_MI
 	/* mi */
 	struct libnvme_mi_ep *ep;
 	__u16 id;
 	struct list_node ep_entry;
+#endif
+
+#ifdef CONFIG_LOOPBACK
+	/* loopback: borrowed pointers into caller-owned command sequences */
+	const struct libnvme_loopback_cmd *loopback_admin_cmds;
+	size_t loopback_admin_remaining;
+	const struct libnvme_loopback_cmd *loopback_io_cmds;
+	size_t loopback_io_remaining;
 #endif
 
 	struct libnvme_log *log;
@@ -196,27 +267,27 @@ struct libnvme_stat {
 	double ts_ms;			/* timestamp when the stat is updated */
 };
 
-struct libnvme_path {			// !generate-accessors:read=custom,write=none
+struct libnvme_path {		// !generate-accessors:read=generated,write=none !generate-python:alias=Path
 	struct list_node entry;
 	struct list_node nentry;
 
-	struct libnvme_stat stat[2];	/* gendisk I/O stat */
-	// curr_idx: current index into the stat[]
-	unsigned int curr_idx;		// !access:read=generated,write=generated
-	bool diffstat;			// !access:read=none
+	/* Double-buffered gendisk I/O stats: stat[curr_idx] is the latest
+	 * snapshot, stat[!curr_idx] the previous one. curr_idx toggles on
+	 * each update_stat() call; diffstat selects raw vs. delta for getters.
+	 * Managed exclusively by the stat subsystem — do not access directly.
+	 */
+	struct libnvme_stat stat[2];
+	unsigned int curr_idx;	       // !access:read=none
+	bool diffstat;		       // !access:read=none
 
 	struct libnvme_ctrl *c;
 	struct libnvme_ns *n;
 
-	char *name;			// !access:read=generated,write=generated
-	char *sysfs_dir;		// !access:read=generated,write=generated
-	char *ana_state;
-	char *numa_nodes;
-	int grpid;			// !access:read=generated,write=generated
-	int queue_depth;
-	long multipath_failover_count;
-	long command_retry_count;
-	long command_error_count;
+	char *name;		       // !access:write=generated
+	char *sysfs_dir;	       // !access:write=generated
+
+	/* Opaque: field list is PATH_ATTRS in attr_accessors_specs.py. */
+	struct libnvme_path_attrs *attrs;	// !access:read=none
 };
 
 struct libnvme_ns_head {
@@ -226,7 +297,7 @@ struct libnvme_ns_head {
 	char *sysfs_dir;
 };
 
-struct libnvme_ns {			// !generate-accessors
+struct libnvme_ns {  // !generate-accessors:read=generated,write=none !generate-python:alias=Namespace
 	struct list_node entry;
 
 	struct libnvme_subsystem *s;
@@ -235,34 +306,26 @@ struct libnvme_ns {			// !generate-accessors
 
 	struct libnvme_global_ctx *ctx;
 
-	struct libnvme_stat stat[2];	/* gendisk I/O stat */
-	unsigned int curr_idx;		/* current index into the stat[] */
-	bool diffstat;			// !access:read=none,write=none
+	/* Double-buffered gendisk I/O stats: stat[curr_idx] is the latest
+	 * snapshot, stat[!curr_idx] the previous one. curr_idx toggles on
+	 * each update_stat() call; diffstat selects raw vs. delta for getters.
+	 * Managed exclusively by the stat subsystem — do not access directly.
+	 */
+	struct libnvme_stat stat[2];
+	unsigned int curr_idx;		     // !access:read=none
+	bool diffstat;			     // !access:read=none
 
 	struct libnvme_transport_handle *hdl;
-	__u32 nsid;
+	__u32 nsid;			     // !access:write=generated
 	char *name;
-	char *generic_name;		// !access:read=custom,write=none
-	char *sysfs_dir;
+	char *generic_name;
+	char *sysfs_dir;		     // !access:write=generated
 
-	int lba_shift;
-	int lba_size;
-	int meta_size;
-	uint64_t lba_count;
-	uint64_t lba_util;
-
-	uint8_t eui64[8];
-	uint8_t nguid[16];
-	unsigned char uuid[NVME_UUID_LEN];
-	enum nvme_csi csi;
-
-	long command_retry_count;	     // !access:read=custom,write=none
-	long command_error_count;	     // !access:read=custom,write=none
-	long requeue_no_usable_path_count;   // !access:read=custom,write=none
-	long fail_no_available_path_count;   // !access:read=custom,write=none
+	/* Opaque: field list is NS_ATTRS in attr_accessors_specs.py. */
+	struct libnvme_ns_attrs *attrs;	// !access:read=none
 };
 
-struct libnvme_ctrl {			// !generate-accessors:read=generated,write=none
+struct libnvme_ctrl {  // !generate-accessors:read=generated,write=none !generate-python:alias=Ctrl
 	struct list_node entry;
 	struct list_head paths;
 	struct list_head namespaces;
@@ -272,40 +335,27 @@ struct libnvme_ctrl {			// !generate-accessors:read=generated,write=none
 	struct libnvme_transport_handle *hdl;
 	char *name;
 	char *sysfs_dir;
-	char *address;			// !access:read=custom
-	char *firmware;
-	char *model;
+	char *address;
 	char *state;			// !access:read=custom
-	char *numa_node;
-	char *queue_count;
-	char *serial;
-	char *sqsize;
 	char *transport;
 	char *subsysnqn;
 	char *traddr;
 	char *trsvcid;
-	char *dhchap_host_key;		// !access:write=generated
-	char *dhchap_ctrl_key;		// !access:write=generated
-	char *keyring;			// !access:write=generated
 	char *tls_key_identity;		// !access:write=generated
 	char *tls_key;			// !access:write=generated
-	char *cntrltype;
-	char *cntlid;
-	char *dctype;
-	char *phy_slot;
 	char *host_traddr;
 	char *host_iface;
 	bool discovery_ctrl;		// !access:write=generated
 	bool unique_discovery_ctrl;	// !access:write=generated
 	bool discovered;		// !access:write=generated
 	bool persistent;		// !access:write=generated
-	long command_error_count;	// !access:read=custom
-	long reset_count;		// !access:read=custom
-	long reconnect_count;		// !access:read=custom
-	struct libnvme_fabrics_config cfg;
+	struct libnvme_fabrics_config cfg; // !access:nested:write=none
+
+	/* Opaque: field list is CTRL_ATTRS in attr_accessors_specs.py. */
+	struct libnvme_ctrl_attrs *attrs;	// !access:read=none
 };
 
-struct libnvme_subsystem {		// !generate-accessors:read=generated,write=none
+struct libnvme_subsystem {  // !generate-accessors:read=generated,write=none !generate-python:alias=Subsystem
 	struct list_node entry;
 	struct list_head ctrls;
 	struct list_head namespaces;
@@ -314,26 +364,21 @@ struct libnvme_subsystem {		// !generate-accessors:read=generated,write=none
 	char *name;
 	char *sysfs_dir;
 	char *subsysnqn;
-	char *model;
-	char *serial;
-	char *firmware;
 	char *subsystype;
-	char *application;		// !access:write=generated
-	char *iopolicy;			// !access:read=custom
+
+	/* Opaque: field list is SUBSYS_ATTRS in attr_accessors_specs.py. */
+	struct libnvme_subsystem_attrs *attrs;	// !access:read=none
 };
 
-struct libnvme_host {			// !generate-accessors
+struct libnvme_host {  // !generate-accessors:read=generated,write=none !generate-python:alias=Host
 	struct list_node entry;
 	struct list_head subsystems;
 	struct libnvme_global_ctx *ctx;
 
-	char *hostnqn;			// !access:read=generated,write=none
-	char *hostid;			// !access:read=generated,write=none
-	char *dhchap_host_key;
-	char *hostsymname;
-	bool pdc_enabled;		// !access:read=none,write=custom
-	bool pdc_enabled_valid; /* set if pdc_enabled doesn't have an undefined
-				 * value */
+	char *hostnqn;
+	char *hostid;
+	char *kxchap_host_key;		// !access:write=generated
+	char *hostsymname;		// !access:write=generated
 };
 
 struct libnvme_fabric_options { // !generate-accessors
@@ -369,40 +414,35 @@ struct libnvme_fabric_options { // !generate-accessors
 	bool trsvcid;
 };
 
-enum libnvme_io_uring_state {
-	LIBNVME_IO_URING_STATE_UNKNOWN = 0,
-	LIBNVME_IO_URING_STATE_NOT_AVAILABLE,
-	LIBNVME_IO_URING_STATE_AVAILABLE,
-};
-
-struct libnvme_global_ctx {
-	char *config_file;
-	char *application;
+struct libnvme_global_ctx { // !generate-accessors:read=none,write=none,prefix=libnvme !generate-python:alias=GlobalCtx
+	/*
+	 * Orchestrator identity. Tri-state: NULL means --owner was never
+	 * given, "" means an explicit disown, and a name means a claim.
+	 * On a reuse the NULL case leaves the registry entry alone.
+	 */
+	char *owner;
 	struct list_head endpoints; /* MI endpoints */
 	struct list_head hosts;
 	struct libnvme_log log;
-	bool mi_probe_enabled;
-	bool ioctl_probing;
 	bool create_only;
-	bool dry_run;
+	bool dry_run;		// !access:read=generated,write=generated
+
+	/* global options to steer libnvme behavior or overwrite defaults */
+	bool force_4k;		// !access:read=generated,write=generated
+	bool mi_probe_enabled;	// !access:read=generated,write=generated
+	bool ioctl_probing;	// !access:read=generated,write=generated
+	char *test_base_dir;
+	char *test_sysfs_dir;
+
 #ifdef CONFIG_FABRICS
 	struct libnvme_fabric_options *options;
+	char **kernel_options; /* NULL-terminated, from /dev/nvme-fabrics */
 	struct ifaddrs *ifaddrs_cache; /* init with libnvmf_getifaddrs() */
 #endif
-
-	enum libnvme_io_uring_state uring_state;
-#ifdef CONFIG_LIBURING
-	int ring_cmds;
-	struct io_uring *ring;
-#endif
+	char *hostnqn;		// !access:read=none,write=generated
+	char *hostid;		// !access:read=none,write=generated
 };
 int libnvme_set_attr(const char *dir, const char *attr, const char *value);
-
-int json_read_config(struct libnvme_global_ctx *ctx, const char *config_file);
-
-int json_update_config(struct libnvme_global_ctx *ctx, int fd);
-
-int json_dump_tree(struct libnvme_global_ctx *ctx);
 
 void *__libnvme_submit_entry(struct libnvme_transport_handle *hdl,
 		struct libnvme_passthru_cmd *cmd);
@@ -411,33 +451,51 @@ void __libnvme_submit_exit(struct libnvme_transport_handle *hdl,
 bool __libnvme_decide_retry(struct libnvme_transport_handle *hdl,
 		struct libnvme_passthru_cmd *cmd, int err);
 
+#ifdef CONFIG_MI
+struct nvme_mi_msg_hdr;
+
+void *__libnvme_mi_submit_entry(struct libnvme_mi_ep *ep,
+		__u8 type, const struct nvme_mi_msg_hdr *hdr,
+		size_t hdr_len, const void *data, size_t data_len);
+void __libnvme_mi_submit_exit(struct libnvme_mi_ep *ep,
+		__u8 type, const struct nvme_mi_msg_hdr *hdr,
+		size_t hdr_len, const void *data, size_t data_len,
+		void *user_data);
+#endif
+
 struct libnvme_transport_handle *__libnvme_open(struct libnvme_global_ctx *ctx,
 		const char *name);
 struct libnvme_transport_handle *__libnvme_create_transport_handle(
 		struct libnvme_global_ctx *ctx);
 
-struct libnvmf_context;
-
-int _libnvme_create_ctrl(struct libnvme_global_ctx *ctx,
-		struct libnvmf_context *fctx,
+int libnvme_create_ctrl(struct libnvme_global_ctx *ctx,
+		const struct libnvme_ctrl_params *params,
 		struct libnvme_ctrl **cp);
-bool _libnvme_ctrl_match_config(struct libnvme_ctrl *c,
-		struct libnvmf_context *fctx);
+void libnvme_deconfigure_ctrl(struct libnvme_ctrl *c);
 
-void *__libnvme_alloc(size_t len);
-
-void *__libnvme_realloc(void *p, size_t len);
-
-void nvme_deconfigure_ctrl(struct libnvme_ctrl *c);
-
+int libnvme_create_host(struct libnvme_global_ctx *ctx,
+		const char *hostnqn, const char *hostid,
+		struct libnvme_host **host);
 struct libnvme_host *libnvme_lookup_host(struct libnvme_global_ctx *ctx,
 		const char *hostnqn, const char *hostid);
 struct libnvme_subsystem *libnvme_lookup_subsystem(struct libnvme_host *h,
 		const char *name, const char *subsysnqn);
-struct libnvme_ctrl * libnvme_lookup_ctrl(struct libnvme_subsystem * s,
-		struct libnvmf_context *fctx, struct libnvme_ctrl *p);
-struct libnvme_ctrl * libnvme_ctrl_find(struct libnvme_subsystem *s,
-		struct libnvmf_context *fctx);
+struct libnvme_ctrl *libnvme_lookup_ctrl(struct libnvme_subsystem *s,
+		const struct libnvme_ctrl_params *params,
+		struct libnvme_ctrl *p);
+int libnvme_create_subsystem(struct libnvme_host *h,
+		const char *name, const char *subsysnqn,
+		struct libnvme_subsystem **s);
+int libnvme_subsystem_create_ctrl(struct libnvme_subsystem *s,
+		const struct libnvme_ctrl_params *in,
+		struct libnvme_ctrl **p);
+bool traddr_is_hostname(struct libnvme_global_ctx *ctx,
+		const char *transport, const char *traddr);
+void libnvmf_default_config(struct libnvme_fabrics_config *cfg);
+struct libnvme_ctrl *libnvme_ctrl_find(struct libnvme_subsystem *s,
+		const struct libnvme_ctrl_params *params, struct libnvme_ctrl *p);
+void libnvmf_read_sysfs_fabrics_attrs(struct libnvme_global_ctx *ctx,
+		struct libnvme_ctrl *c);
 
 void __libnvme_free_host(struct libnvme_host * h);
 
@@ -447,7 +505,14 @@ void __libnvme_free_host(struct libnvme_host * h);
 #define __libnvme_log_func NULL
 #endif
 
-void __attribute__((format(printf, 4, 5)))
+#if (defined(__MINGW32__) || defined(__MINGW64__)) && defined(__GNUC__)
+/* MinGW GCC requires gnu_printf to correctly validates C99 formats like %zu. */
+#define __libnvme_printf_format(f, a) __attribute__((format(gnu_printf, f, a)))
+#else
+#define __libnvme_printf_format(f, a) __attribute__((format(printf, f, a)))
+#endif
+
+void __libnvme_printf_format(4, 5)
 __libnvme_msg(struct libnvme_global_ctx *ctx, int level,
 		const char *func, const char *format, ...);
 
@@ -457,15 +522,8 @@ __libnvme_msg(struct libnvme_global_ctx *ctx, int level,
 #define SECTOR_SIZE	512
 #define SECTOR_SHIFT	9
 
-int __libnvme_import_keys_from_config(struct libnvme_host *h,
+int __libnvmf_import_keys_from_config(struct libnvme_host *h,
 		struct libnvme_ctrl *c, long *keyring_id, long *key_id);
-
-static inline char *xstrdup(const char *s)
-{
-	if (!s)
-		return NULL;
-	return strdup(s);
-}
 
 /**
  * libnvme_ipaddrs_eq - Check if 2 IP addresses are equal.
@@ -476,7 +534,9 @@ static inline char *xstrdup(const char *s)
  */
 bool libnvme_ipaddrs_eq(const char *addr1, const char *addr2);
 
-#if defined(HAVE_NETDB) || defined(CONFIG_FABRICS)
+#ifdef CONFIG_FABRICS
+void _libnvmf_free_kernel_options(struct libnvme_global_ctx *ctx);
+
 /**
  * libnvme_iface_matching_addr - Get interface matching @addr
  * @iface_list: Interface list returned by getifaddrs()
@@ -506,78 +566,7 @@ const char *libnvme_iface_matching_addr(const struct ifaddrs *iface_list,
  */
 bool libnvme_iface_primary_addr_matches(const struct ifaddrs *iface_list,
 		const char *iface, const char *addr);
-#endif /* HAVE_NETDB || CONFIG_FABRICS */
-
-int hostname2traddr(struct libnvme_global_ctx *ctx, const char *traddr,
-		char **hostname);
-
-/**
- * get_entity_name - Get Entity Name (ENAME).
- * @buffer: The buffer where the ENAME will be saved as an ASCII string.
- * @bufsz:  The size of @buffer.
- *
- * Per TP8010, ENAME is defined as the name associated with the host (i.e.
- * hostname).
- *
- * Return: Number of characters copied to @buffer.
- */
-size_t get_entity_name(char *buffer, size_t bufsz);
-
-/**
- * get_entity_version - Get Entity Version (EVER).
- * @buffer: The buffer where the EVER will be saved as an ASCII string.
- * @bufsz:  The size of @buffer.
- *
- * EVER is defined as the operating system name and version as an ASCII
- * string. This function reads different files from the file system and
- * builds a string as follows: [os type] [os release] [distro release]
- *
- *     E.g. "Linux 5.17.0-rc1 SLES 15.4"
- *
- * Return: Number of characters copied to @buffer.
- */
-size_t get_entity_version(char *buffer, size_t bufsz);
-
-
-/**
- * startswith - Checks that a string starts with a given prefix.
- * @s:      The string to check
- * @prefix: A string that @s could be starting with
- *
- * Return: If @s starts with @prefix, then return a pointer within @s at
- * the first character after the matched @prefix. NULL otherwise.
- */
-char *startswith(const char *s, const char *prefix);
-
-/**
- * kv_strip - Strip blanks from key value string
- * @kv: The key-value string to strip
- *
- * Strip leading/trailing blanks as well as trailing comments from the
- * Key=Value string pointed to by @kv.
- *
- * Return: A pointer to the stripped string. Note that the original string,
- * @kv, gets modified.
- */
-char *kv_strip(char *kv);
-
-/**
- * kv_keymatch - Look for key in key value string
- * @kv:  The key=value string to search for the presence of @key
- * @key: The key to look for
- *
- * Look for @key in the Key=Value pair pointed to by @k and return a
- * pointer to the Value if @key is found.
- *
- * Check if @kv starts with @key. If it does then make sure that we
- * have a whole-word match on the @key, and if we do, return a pointer
- * to the first character of value (i.e. skip leading spaces, tabs,
- * and equal sign)
- *
- * Return: A pointer to the first character of "value" if a match is found.
- * NULL otherwise.
- */
-char *kv_keymatch(const char *kv, const char *key);
+#endif /* CONFIG_FABRICS */
 
 #define __round_mask(val, mult) ((__typeof__(val))((mult)-1))
 
@@ -602,7 +591,7 @@ char *kv_keymatch(const char *kv, const char *key);
  * remain cached until the ns object is deleted or
  * libnvme_ns_release_transport_handle() is called.
  *
- * Return: On success 0, else error code.
+ * Return: 0 on success, negative error code otherwise.
  */
 int libnvme_ns_get_transport_handle(struct libnvme_ns *n,
 		struct libnvme_transport_handle **hdl);
@@ -628,15 +617,13 @@ void libnvme_ns_release_transport_handle(struct libnvme_ns *n);
  * so the & data_len parameter must be less than 4097.
  *
  * Return: The nvme command status if a response was received (see
- * &enum nvme_status_field) or -1 with errno set otherwise.
+ * &enum nvme_status_field) or negative error code otherwise.
  */
 int libnvme_mi_admin_admin_passthru(struct libnvme_transport_handle *hdl,
 		struct libnvme_passthru_cmd *cmd);
 
-int libnvme_open_uring(struct libnvme_global_ctx *ctx);
-void libnvme_close_uring(struct libnvme_global_ctx *ctx);
+int libnvme_open_uring(struct libnvme_transport_handle *hdl);
+void libnvme_close_uring(struct libnvme_transport_handle *hdl);
 int __libnvme_transport_handle_open_uring(struct libnvme_transport_handle *hdl);
-int libnvme_submit_admin_passthru_async(struct libnvme_transport_handle *hdl,
-		struct libnvme_passthru_cmd *cmd);
-int libnvme_wait_complete_passthru(struct libnvme_transport_handle *hdl);
 
+char *libnvme_hostid_from_hostnqn(const char *hostnqn);

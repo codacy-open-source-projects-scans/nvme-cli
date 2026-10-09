@@ -4,59 +4,29 @@
 # Copyright (c) 2026 SUSE LLC
 #
 # Authors: Daniel Wagner <dwagner@suse.de>
+#
+# All nvme-cli test suites live under this directory:
+#   unit/ - fast C and Python unit tests; no built binary or hardware needed
+#   cli/  - tests that exercise the built nvme binary; no hardware needed
+#   e2e/  - tests that need a real (or emulated) NVMe device; opt-in via
+#           -De2e-tests=true since they read and write to /dev/nvme0
+#
+# unit/ and cli/ are gated by the general 'tests' option (on by default);
+# e2e/ is gated by the hardware-only 'e2e-tests' option.
+#
+python3 = find_program('python3', required: false)
+if not python3.found()
+    message('python3 not found. Python-based tests disabled')
+endif
 
-infra = [
-    'config.json',
-    'nvme_test.py',
-    'nvme_test_io.py',
-    'nvme_test_logger.py',
-    'nvme_simple_template_test.py',
-    'tap_runner.py',
-]
+if get_option('tests')
+    subdir('unit')
+    subdir('cli')
+endif
 
-tests = [
-    'nvme_attach_detach_ns_test.py',
-    'nvme_compare_test.py',
-    'nvme_create_max_ns_test.py',
-    'nvme_error_log_test.py',
-    'nvme_flush_test.py',
-    'nvme_format_test.py',
-    'nvme_fw_log_test.py',
-    'nvme_get_features_test.py',
-    'nvme_id_ctrl_test.py',
-    'nvme_id_ns_test.py',
-    'nvme_read_write_test.py',
-    'nvme_smart_log_test.py',
-    'nvme_writeuncor_test.py',
-    'nvme_writezeros_test.py',
-    'nvme_copy_test.py',
-    'nvme_dsm_test.py',
-    'nvme_verify_test.py',
-    'nvme_lba_status_log_test.py',
-    'nvme_get_lba_status_test.py',
-    'nvme_ctrl_reset_test.py',
-]
-
-python_module = import('python')
-
-python = python_module.find_installation('python3')
-
-foreach t : tests
-    t_name = t.split('.')[0]
-    test(
-        'nvme-cli - @0@'.format(t_name),
-        python,
-        args: [
-            meson.current_source_dir() / 'tap_runner.py',
-            '--start-dir', meson.current_source_dir(),
-            t_name,
-        ],
-        env: ['PATH=' + meson.project_build_root() + ':/usr/bin:/usr/sbin'],
-        timeout: 500,
-        protocol: 'tap',
-        is_parallel: false,
-    )
-endforeach
+if get_option('e2e-tests')
+    subdir('e2e')
+endif
 
 mypy = find_program(
     'mypy',
@@ -68,15 +38,14 @@ flake8 = find_program(
 )
 linter_script = files('run_py_linters.py')
 
-if mypy.found() and flake8.found()
+if python3.found() and mypy.found() and flake8.found()
     run_target(
         'lint-python',
-        command : [python, linter_script, 'lint'],
+        command : [python3, linter_script, 'lint'],
     )
 else
     message('Mypy or Flake8 not found. Python linting disabled')
 endif
-
 
 autopep8 = find_program(
     'autopep8',
@@ -87,10 +56,10 @@ isort = find_program(
     required : false,
 )
 
-if autopep8.found() and isort.found()
+if python3.found() and autopep8.found() and isort.found()
     run_target(
         'format-python',
-        command : [python, linter_script, 'format'],
+        command : [python3, linter_script, 'format'],
     )
 else
     message('autopep8 or isort not found. Python formatting disabled')

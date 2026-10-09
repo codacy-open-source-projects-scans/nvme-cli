@@ -2,12 +2,12 @@
 .\"     Title: nvme-tls-key
 .\"    Author: [FIXME: author] [see http://www.docbook.org/tdg5/en/html/author]
 .\" Generator: DocBook XSL Stylesheets vsnapshot <http://docbook.sf.net/>
-.\"      Date: 04/17/2026
+.\"      Date: 09/18/2026
 .\"    Manual: NVMe Manual
 .\"    Source: NVMe
 .\"  Language: English
 .\"
-.TH "NVME\-TLS\-KEY" "1" "04/17/2026" "NVMe" "NVMe Manual"
+.TH "NVME\-TLS\-KEY" "1" "09/18/2026" "NVMe" "NVMe Manual"
 .\" -----------------------------------------------------------------
 .\" * Define some portability stuff
 .\" -----------------------------------------------------------------
@@ -28,62 +28,112 @@
 .\" * MAIN CONTENT STARTS HERE *
 .\" -----------------------------------------------------------------
 .SH "NAME"
-nvme-tls-key \- Manage NVMe TLS PSKs
+nvme-tls-key \- Manage NVMe TLS PSKs (deprecated)
 .SH "SYNOPSIS"
 .sp
 .nf
-\fInvme tls\-key\fR [\-\-keyring=<name> | \-k <name>]
+\fInvme\fR [<global\-options>] \fItls\-key\fR [\-\-keyring=<name> | \-k <name>]
                         [\-\-keytype=<type> | \-t <type>]
                         [\-\-keyfile=<file> | \-f <file>]
                         [\-\-import | \-i] [\-\-export | \-e]
-                        [\-\-revoke=<description>| \-r <description>]
-                        [<global\-options>]
+                        [\-\-revoke=<description> | \-r <description>]
 .fi
 .SH "DESCRIPTION"
 .sp
-Import, export or remove NVMe TLS pre\-shared keys (PSKs) from the system keystore\&. When the \fI\-\-export\fR option is given, all NVMe TLS PSKs are exported in the form
+Deprecated command kept for scripts written against nvme\-cli versions older than 3\&.0\&. Exactly one of \fI\-\-import\fR, \fI\-\-export\fR, or \fI\-\-revoke\fR must be given; based on which mode is selected, this alias translates the command into the equivalent new \fIkeys\fR plugin subcommand and forwards to it:
 .sp
-<descriptions> <psk>
+.RS 4
+.ie n \{\
+\h'-04'\(bu\h'+03'\c
+.\}
+.el \{\
+.sp -1
+.IP \(bu 2.3
+.\}
+\fI\-\-import\fR
+translates to
+\fBnvme-keys-import\fR(1), forwarding
+\fI\-\-keyring\fR
+and
+\fI\-\-keyfile\fR\&.
+.RE
 .sp
-where \fI<description>\fR is the key description from the exported key and \fI<psk>\fR is the key data in PSK interchange format \fINVMeTLSkey\-1:01:<base64 encoded data>:\fR\&. Each key is exported in a single line\&. When the \fI\-\-import\fR option is given key data is read in the same format and imported into the kernel keystore\&.
+.RS 4
+.ie n \{\
+\h'-04'\(bu\h'+03'\c
+.\}
+.el \{\
+.sp -1
+.IP \(bu 2.3
+.\}
+\fI\-\-export\fR
+translates to
+\fBnvme-keys-export\fR(1), forwarding
+\fI\-\-keyring\fR
+and
+\fI\-\-keyfile\fR\&.
+.RE
+.sp
+.RS 4
+.ie n \{\
+\h'-04'\(bu\h'+03'\c
+.\}
+.el \{\
+.sp -1
+.IP \(bu 2.3
+.\}
+\fI\-\-revoke=<description>\fR
+translates to
+\fBnvme-keys-revoke\fR(1), forwarding
+\fI\-\-keyring\fR
+and
+\fI\-\-keytype\fR, with
+\fI<description>\fR
+passed as
+\fI\-\-identity\fR\&.
+.RE
+.sp
+Only the options relevant to the selected mode are meaningful; e\&.g\&. \fI\-\-keytype\fR has no effect with \fI\-\-import\fR or \fI\-\-export\fR since the new \fIimport\fR/\fIexport\fR subcommands no longer take a key type\&. This command does not derive or insert a TLS PSK from a configured PSK \(em use \fBnvme-keys-gen-tls-psk\fR(1) or \fBnvme-keys-insert-tls-psk\fR(1) for that\&.
+.sp
+New scripts should call \fInvme keys import\fR, \fInvme keys export\fR, or \fInvme keys revoke\fR directly instead\&. This alias prints a deprecation warning on stderr and may be removed in a future release\&.
 .SH "OPTIONS"
 .PP
 \-k <name>, \-\-keyring=<name>
 .RS 4
-Name of the keyring into which the
-\fIretained\fR
-TLS key should be stored\&. Default is
+Name of the keyring to import into, export from, or revoke from\&. Default is
 \fI\&.nvme\fR\&.
 .RE
 .PP
 \-t <type>, \-\-keytype=<type>
 .RS 4
-Type of the key for resulting TLS key\&. Default is
+Type of the key to revoke\&. Only used with
+\fI\-\-revoke\fR\&. Default is
 \fIpsk\fR\&.
 .RE
 .PP
 \-f <file>, \-\-keyfile=<file>
 .RS 4
-File to read the keys from or write the keys to instead of stdin / stdout\&.
+File to read the keys from (\fI\-\-import\fR) or write the keys to (\fI\-\-export\fR) instead of stdin/stdout\&.
 .RE
 .PP
 \-i, \-\-import
 .RS 4
-Read the key data from the file specified by
-\fI\-\-keyfile\fR
-or stdin if not present\&.
+Import keys in bulk; see
+\fBnvme-keys-import\fR(1)\&.
 .RE
 .PP
 \-e, \-\-export
 .RS 4
-Write the key data to the file specified by
-\fI\-\-keyfile\fR
-or stdout if not present\&.
+Export all keys from the keyring; see
+\fBnvme-keys-export\fR(1)\&.
 .RE
 .PP
 \-r <description>, \-\-revoke=<description>
 .RS 4
-Revoke a key from a keyring\&.
+Revoke the key stored under
+\fI<description>\fR
+from the keyring; see
+\fBnvme-keys-revoke\fR(1)\&.
 .RE
 .SH "GLOBAL OPTIONS"
 .sp
@@ -130,136 +180,14 @@ Set the timeout for the command in milliseconds\&.
 .RS 4
 Increase the level of detail in the output\&. May be specified multiple times to further increase verbosity\&.
 .RE
+.sp
+These options can also be set as machine\-wide defaults in nvme\-cli\&.conf(5)\&. A command\-line flag always overrides the file\&.
 .SH "EXAMPLES"
 .sp
-.RS 4
-.ie n \{\
-\h'-04'\(bu\h'+03'\c
-.\}
-.el \{\
-.sp -1
-.IP \(bu 2.3
-.\}
-Create a new TLS key and insert it directly into the \&.nvme keyring:
-.sp
-.if n \{\
-.RS 4
-.\}
-.nf
-# nvme gen\-tls\-key \-i \-n hostnqn0 \-c subsys0
-NVMeTLSkey\-1:01:/b9tVz2OXJVISnoFgrPAygyS86XYJWkAapQeULns6PMpM8wv:
-Inserted TLS key 26b3260e
-.fi
-.if n \{\
-.RE
-.\}
-.RE
-.sp
-.RS 4
-.ie n \{\
-\h'-04'\(bu\h'+03'\c
-.\}
-.el \{\
-.sp -1
-.IP \(bu 2.3
-.\}
-Export previously created key from the kernel keyring and store it into a file
-.sp
-.if n \{\
-.RS 4
-.\}
-.nf
-# nvme tls\-key \-e \-f nvme\-tls\-keys\&.txt
-.fi
-.if n \{\
-.RE
-.\}
-.RE
-.sp
-.RS 4
-.ie n \{\
-\h'-04'\(bu\h'+03'\c
-.\}
-.el \{\
-.sp -1
-.IP \(bu 2.3
-.\}
-Export/list all keys from the \&.nvme keyring using nvme and keyctl
-.sp
-.if n \{\
-.RS 4
-.\}
-.nf
-# nvme tls\-key \-\-export
-NVMe0R01 hostnqn0 subsys0 NVMeTLSkey\-1:01:/b9tVz2OXJVISnoFgrPAygyS86XYJWkAapQeULns6PMpM8wv:
-
-# keyctl show
-Session Keyring
- 573249525 \-\-alswrv      0     0  keyring: _ses
- 353599402 \-\-alswrv      0 65534   \e_ keyring: _uid\&.0
- 475911922 \-\-\-lswrv      0     0   \e_ keyring: \&.nvme
- 649274894 \-\-als\-rv      0     0       \e_ psk: NVMe0R01 hostnqn0 subsys0
-.fi
-.if n \{\
-.RE
-.\}
-.RE
-.sp
-.RS 4
-.ie n \{\
-\h'-04'\(bu\h'+03'\c
-.\}
-.el \{\
-.sp -1
-.IP \(bu 2.3
-.\}
-Revoke a key using the description and verifying with keyctl the operation
-.sp
-.if n \{\
-.RS 4
-.\}
-.nf
-# nvme tls\-key \-\-revoke="NVMe0R01 hostnqn0 subsys0"
-
-# keyctl show
-Session Keyring
- 573249525 \-\-alswrv      0     0  keyring: _ses
- 353599402 \-\-alswrv      0 65534   \e_ keyring: _uid\&.0
- 475911922 \-\-\-lswrv      0     0   \e_ keyring: \&.nvme
-649274894: key inaccessible (Key has been revoked)
-.fi
-.if n \{\
-.RE
-.\}
-.RE
-.sp
-.RS 4
-.ie n \{\
-\h'-04'\(bu\h'+03'\c
-.\}
-.el \{\
-.sp -1
-.IP \(bu 2.3
-.\}
-Import back previously generated key from file and verify with keyctl
-.sp
-.if n \{\
-.RS 4
-.\}
-.nf
-# nvme tls\-key \-\-import \-f nvme\-tls\-keys\&.txt
-
-# keyctl show
-Session Keyring
- 573249525 \-\-alswrv      0     0  keyring: _ses
- 353599402 \-\-alswrv      0 65534   \e_ keyring: _uid\&.0
- 475911922 \-\-\-lswrv      0     0   \e_ keyring: \&.nvme
- 734343968 \-\-als\-rv      0     0       \e_ psk: NVMe0R01 hostnqn0 subsys0
-.fi
-.if n \{\
-.RE
-.\}
-.RE
+No Examples
 .SH "NVME"
 .sp
 Part of the nvme\-user suite
+.SH "SEE ALSO"
+.sp
+\fBnvme-keys-import\fR(1), \fBnvme-keys-export\fR(1), \fBnvme-keys-revoke\fR(1)

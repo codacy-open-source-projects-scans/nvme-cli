@@ -1,13 +1,20 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-#include "util/types.h"
-#include "common.h"
+#include <libnvme.h>
+
+#include <ccan/array_size/array_size.h>
+#include <ccan/endian/endian.h>
+#include <shared/int-util.h>
+#include <shared/time-util.h>
+#include <shared/uint128-util.h>
+#include <shared/uuid-util.h>
+
 #include "nvme-print.h"
-#include "ocp-print.h"
-#include "ocp-hardware-component-log.h"
 #include "ocp-fw-activation-history.h"
+#include "ocp-hardware-component-log.h"
+#include "ocp-nvme.h"
+#include "ocp-print.h"
 #include "ocp-smart-extended-log.h"
 #include "ocp-telemetry-decode.h"
-#include "ocp-nvme.h"
 #include "ocp-utils.h"
 
 static struct ocp_print_ops stdout_print_ops;
@@ -33,21 +40,17 @@ static void stdout_hwcomp_log(struct hwcomp_log *log, __u32 id, bool list)
 {
 	size_t date_lot_code_offset = sizeof(struct hwcomp_desc);
 	int num = 1;
-	long double log_bytes = uint128_t_to_double(le128_to_cpu(log->size));
+	__u64 desc_remain = log->desc_len;
 	struct hwcomp_desc_entry e = { log->desc };
-
-	if (log->ver == 1)
-		log_bytes *= sizeof(__le32);
 
 	printf("Log Identifier: 0x%02xh\n", OCP_LID_HWCOMP);
 	printf("Log Page Version: 0x%x\n", le16_to_cpu(log->ver));
 	print_array("Reserved2", log->rsvd2, ARRAY_SIZE(log->rsvd2));
 	print_array("Log page GUID", log->guid, ARRAY_SIZE(log->guid));
-	printf("Hardware Component Log Size: 0x%"PRIx64"\n", (uint64_t)log_bytes);
+	printf("Hardware Component Log Size: 0x%"PRIx64"\n", (uint64_t)desc_remain);
 	print_array("Reserved48", log->rsvd48, ARRAY_SIZE(log->rsvd48));
 	printf("Component Descriptions\n");
-	log_bytes -= offsetof(struct hwcomp_log, desc);
-	while (log_bytes > 0) {
+	while (desc_remain > 0) {
 		e.date_lot_size = le64_to_cpu(e.desc->date_lot_size) * sizeof(__le32);
 		e.date_lot_code = e.date_lot_size ? (__u8 *)e.desc + date_lot_code_offset : NULL;
 		e.add_info_size = le64_to_cpu(e.desc->add_info_size) * sizeof(__le32);
@@ -57,7 +60,7 @@ static void stdout_hwcomp_log(struct hwcomp_log *log, __u32 id, bool list)
 			print_hwcomp_desc(&e, list, num++);
 		e.desc_size = date_lot_code_offset + e.date_lot_size + e.add_info_size;
 		e.desc = (struct hwcomp_desc *)((__u8 *)e.desc + e.desc_size);
-		log_bytes -= e.desc_size;
+		desc_remain -= e.desc_size;
 	}
 }
 
@@ -93,7 +96,7 @@ static void stdout_fw_activation_history(const struct fw_activation_history *fw_
 	printf("  %-26s%d\n", "log page version:",
 	       le16_to_cpu(fw_history->log_page_version));
 
-	printf("  %-26s0x%"PRIx64"%"PRIx64"\n", "log page guid:",
+	printf("  %-26s0x%016"PRIx64"%016"PRIx64"\n", "log page guid:",
 	       le64_to_cpu(fw_history->log_page_guid[1]),
 	       le64_to_cpu(fw_history->log_page_guid[0]));
 
@@ -104,16 +107,13 @@ static void stdout_smart_extended_log(struct ocp_smart_extended_log *log, unsign
 {
 	uint16_t smart_log_ver = 0;
 	uint16_t dssd_version = 0;
-	int i = 0;
 
 	printf("SMART Cloud Attributes :-\n");
 
-	printf("  Physical media units written -		%"PRIu64" %"PRIu64"\n",
-		le64_to_cpu(*(uint64_t *)&log->physical_media_units_written[8]),
-		le64_to_cpu(*(uint64_t *)&log->physical_media_units_written));
-	printf("  Physical media units read    -		%"PRIu64" %"PRIu64"\n",
-		le64_to_cpu(*(uint64_t *)&log->physical_media_units_read[8]),
-		le64_to_cpu(*(uint64_t *)&log->physical_media_units_read));
+	printf("  Physical media units written -		%s\n",
+		uint128_t_to_string(le128_to_cpu(log->physical_media_units_written)));
+	printf("  Physical media units read    -		%s\n",
+		uint128_t_to_string(le128_to_cpu(log->physical_media_units_read)));
 	printf("  Bad user nand blocks - Raw			%"PRIu64"\n",
 		int48_to_long(log->bad_user_nand_blocks_raw));
 	printf("  Bad user nand blocks - Normalized		%d\n",
@@ -165,7 +165,8 @@ static void stdout_smart_extended_log(struct ocp_smart_extended_log *log, unsign
 	smart_log_ver = le16_to_cpu(log->log_page_version);
 	printf("  Log page version				%"PRIu16"\n", smart_log_ver);
 	printf("  Log page GUID					0x");
-	printf("%"PRIx64"%"PRIx64"\n", le64_to_cpu(*(uint64_t *)&log->log_page_guid[8]),
+	printf("%016"PRIx64"%016"PRIx64"\n",
+		le64_to_cpu(*(uint64_t *)&log->log_page_guid[8]),
 		le64_to_cpu(*(uint64_t *)&log->log_page_guid));
 	switch (smart_log_ver) {
 	case 0 ... 1:
@@ -214,16 +215,14 @@ static void stdout_smart_extended_log(struct ocp_smart_extended_log *log, unsign
 			le16_to_cpu(log->current_max_avg_power));
 		printf("  Lifetime power consumed			%"PRIu64"\n",
 			int48_to_long(log->lifetime_power_consumed));
-		printf("  Dssd firmware revision			");
-		for (i = 0; i < sizeof(log->dssd_firmware_revision); i++)
-			printf("%c", log->dssd_firmware_revision[i]);
-		printf("\n");
+		printf("  Dssd firmware revision			%.*s\n",
+			(int)sizeof(log->dssd_firmware_revision),
+			(char *)log->dssd_firmware_revision);
 		printf("  Dssd firmware build UUID			%s\n",
-			util_uuid_to_string(log->dssd_firmware_build_uuid));
-		printf("  Dssd firmware build label			");
-		for (i = 0; i < sizeof(log->dssd_firmware_build_label); i++)
-			printf("%c", log->dssd_firmware_build_label[i]);
-		printf("\n");
+			shr_uuid_to_string(log->dssd_firmware_build_uuid));
+		printf("  Dssd firmware build label			%.*s\n",
+			(int)sizeof(log->dssd_firmware_build_label),
+			(char *)log->dssd_firmware_build_label);
 		fallthrough;
 	case 4:
 		printf("  NVMe Command Set Errata Version               %d\n",
@@ -254,9 +253,7 @@ static void stdout_smart_extended_log(struct ocp_smart_extended_log *log, unsign
 
 static void stdout_telemetry_log(struct ocp_telemetry_parse_options *options)
 {
-#ifdef CONFIG_JSONC
 	print_ocp_telemetry_normal(options);
-#endif /* CONFIG_JSONC */
 }
 
 static void stdout_c3_log(struct libnvme_transport_handle *hdl, struct ssd_latency_monitor_log *log_data)
@@ -315,7 +312,7 @@ static void stdout_c3_log(struct libnvme_transport_handle *hdl, struct ssd_laten
 	if (le64_to_cpu(log_data->debug_log_latency_stamp) == -1) {
 		printf("  Debug Log Latency Time Stamp       N/A\n");
 	} else {
-		convert_ts(le64_to_cpu(log_data->debug_log_latency_stamp), ts_buf);
+		shr_format_ts(le64_to_cpu(log_data->debug_log_latency_stamp), ts_buf);
 		printf("  Debug Log Latency Time Stamp       %s\n", ts_buf);
 	}
 	printf("  Debug Log Pointer                  %d\n",
@@ -350,7 +347,7 @@ static void stdout_c3_log(struct libnvme_transport_handle *hdl, struct ssd_laten
 			if (le64_to_cpu(log_data->active_latency_timestamp[3-i][j]) == -1) {
 				printf("                    N/A         ");
 			} else {
-				convert_ts(le64_to_cpu(log_data->active_latency_timestamp[3-i][j]),
+				shr_format_ts(le64_to_cpu(log_data->active_latency_timestamp[3-i][j]),
 					   ts_buf);
 				printf("%s     ", ts_buf);
 			}
@@ -381,7 +378,7 @@ static void stdout_c3_log(struct libnvme_transport_handle *hdl, struct ssd_laten
 			if (le64_to_cpu(log_data->static_latency_timestamp[3-i][j]) == -1) {
 				printf("                    N/A         ");
 			} else {
-				convert_ts(le64_to_cpu(log_data->static_latency_timestamp[3-i][j]),
+				shr_format_ts(le64_to_cpu(log_data->static_latency_timestamp[3-i][j]),
 					   ts_buf);
 				printf("%s     ", ts_buf);
 			}
@@ -458,6 +455,7 @@ static void stdout_c1_log(struct ocp_error_recovery_log_page *log_data)
 
 static void stdout_c4_log(struct ocp_device_capabilities_log_page *log_data)
 {
+	__u16 log_page_version = le16_to_cpu(log_data->log_page_version);
 	int i;
 
 	printf("  Device Capability/C4 Log Page Data\n");
@@ -481,8 +479,15 @@ static void stdout_c4_log(struct ocp_device_capabilities_log_page *log_data)
 	for (i = 0; i <= 127; i++)
 		printf("%x", log_data->dssd_pwr_state_desc[i]);
 	printf("\n");
+	if (log_page_version >= 0x2) {
+		__u16 fips = le16_to_cpu(log_data->fips_140_validation);
+
+		printf("  FIPS 140 Validation					: 0x%x\n", fips);
+		printf("    FIPS 140 Validation Status			: %s\n",
+		       ocp_c4_fips_140_status(fips));
+	}
 	printf("  Log Page Version						: 0x%x\n",
-	       le16_to_cpu(log_data->log_page_version));
+	       log_page_version);
 	printf("  Log page GUID							: 0x");
 	for (i = GUID_LEN - 1; i >= 0; i--)
 		printf("%02x", log_data->log_page_guid[i]);
@@ -635,7 +640,7 @@ static void stdout_c9_log(struct telemetry_str_log_format *log_data, __u8 *log_d
 
 	if (log_data->sitsz != 0) {
 		memcpy(stat_id_str_table_arr, (__u8 *)log_data_buf + stat_id_str_table_ofst,
-		       (log_data->sitsz * 4));
+		       stat_id_index * sizeof(struct statistics_id_str_table_entry));
 		printf("  Statistics Identifier String Table\n");
 		for (j = 0; j < stat_id_index; j++) {
 			printf("   Vendor Specific Statistic Identifier : 0x%x\n",
@@ -653,7 +658,7 @@ static void stdout_c9_log(struct telemetry_str_log_format *log_data, __u8 *log_d
 
 	if (log_data->estsz != 0) {
 		memcpy(event_id_str_table_arr, (__u8 *)log_data_buf + event_str_table_ofst,
-		       (log_data->estsz * 4));
+		       eve_id_index * sizeof(struct event_id_str_table_entry));
 		printf("  Event Identifier String Table Entry\n");
 		for (j = 0; j < eve_id_index; j++) {
 			printf("   Debug Event Class        : 0x%x\n",
@@ -672,7 +677,7 @@ static void stdout_c9_log(struct telemetry_str_log_format *log_data, __u8 *log_d
 
 	if (log_data->vu_eve_st_sz != 0) {
 		memcpy(vu_event_id_str_table_arr, (__u8 *)log_data_buf + vu_event_str_table_ofst,
-		       (log_data->vu_eve_st_sz * 4));
+		       vu_eve_index * sizeof(struct vu_event_id_str_table_entry));
 		printf("  VU Event Identifier String Table Entry\n");
 		for (j = 0; j < vu_eve_index; j++) {
 			printf("   Debug Event Class        : 0x%x\n",

@@ -2,12 +2,13 @@
 /*
  * Copyright (c) 2024
  */
-#include "cmd.h"
-#include "common.h"
-#include "ocp-nvme.h"
+#pragma once
 
-#ifndef OCP_HARDWARE_COMPONENT_LOG_H
-#define OCP_HARDWARE_COMPONENT_LOG_H
+#include "plugin.h"
+
+#include <shared/compiler-attributes-util.h>
+
+#include "ocp-nvme.h"
 
 #define HWCOMP_RSVD2_LEN 14
 #define HWCOMP_SIZE_LEN 16
@@ -29,6 +30,7 @@ struct __packed hwcomp_log {
 	__u8 size[HWCOMP_SIZE_LEN];
 	__u8 rsvd48[HWCOMP_RSVD48_LEN];
 	struct hwcomp_desc *desc;
+	__u32 desc_len;
 };
 
 struct hwcomp_desc_entry {
@@ -60,5 +62,3 @@ enum hwcomp_id {
 
 int ocp_hwcomp_log(int argc, char **argv, struct command *acmd, struct plugin *plugin);
 const char *hwcomp_id_to_string(__u32 id);
-
-#endif /* OCP_HARDWARE_COMPONENT_LOG_H */

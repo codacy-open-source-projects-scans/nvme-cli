@@ -1,23 +1,25 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-#include <fcntl.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/stat.h>
-#include <unistd.h>
 #include <time.h>
+#include <unistd.h>
 
 #include <libnvme.h>
 
-#include "common.h"
+#include <ccan/endian/endian.h>
+#include <ccan/minmax/minmax.h>
+#include <shared/compiler-attributes-util.h>
+
+#include "cleanup.h"
+#include "global-ctx.h"
+#include "memblaze-smart-log-add-x.h"
+#include "memblaze-utils.h"
 #include "nvme-cmds.h"
 #include "nvme-print.h"
-#include "nvme.h"
 #include "plugin.h"
-
-#define CREATE_CMD
-#include "memblaze-nvme.h"
-#include "memblaze-utils.h"
 
 enum {
 	/* feature id */
@@ -357,10 +359,12 @@ static int show_memblaze_smart_log(struct libnvme_transport_handle *hdl, __u32 n
 	const char *devname, struct nvme_memblaze_smart_log *smart)
 {
 	struct nvme_id_ctrl ctrl;
+	struct libnvme_passthru_cmd cmd;
 	char fw_ver[10];
 	int err = 0;
 
-	err = nvme_identify_ctrl(hdl, &ctrl);
+	nvme_init_identify_ctrl(&cmd, &ctrl);
+	err = libnvme_exec_admin_passthru(hdl, &cmd);
 	if (err)
 		return err;
 
@@ -423,6 +427,7 @@ static int mb_get_additional_smart_log(int argc, char **argv, struct command *ac
 	const char *raw = "dump output in binary format";
 	__cleanup_nvme_global_ctx struct libnvme_global_ctx *ctx = NULL;
 	__cleanup_nvme_transport_handle struct libnvme_transport_handle *hdl = NULL;
+	struct libnvme_passthru_cmd cmd;
 	struct config {
 		__u32 namespace_id;
 		bool  raw_binary;
@@ -441,8 +446,9 @@ static int mb_get_additional_smart_log(int argc, char **argv, struct command *ac
 	if (err)
 		return err;
 
-	err = nvme_get_nsid_log(hdl, cfg.namespace_id, false, 0xca,
-				&smart_log, sizeof(smart_log));
+	nvme_init_get_log(&cmd, cfg.namespace_id, 0xca, NVME_CSI_NVM,
+			  &smart_log, sizeof(smart_log));
+	err = libnvme_get_log(hdl, &cmd, false, NVME_LOG_PAGE_PDU_SIZE);
 	if (!err) {
 		if (!cfg.raw_binary)
 			err = show_memblaze_smart_log(hdl, cfg.namespace_id,
@@ -488,14 +494,12 @@ static int mb_get_powermanager_status(int argc, char **argv, struct command *acm
 		return err;
 
 	err = nvme_get_features(hdl, 0, feature_id, 0, 0, 0, NULL, 0, &result);
-	if (err < 0)
-		perror("get-feature");
 	if (!err)
 		printf("get-feature:0x%02x (%s), %s value: %#016" PRIx64 "\n",
 			feature_id, mb_feature_to_string(feature_id),
 			nvme_select_to_string(0), (uint64_t)result);
-	else if (err > 0)
-		nvme_show_status(err);
+	else
+		nvme_show_err(err, "get-feature");
 	return err;
 }
 
@@ -523,7 +527,7 @@ static int mb_set_powermanager_status(int argc, char **argv, struct command *acm
 	};
 
 	NVME_ARGS(opts,
-		OPT_UINT("value",		 'v', &cfg.value,		 value),
+		OPT_UINT("value",		 'V', &cfg.value,		 value),
 		OPT_FLAG("save",		 's', &cfg.save,		 save));
 
 	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
@@ -532,13 +536,11 @@ static int mb_set_powermanager_status(int argc, char **argv, struct command *acm
 
 	err = nvme_set_features(hdl, 0, cfg.feature_id, cfg.save, cfg.value, 0, 0, 0,
 			0, NULL, 0, &result);
-	if (err < 0)
-		perror("set-feature");
 	if (!err)
 		printf("set-feature:%02x (%s), value:%#08x\n", cfg.feature_id,
 		       mb_feature_to_string(cfg.feature_id), cfg.value);
-	else if (err > 0)
-		nvme_show_status(err);
+	else
+		nvme_show_err(err, "set-feature");
 
 	return err;
 }
@@ -581,24 +583,22 @@ static int mb_set_high_latency_log(int argc, char **argv, struct command *acmd,
 		return err;
 
 	if (parse_params(cfg.param, 2, &param1, &param2)) {
-		printf("setfeature: invalid formats %s\n", cfg.param);
+		nvme_show_error("setfeature: invalid formats %s", cfg.param);
 		return -EINVAL;
 	}
 	if ((param1 == 1) && (param2 < P2MIN || param2 > P2MAX)) {
-		printf("setfeature: invalid high io latency threshold %d\n", param2);
+		nvme_show_error("setfeature: invalid high io latency threshold %d", param2);
 		return -EINVAL;
 	}
 	cfg.value = (param1 << MB_FEAT_HIGH_LATENCY_VALUE_SHIFT) | param2;
 
 	err = nvme_set_features(hdl, 0, cfg.feature_id, false, cfg.value, 0, 0, 0,
 			0, NULL, 0, &result);
-	if (err < 0)
-		perror("set-feature");
 	if (!err)
 		printf("set-feature:0x%02X (%s), value:%#08x\n", cfg.feature_id,
 		       mb_feature_to_string(cfg.feature_id), cfg.value);
-	else if (err > 0)
-		nvme_show_status(err);
+	else
+		nvme_show_err(err, "set-feature");
 
 	return err;
 }
@@ -736,7 +736,7 @@ static int memblaze_fw_commit(struct libnvme_transport_handle *hdl, int select)
 		.cdw12		= select,
 	};
 
-	return libnvme_submit_admin_passthru(hdl, &cmd);
+	return libnvme_exec_admin_passthru(hdl, &cmd);
 }
 
 static int mb_selective_download(int argc, char **argv, struct command *acmd, struct plugin *plugin)
@@ -758,7 +758,8 @@ static int mb_selective_download(int argc, char **argv, struct command *acmd, st
 	struct libnvme_passthru_cmd cmd;
 	int xfer = 4096;
 	struct stat sb;
-	void *fw_buf;
+	__cleanup_libnvme_free void *fw_buf = NULL;
+	unsigned char *fw_ptr;
 	int i;
 
 	struct config {
@@ -780,7 +781,7 @@ static int mb_selective_download(int argc, char **argv, struct command *acmd, st
 		return err;
 
 	if (strlen(cfg.select) != 3) {
-		fprintf(stderr, "Invalid select flag\n");
+		nvme_show_error("Invalid select flag");
 		err = EINVAL;
 		goto out;
 	}
@@ -795,60 +796,59 @@ static int mb_selective_download(int argc, char **argv, struct command *acmd, st
 	} else if (!strncmp(cfg.select, "ALL", 3)) {
 		selectNo = 26;
 	} else {
-		fprintf(stderr, "Invalid select flag\n");
+		nvme_show_error("Invalid select flag");
 		err = EINVAL;
 		goto out;
 	}
 
 	fw_fd = open(cfg.fw, O_RDONLY);
 	if (fw_fd < 0) {
-		fprintf(stderr, "no firmware file provided\n");
+		nvme_show_error("no firmware file provided");
 		err = EINVAL;
 		goto out;
 	}
 
 	err = fstat(fw_fd, &sb);
 	if (err < 0) {
-		perror("fstat");
+		nvme_show_perror("fstat");
 		err = errno;
 		goto out_close;
 	}
 
 	fw_size = sb.st_size;
 	if (fw_size & 0x3) {
-		fprintf(stderr, "Invalid size:%d for f/w image\n", fw_size);
+		nvme_show_error("Invalid size:%d for f/w image", fw_size);
 		err = EINVAL;
 		goto out_close;
 	}
 
-	if (posix_memalign(&fw_buf, getpagesize(), fw_size)) {
-		fprintf(stderr, "No memory for f/w size:%d\n", fw_size);
+	fw_buf = libnvme_alloc(fw_size);
+	if (!fw_buf) {
+		nvme_show_error("No memory for f/w size:%d", fw_size);
 		err = ENOMEM;
 		goto out_close;
 	}
+	fw_ptr = fw_buf;
 
 	if (read(fw_fd, fw_buf, fw_size) != ((ssize_t)(fw_size))) {
 		err = errno;
-		goto out_free;
+		goto out_close;
 	}
 
 	while (fw_size > 0) {
 		xfer = min(xfer, fw_size);
 
-		err = nvme_init_fw_download(&cmd, fw_buf, xfer, offset);
+		err = nvme_init_fw_download(&cmd, fw_ptr, xfer, offset);
 		if (err) {
-			perror("fw-download");
-			goto out_free;
+			nvme_show_err(err, "fw-download");
+			goto out_close;
 		}
-		err = libnvme_submit_admin_passthru(hdl, &cmd);
-		if (err < 0) {
-			perror("fw-download");
-			goto out_free;
-		} else if (err != 0) {
-			nvme_show_status(err);
-			goto out_free;
+		err = libnvme_exec_admin_passthru(hdl, &cmd);
+		if (err) {
+			nvme_show_err(err, "fw-download");
+			goto out_close;
 		}
-		fw_buf	   += xfer;
+		fw_ptr	   += xfer;
 		fw_size    -= xfer;
 		offset += xfer;
 	}
@@ -857,11 +857,9 @@ static int mb_selective_download(int argc, char **argv, struct command *acmd, st
 
 	if (err == 0x10B || err == 0x20B) {
 		err = 0;
-		fprintf(stderr, "Update successful! Please power cycle for changes to take effect\n");
+		nvme_show_verbose_result("Update successful! Please power cycle for changes to take effect");
 	}
 
-out_free:
-	free(fw_buf);
 out_close:
 	close(fw_fd);
 out:
@@ -881,7 +879,8 @@ static void ioLatencyHistogramOutput(FILE *fd, int index, int start, int end, ch
 		snprintf(subString1, sizeof(subString1), "%s", "+INF");
 	len = snprintf(string, sizeof(string), "%-11d %-11s %-11s %-11u\n",
 		       index, subString0, subString1, pHistogram[index]);
-	fwrite(string, 1, len, fd);
+	if (fd)
+		fwrite(string, 1, len, fd);
 	if (print)
 		printf("%s", string);
 }
@@ -889,9 +888,13 @@ static void ioLatencyHistogramOutput(FILE *fd, int index, int start, int end, ch
 int io_latency_histogram(char *file, char *buf, int print, int logid)
 {
 	FILE *fdi = fopen(file, "w+");
+	int saved_errno = fdi ? 0 : errno;
 	int i, index;
 	char unit[2][3];
 	unsigned int *revision = (unsigned int *)buf;
+
+	if (!fdi)
+		nvme_show_error("Failed to create %s: %s", file, libnvme_strerror(saved_errno));
 
 	if (logid == GLP_ID_VU_GET_READ_LATENCY_HISTOGRAM)
 		fPRINT_PARAM1("Memblaze IO Read Command Latency Histogram\n");
@@ -950,7 +953,7 @@ int io_latency_histogram(char *file, char *buf, int print, int logid)
 
 	if (fdi)
 		fclose(fdi);
-	return 1;
+	return fdi ? 0 : -saved_errno;
 }
 
 static int mb_lat_stats_log_print(int argc, char **argv, struct command *acmd, struct plugin *plugin)
@@ -982,7 +985,7 @@ static int mb_lat_stats_log_print(int argc, char **argv, struct command *acmd, s
 
 	err = nvme_get_log_simple(hdl, cfg.write ? 0xc2 : 0xc1, &stats, sizeof(stats));
 	if (!err)
-		io_latency_histogram(cfg.write ? f2 : f1, stats, DO_PRINT_FLAG,
+		err = io_latency_histogram(cfg.write ? f2 : f1, stats, DO_PRINT_FLAG,
 				     cfg.write ? GLP_ID_VU_GET_WRITE_LATENCY_HISTOGRAM :
 				     GLP_ID_VU_GET_READ_LATENCY_HISTOGRAM);
 	else
@@ -1022,13 +1025,11 @@ static int memblaze_clear_error_log(int argc, char **argv, struct command *acmd,
 
 	err = nvme_set_features(hdl, 0, cfg.feature_id, cfg.save, cfg.value, 0, 0, 0,
 			0, NULL, 0, &result);
-	if (err < 0)
-		perror("set-feature");
 	if (!err)
 		printf("set-feature:%02x (%s), value:%#08x\n", cfg.feature_id,
 		       mb_feature_to_string(cfg.feature_id), cfg.value);
-	else if (err > 0)
-		nvme_show_status(err);
+	else
+		nvme_show_err(err, "set-feature");
 
 	return err;
 }
@@ -1079,7 +1080,7 @@ static int mb_set_lat_stats(int argc, char **argv, struct command *acmd, struct 
 	enum Option option = None;
 
 	if (cfg.enable && cfg.disable)
-		printf("Cannot enable and disable simultaneously.");
+		nvme_show_error("Cannot enable and disable simultaneously.");
 	else if (cfg.enable || cfg.disable)
 		option = cfg.enable;
 
@@ -1093,7 +1094,7 @@ static int mb_set_lat_stats(int argc, char **argv, struct command *acmd, struct 
 			printf("Latency Statistics Tracking (FID 0x%X) is currently (%"PRIu64").\n",
 				fid, (uint64_t)result);
 		} else {
-			printf("Could not read feature id 0xE2.\n");
+			nvme_show_error("Could not read feature id 0xE2.");
 			return err;
 		}
 		break;
@@ -1101,28 +1102,18 @@ static int mb_set_lat_stats(int argc, char **argv, struct command *acmd, struct 
 	case False:
 		err = nvme_set_features(hdl, nsid, fid, save, option, cdw12, 0, 0,
 				0, buf, data_len, &result);
-		if (err > 0) {
-			nvme_show_status(err);
-		} else if (err < 0) {
-			perror("Enable latency tracking");
-			fprintf(stderr, "Command failed while parsing.\n");
+		if (err) {
+			nvme_show_err(err, "Enable latency tracking");
 		} else {
-			printf("Successfully set enable bit for FID (0x%X) to %i.\n", 0xe2, option);
+			nvme_show_verbose_result("Successfully set enable bit for FID (0x%X) to %i.", 0xe2, option);
 		}
 		break;
 	default:
-		printf("%d not supported.\n", option);
+		nvme_show_error("%d not supported.", option);
 		err = EINVAL;
 	}
 	return err;
 }
-
-// Global definitions
-
-static inline int K2C(int k)  // KELVINS_2_CELSIUS
-{
-	return (k - 273);
-};
 
 // Global ID definitions
 
@@ -1131,451 +1122,14 @@ enum {
 	FID_LATENCY_FEATURE = 0xd0,
 
 	// log ids
-	LID_SMART_LOG_ADD          = 0xca,
 	LID_LATENCY_STATISTICS     = 0xd0,
 	LID_HIGH_LATENCY_LOG       = 0xd1,
 	LID_PERFORMANCE_STATISTICS = 0xd2,
 };
 
-// smart-log-add
-
-struct smart_log_add_item {
-	uint32_t index;
-	char    *attr;
-};
-
-struct __packed raw_array {
-	__le16 r0;
-	__le16 r2;
-	__le16 r4;
-};
-
-struct __packed raw_array1 {
-	__le32 r0;
-	__le16 r4;
-};
-
-struct __packed smart_log_add_item_12 {
-	uint8_t id;
-	uint8_t rsvd1[2];
-	uint8_t norm;
-	uint8_t rsvd11;
-	union {
-		struct raw_array ra;
-		struct raw_array1 ra1;
-		uint8_t raw[6];
-	};
-	uint8_t rsvd2;
-};
-
-struct __packed smart_log_add_item_10 {
-	uint8_t id;
-	uint8_t norm;
-	union {
-		struct raw_array ra;
-		struct raw_array1 ra1;
-		uint8_t raw[6];
-	};
-	uint8_t rsvd8[2];
-};
-
-struct __packed smart_log_add {
-	union {
-		union {
-			struct __packed smart_log_add_v0 {
-				struct smart_log_add_item_12 program_fail_count;
-				struct smart_log_add_item_12 erase_fail_count;
-				struct smart_log_add_item_12 wear_leveling_count;
-				struct smart_log_add_item_12 end_to_end_error_count;
-				struct smart_log_add_item_12 crc_error_count;
-				struct smart_log_add_item_12 timed_workload_media_wear;
-				struct smart_log_add_item_12 timed_workload_host_reads;
-				struct smart_log_add_item_12 timed_workload_timer;
-				struct smart_log_add_item_12 thermal_throttle_status;
-				struct smart_log_add_item_12 retry_buffer_overflow_counter;
-				struct smart_log_add_item_12 pll_lock_loss_count;
-				struct smart_log_add_item_12 nand_bytes_written;
-				struct smart_log_add_item_12 host_bytes_written;
-				struct smart_log_add_item_12 system_area_life_remaining;
-				struct smart_log_add_item_12 nand_bytes_read;
-				struct smart_log_add_item_12 temperature;
-				struct smart_log_add_item_12 power_consumption;
-				struct smart_log_add_item_12 power_on_temperature;
-				struct smart_log_add_item_12 power_loss_protection;
-				struct smart_log_add_item_12 read_fail_count;
-				struct smart_log_add_item_12 thermal_throttle_time;
-				struct smart_log_add_item_12 flash_error_media_count;
-			} v0;
-
-			struct smart_log_add_item_12 v0_raw[22];
-		};
-
-		union {
-			struct __packed smart_log_add_v2 {
-				struct smart_log_add_item_12 program_fail_count;
-				struct smart_log_add_item_12 erase_fail_count;
-				struct smart_log_add_item_12 wear_leveling_count;
-				struct smart_log_add_item_12 end_to_end_error_count;
-				struct smart_log_add_item_12 crc_error_count;
-				struct smart_log_add_item_12 timed_workload_media_wear;
-				struct smart_log_add_item_12 timed_workload_host_reads;
-				struct smart_log_add_item_12 timed_workload_timer;
-				struct smart_log_add_item_12 thermal_throttle_status;
-				struct smart_log_add_item_12 lifetime_write_amplification;
-				struct smart_log_add_item_12 pll_lock_loss_count;
-				struct smart_log_add_item_12 nand_bytes_written;
-				struct smart_log_add_item_12 host_bytes_written;
-				struct smart_log_add_item_12 system_area_life_remaining;
-				struct smart_log_add_item_12 firmware_update_count;
-				struct smart_log_add_item_12 dram_cecc_count;
-				struct smart_log_add_item_12 dram_uecc_count;
-				struct smart_log_add_item_12 xor_pass_count;
-				struct smart_log_add_item_12 xor_fail_count;
-				struct smart_log_add_item_12 xor_invoked_count;
-				struct smart_log_add_item_12 inflight_read_io_cmd;
-				struct smart_log_add_item_12 inflight_write_io_cmd;
-				struct smart_log_add_item_12 nand_bytes_read;
-				struct smart_log_add_item_12 temp_since_born;
-				struct smart_log_add_item_12 power_consumption;
-				struct smart_log_add_item_12 temp_since_bootup;
-				struct smart_log_add_item_12 thermal_throttle_time;
-				struct smart_log_add_item_12 capacitor_capacitance;
-				struct smart_log_add_item_12 free_xblock_status;
-			} v2;
-
-			struct smart_log_add_item_12 v2_raw[29];
-		};
-
-		union {
-			struct __packed smart_log_add_v3 {
-				struct smart_log_add_item_10 program_fail_count;
-				struct smart_log_add_item_10 erase_fail_count;
-				struct smart_log_add_item_10 wear_leveling_count;
-				struct smart_log_add_item_10 ext_e2e_err_count;
-				struct smart_log_add_item_10 crc_err_count;
-				struct smart_log_add_item_10 nand_bytes_written;
-				struct smart_log_add_item_10 host_bytes_written;
-				struct smart_log_add_item_10 reallocated_sector_count;
-				struct smart_log_add_item_10 uncorrectable_sector_count;
-				struct smart_log_add_item_10 nand_uecc_detection;
-				struct smart_log_add_item_10 nand_xor_correction;
-				struct smart_log_add_item_10 rsvd11;
-				struct smart_log_add_item_10 gc_count;
-				struct smart_log_add_item_10 dram_uecc_detection_count;
-				struct smart_log_add_item_10 sram_uecc_detection_count;
-				struct smart_log_add_item_10 internal_raid_recovery_fail_count;
-				struct smart_log_add_item_10 inflight_cmds;
-				struct smart_log_add_item_10 internal_e2e_err_count;
-				struct smart_log_add_item_10 rsvd18;
-				struct smart_log_add_item_10 die_fail_count;
-				struct smart_log_add_item_10 wear_leveling_execution_count;
-				struct smart_log_add_item_10 read_disturb_count;
-				struct smart_log_add_item_10 data_retention_count;
-				struct smart_log_add_item_10 capacitor_health;
-				struct smart_log_add_item_10 dram_cecc_count;
-				struct smart_log_add_item_10 dram_cecc_address;
-				struct smart_log_add_item_10 sram_cecc_count;
-				struct smart_log_add_item_10 sram_cecc_address;
-				struct smart_log_add_item_10 write_throttle_status;
-			} v3;
-
-			struct smart_log_add_item_10 v3_raw[29];
-		};
-
-		uint8_t raw[512];
-	};
-};
-
-static void smart_log_add_v0_print(struct smart_log_add_item_12 *item, int item_count)
-{
-	static const struct smart_log_add_item items[0xff] = {
-		[0xab] = {0,  "program_fail_count"           },
-		[0xac] = {1,  "erase_fail_count"             },
-		[0xad] = {2,  "wear_leveling_count"          },
-		[0xb8] = {3,  "end_to_end_error_count"       },
-		[0xc7] = {4,  "crc_error_count"              },
-		[0xe2] = {5,  "timed_workload_media_wear"    },
-		[0xe3] = {6,  "timed_workload_host_reads"    },
-		[0xe4] = {7,  "timed_workload_timer"         },
-		[0xea] = {8,  "thermal_throttle_status"      },
-		[0xf0] = {9,  "retry_buffer_overflow_counter"},
-		[0xf3] = {10, "pll_lock_loss_count"          },
-		[0xf4] = {11, "nand_bytes_written"           },
-		[0xf5] = {12, "host_bytes_written"           },
-		[0xf6] = {13, "system_area_life_remaining"   },
-		[0xfa] = {14, "nand_bytes_read"              },
-		[0xe7] = {15, "temperature"                  },
-		[0xe8] = {16, "power_consumption"            },
-		[0xaf] = {17, "power_on_temperature"         },
-		[0xec] = {18, "power_loss_protection"        },
-		[0xf2] = {19, "read_fail_count"              },
-		[0xeb] = {20, "thermal_throttle_time"        },
-		[0xed] = {21, "flash_error_media_count"      },
-	};
-
-	for (int i = 0; i < item_count; i++, item++) {
-		if (item->id == 0)
-			continue;
-
-		printf("%#-12" PRIx8 "%-36s%-12d", item->id, items[item->id].attr, item->norm);
-		switch (item->id) {
-		case 0xad:
-			printf("min: %d, max: %d, avg: %d\n",
-			       le16_to_cpu(item->ra.r0),
-			       le16_to_cpu(item->ra.r2),
-			       le16_to_cpu(item->ra.r4));
-			break;
-		case 0xe7:
-			printf("max: %d °C (%d K), min: %d °C (%d K), curr: %d °C (%d K)\n",
-			       K2C(le16_to_cpu(item->ra.r0)),
-			       le16_to_cpu(item->ra.r0),
-			       K2C(le16_to_cpu(item->ra.r2)),
-			       le16_to_cpu(item->ra.r2),
-			       K2C(le16_to_cpu(item->ra.r4)),
-			       le16_to_cpu(item->ra.r4));
-			break;
-		case 0xe8:
-			printf("max: %d, min: %d, curr: %d\n",
-			       le16_to_cpu(item->ra.r0),
-			       le16_to_cpu(item->ra.r2),
-			       le16_to_cpu(item->ra.r4));
-			break;
-		case 0xaf:
-			printf("max: %d °C (%d K), min: %d °C (%d K), curr: %d °C (%d K)\n",
-			       K2C(le16_to_cpu(item->ra.r0)),
-			       le16_to_cpu(item->ra.r0),
-			       K2C(le16_to_cpu(item->ra.r2)),
-			       le16_to_cpu(item->ra.r2),
-			       K2C(le16_to_cpu(item->ra.r4)),
-			       le16_to_cpu(item->ra.r4));
-			break;
-		default:
-			printf("%" PRIu64 "\n", int48_to_long(item->raw));
-			break;
-		}
-	}
-}
-
-static void smart_log_add_v2_print(struct smart_log_add_item_12 *item, int item_count)
-{
-	static const struct smart_log_add_item items[0xff] = {
-		[0xab] = {0,  "program_fail_count"          },
-		[0xac] = {1,  "erase_fail_count"            },
-		[0xad] = {2,  "wear_leveling_count"         },
-		[0xb8] = {3,  "end_to_end_error_count"      },
-		[0xc7] = {4,  "crc_error_count"             },
-		[0xe2] = {5,  "timed_workload_media_wear"   },
-		[0xe3] = {6,  "timed_workload_host_reads"   },
-		[0xe4] = {7,  "timed_workload_timer"        },
-		[0xea] = {8,  "thermal_throttle_status"     },
-		[0xf0] = {9,  "lifetime_write_amplification"},
-		[0xf3] = {10, "pll_lock_loss_count"         },
-		[0xf4] = {11, "nand_bytes_written"          },
-		[0xf5] = {12, "host_bytes_written"          },
-		[0xf6] = {13, "system_area_life_remaining"  },
-		[0xf9] = {14, "firmware_update_count"       },
-		[0xfa] = {15, "dram_cecc_count"             },
-		[0xfb] = {16, "dram_uecc_count"             },
-		[0xfc] = {17, "xor_pass_count"              },
-		[0xfd] = {18, "xor_fail_count"              },
-		[0xfe] = {19, "xor_invoked_count"           },
-		[0xe5] = {20, "inflight_read_io_cmd"        },
-		[0xe6] = {21, "inflight_write_io_cmd"       },
-		[0xf8] = {22, "nand_bytes_read"             },
-		[0xe7] = {23, "temp_since_born"             },
-		[0xe8] = {24, "power_consumption"           },
-		[0xaf] = {25, "temp_since_bootup"           },
-		[0xeb] = {26, "thermal_throttle_time"       },
-		[0xec] = {27, "capacitor_capacitance"       },
-		[0xed] = {28, "free_xblock_status"          },
-	};
-
-	for (int i = 0; i < item_count; i++, item++) {
-		if (item->id == 0)
-			continue;
-
-		printf("%#-12" PRIx8 "%-36s%-12d", item->id, items[item->id].attr, item->norm);
-		switch (item->id) {
-		case 0xad:
-			printf("min: %d, max: %d, avg: %d\n",
-			       le16_to_cpu(item->ra.r0),
-			       le16_to_cpu(item->ra.r2),
-			       le16_to_cpu(item->ra.r4));
-			break;
-		case 0xe7:
-			printf("max: %d °C (%d K), min: %d °C (%d K), curr: %d °C (%d K)\n",
-			       K2C(le16_to_cpu(item->ra.r0)),
-			       le16_to_cpu(item->ra.r0),
-			       K2C(le16_to_cpu(item->ra.r2)),
-			       le16_to_cpu(item->ra.r2),
-			       K2C(le16_to_cpu(item->ra.r4)),
-			       le16_to_cpu(item->ra.r4));
-			break;
-		case 0xe8:
-			printf("max: %d, min: %d, curr: %d\n",
-			       le16_to_cpu(item->ra.r0),
-			       le16_to_cpu(item->ra.r2),
-			       le16_to_cpu(item->ra.r4));
-			break;
-		case 0xaf:
-			printf("max: %d °C (%d K), min: %d °C (%d K), curr: %d °C (%d K)\n",
-			       K2C(le16_to_cpu(item->ra.r0)),
-			       le16_to_cpu(item->ra.r0),
-			       K2C(le16_to_cpu(item->ra.r2)),
-			       le16_to_cpu(item->ra.r2),
-			       K2C(le16_to_cpu(item->ra.r4)),
-			       le16_to_cpu(item->ra.r4));
-			break;
-		case 0xeb:
-			printf("throttle status: %d, total throttling time: %d\n",
-				   item->raw[0],
-				   le32_to_cpu(*(uint32_t *)&item->raw[1]));
-			break;
-		case 0xec:
-			printf("current: %d, norminal: %d, threshold: %d\n",
-			       le16_to_cpu(item->ra.r0),
-			       le16_to_cpu(item->ra.r2),
-			       le16_to_cpu(item->ra.r4));
-			break;
-		default:
-			printf("%" PRIu64 "\n", int48_to_long(item->raw));
-			break;
-		}
-	}
-}
-
-static void smart_log_add_v3_print(struct smart_log_add_item_10 *item, int item_count)
-{
-	static const struct smart_log_add_item items[0xff] = {
-		[0xab] = {0,  "program_fail_count"               },
-		[0xac] = {1,  "erase_fail_count"                 },
-		[0xad] = {2,  "wear_leveling_count"              },
-		[0xdf] = {3,  "ext_e2e_err_count"                },
-		[0xc7] = {4,  "crc_err_count"                    },
-		[0xf4] = {5,  "nand_bytes_written"               },
-		[0xf5] = {6,  "host_bytes_written"               },
-		[0xd0] = {7,  "reallocated_sector_count"         },
-		[0xd1] = {8,  "uncorrectable_sector_count"       },
-		[0xd2] = {9,  "nand_uecc_detection"              },
-		[0xd3] = {10, "nand_xor_correction"              },
-		[0xd4] = {12, "gc_count"                         }, // 11 is reserved
-		[0xd5] = {13, "dram_uecc_detection_count"        },
-		[0xd6] = {14, "sram_uecc_detection_count"        },
-		[0xd7] = {15, "internal_raid_recovery_fail_count"},
-		[0xd8] = {16, "inflight_cmds"                    },
-		[0xd9] = {17, "internal_e2e_err_count"           },
-		[0xda] = {19, "die_fail_count"                   }, // 18 is reserved
-		[0xdb] = {20, "wear_leveling_execution_count"    },
-		[0xdc] = {21, "read_disturb_count"               },
-		[0xdd] = {22, "data_retention_count"             },
-		[0xde] = {23, "capacitor_health"                 },
-		[0xf6] = {24, "dram_cecc_count"                  },
-		[0xf7] = {25, "dram_cecc_address"                },
-		[0xf8] = {26, "sram_cecc_count"                  },
-		[0xf9] = {27, "sram_cecc_address"                },
-		[0xfa] = {28, "write_throttle_status"            },
-	};
-
-	for (int i = 0; i < item_count; i++, item++) {
-		if (item->id == 0)
-			continue;
-
-		printf("%#-12" PRIx8 "%-36s%-12d", item->id, items[item->id].attr, item->norm);
-		switch (item->id) {
-		case 0xad:
-			printf("min: %d, max: %d, avg: %d\n",
-			       le16_to_cpu(item->ra.r0),
-			       le16_to_cpu(item->ra.r2),
-			       le16_to_cpu(item->ra.r4));
-			break;
-		case 0xf6:
-		case 0xf8:
-		case 0xf9:
-			printf("%d\n", le32_to_cpu(item->ra1.r0));
-			break;
-		case 0xfa:
-			printf("curr: %d, total: %d\n",
-			       le16_to_cpu(item->ra.r0),
-			       le16_to_cpu(item->ra.r2));
-			break;
-		default:
-			printf("%" PRIu64 "\n", int48_to_long(item->raw));
-			break;
-		}
-	}
-}
-
-static void smart_log_add_print(struct smart_log_add *log, const char *devname)
-{
-	uint8_t version = log->raw[511];
-
-	printf("Version: %u\n", version);
-	printf("\n");
-	printf("Additional Smart Log for NVMe device: %s\n", devname);
-	printf("\n");
-
-	printf("%-12s%-36s%-12s%s\n", "Id", "Key", "Normalized", "Raw");
-
-	switch (version) {
-	case 0:
-		return smart_log_add_v0_print(&log->v0_raw[0],
-			sizeof(struct smart_log_add_v0) / sizeof(struct smart_log_add_item_12));
-	case 2:
-		return smart_log_add_v2_print(&log->v2_raw[0],
-			sizeof(struct smart_log_add_v2) / sizeof(struct smart_log_add_item_12));
-	case 3:
-		return smart_log_add_v3_print(&log->v3_raw[0],
-			sizeof(struct smart_log_add_v3) / sizeof(struct smart_log_add_item_10));
-
-	case 1:
-		fprintf(stderr, "Version %d: N/A\n", version);
-		break;
-	default:
-		fprintf(stderr, "Version %d: Not supported yet\n", version);
-		break;
-	}
-}
-
 static int mb_get_smart_log_add(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
-	int err = 0;
-
-	// Get the configuration
-
-	struct config {
-		bool raw_binary;
-	};
-
-	struct config cfg = {0};
-
-	NVME_ARGS(opts,
-		OPT_FLAG("raw-binary", 'b', &cfg.raw_binary, "dump the whole log buffer in binary format"));
-
-	__cleanup_nvme_global_ctx struct libnvme_global_ctx *ctx = NULL;
-	__cleanup_nvme_transport_handle struct libnvme_transport_handle *hdl = NULL;
-
-
-	err = parse_and_open(&ctx, &hdl, argc, argv, acmd->help, opts);
-	if (err)
-		return err;
-
-	// Get log
-
-	struct smart_log_add log = {0};
-
-	err = nvme_get_log_simple(hdl, LID_SMART_LOG_ADD, &log, sizeof(struct smart_log_add));
-	if (!err) {
-		if (!cfg.raw_binary)
-			smart_log_add_print(&log, libnvme_transport_handle_get_name(hdl));
-		else
-			d_raw((unsigned char *)&log, sizeof(struct smart_log_add));
-	} else if (err > 0) {
-		nvme_show_status(err);
-	} else {
-		nvme_show_error("%s: %s", acmd->name, libnvme_strerror(errno));
-	}
-
-	return err;
+	return mb_smart_log_add_x(argc, argv, acmd, plugin);
 }
 
 // performance-monitor
@@ -1732,7 +1286,7 @@ static int mb_set_latency_feature(int argc, char **argv, struct command *acmd, s
 			((cfg.de_allocate_trim_threshold & 0xff) << 16),
 			0, 0, NULL, 0, &result);
 	if (!err)
-		printf("%s have done successfully. result = %#" PRIx64 ".\n",
+		nvme_show_verbose_result("%s have done successfully. result = %#" PRIx64 ".",
 			acmd->name, (uint64_t)result);
 	else if (err > 0)
 		nvme_show_status(err);
@@ -1745,6 +1299,7 @@ static int mb_set_latency_feature(int argc, char **argv, struct command *acmd, s
 static int mb_get_latency_feature(int argc, char **argv, struct command *acmd, struct plugin *plugin)
 {
 	__u64 res = 0;
+	struct libnvme_passthru_cmd cmd;
 	int err;
 
 	// Get the configuration
@@ -1760,11 +1315,14 @@ static int mb_get_latency_feature(int argc, char **argv, struct command *acmd, s
 
 	// Get feature
 
-	err = nvme_get_features_simple(hdl, FID_LATENCY_FEATURE,
-			NVME_GET_FEATURES_SEL_CURRENT, &res);
+	nvme_init_get_features(&cmd, FID_LATENCY_FEATURE, NVME_GET_FEATURES_SEL_CURRENT);
+
+	err = libnvme_exec_admin_passthru(hdl, &cmd);
+	res = cmd.result;
 	if (!err) {
+
 		uint32_t result = res;
-		printf("%s have done successfully. result = %#" PRIx32 ".\n", acmd->name, result);
+		nvme_show_verbose_result("%s have done successfully. result = %#" PRIx32 ".", acmd->name, result);
 
 		printf("latency statistics enable status = %d\n", (result & (0x01 << 0)) >> 0);
 		printf("high latency enable status = %d\n", (result & (0x01 << 1)) >> 1);
@@ -1874,14 +1432,14 @@ static void latency_stats_print(struct latency_stats *log, const char *devname)
 			latency_stats_v2_0_print(log, sizeof(struct latency_stats));
 			break;
 		default:
-			fprintf(stderr, "Major Version %u, Minor Version %u: Not supported yet\n",
+			nvme_show_error("Major Version %u, Minor Version %u: Not supported yet",
 				major_version, minor_version);
 			break;
 		}
 		break;
 
 	default:
-		fprintf(stderr, "Major Version %u: Not supported yet\n", major_version);
+		nvme_show_error("Major Version %u: Not supported yet", major_version);
 		break;
 	}
 }
@@ -1985,7 +1543,7 @@ static void high_latency_log_print(struct high_latency_log *log, const char *dev
 		break;
 
 	default:
-		fprintf(stderr, "Version %u: Not supported yet\n", version);
+		nvme_show_error("Version %u: Not supported yet", version);
 		break;
 	}
 }
@@ -2226,7 +1784,7 @@ static void performance_stats_print(struct performance_stats *log, const char *d
 		performance_stats_v2_print(log, duration);
 		break;
 	default:
-		fprintf(stderr, "Version %u: Not supported yet\n", version);
+		nvme_show_error("Version %u: Not supported yet", version);
 		break;
 	}
 }
@@ -2263,25 +1821,28 @@ static int mb_get_performance_stats(int argc, char **argv, struct command *acmd,
 
 	// Check parameters
 	if (cfg.duration < 1 || cfg.duration > 24) {
-		fprintf(stderr, "duration must be between 1 and 24.\n");
+		nvme_show_error("duration must be between 1 and 24.");
 		exit(1);
 	}
 
 	// Get log
 
-	struct performance_stats log = {0};
+	__cleanup_free struct performance_stats *log = calloc(1, sizeof(*log));
+
+	if (!log)
+		return -ENOMEM;
 
 	int log_size = 4 + cfg.duration * sizeof(struct performance_stats_timestamp);
 	// Get one more timestamp if duration is odd number to avoid non-dw alignment issues
 	int xfer_size = (cfg.duration % 2) > 0 ?
 		(4 + (cfg.duration + 1) * sizeof(struct performance_stats_timestamp)) : log_size;
 
-	err = nvme_get_log_simple(hdl, LID_PERFORMANCE_STATISTICS, &log, xfer_size);
+	err = nvme_get_log_simple(hdl, LID_PERFORMANCE_STATISTICS, log, xfer_size);
 	if (!err) {
 		if (!cfg.raw_binary)
-			performance_stats_print(&log, libnvme_transport_handle_get_name(hdl), cfg.duration);
+			performance_stats_print(log, libnvme_transport_handle_get_name(hdl), cfg.duration);
 		else
-			d_raw((unsigned char *)&log, log_size);
+			d_raw((unsigned char *)log, log_size);
 	} else if (err > 0) {
 		nvme_show_status(err);
 	} else {
@@ -2289,4 +1850,125 @@ static int mb_get_performance_stats(int argc, char **argv, struct command *acmd,
 	}
 
 	return err;
+}
+
+static struct command smart_log_add_cmd = {
+	.name = "smart-log-add",
+	.help = "Retrieve Memblaze SMART Log, show it",
+	.fn = mb_get_additional_smart_log,
+};
+
+static struct command get_pm_status_cmd = {
+	.name = "get-pm-status",
+	.help = "Get Memblaze Power Manager Status",
+	.fn = mb_get_powermanager_status,
+};
+
+static struct command set_pm_status_cmd = {
+	.name = "set-pm-status",
+	.help = "Set Memblaze Power Manager Status",
+	.fn = mb_set_powermanager_status,
+};
+
+static struct command select_download_cmd = {
+	.name = "select-download",
+	.help = "Selective Firmware Download",
+	.fn = mb_selective_download,
+};
+
+static struct command lat_stats_cmd = {
+	.name = "lat-stats",
+	.help = "Enable and disable Latency Statistics logging",
+	.fn = mb_set_lat_stats,
+};
+
+static struct command lat_stats_print_cmd = {
+	.name = "lat-stats-print",
+	.help = "Retrieve IO Latency Statistics log, show it",
+	.fn = mb_lat_stats_log_print,
+};
+
+static struct command lat_log_cmd = {
+	.name = "lat-log",
+	.help = "Set Memblaze High Latency Log",
+	.fn = mb_set_high_latency_log,
+};
+
+static struct command lat_log_print_cmd = {
+	.name = "lat-log-print",
+	.help = "Output Memblaze High Latency Log",
+	.fn = mb_high_latency_log_print,
+};
+
+static struct command clear_error_log_cmd = {
+	.name = "clear-error-log",
+	.help = "Clear error log",
+	.fn = memblaze_clear_error_log,
+};
+
+static struct command smart_log_add_x_cmd = {
+	.name = "smart-log-add-x",
+	.help = "Retrieve Memblaze SMART Log, show it",
+	.fn = mb_get_smart_log_add,
+};
+
+static struct command lat_set_feature_x_cmd = {
+	.name = "lat-set-feature-x",
+	.help = "Set Enable/Disable for Latency Monitor feature",
+	.fn = mb_set_latency_feature,
+};
+
+static struct command lat_get_feature_x_cmd = {
+	.name = "lat-get-feature-x",
+	.help = "Get Enabled/Disabled of Latency Monitor feature",
+	.fn = mb_get_latency_feature,
+};
+
+static struct command lat_stats_print_x_cmd = {
+	.name = "lat-stats-print-x",
+	.help = "Get Latency Statistics log and show it.",
+	.fn = mb_get_latency_stats,
+};
+
+static struct command lat_log_print_x_cmd = {
+	.name = "lat-log-print-x",
+	.help = "Get High Latency log and show it.",
+	.fn = mb_get_high_latency_log,
+};
+
+static struct command perf_stats_print_x_cmd = {
+	.name = "perf-stats-print-x",
+	.help = "Get Performance Stat log and show it.",
+	.fn = mb_get_performance_stats,
+};
+
+static struct command *commands[] = {
+	&smart_log_add_cmd,
+	&get_pm_status_cmd,
+	&set_pm_status_cmd,
+	&select_download_cmd,
+	&lat_stats_cmd,
+	&lat_stats_print_cmd,
+	&lat_log_cmd,
+	&lat_log_print_cmd,
+	&clear_error_log_cmd,
+	&smart_log_add_x_cmd,
+	&lat_set_feature_x_cmd,
+	&lat_get_feature_x_cmd,
+	&lat_stats_print_x_cmd,
+	&lat_log_print_x_cmd,
+	&perf_stats_print_x_cmd,
+	NULL,
+};
+
+static struct plugin plugin = {
+	.name = "memblaze",
+	.desc = "Memblaze vendor specific extensions",
+	.version = NVME_VERSION,
+};
+
+static void __shr_constructor register_plugin(void)
+{
+	plugin_add_group(&plugin, NULL, commands);
+	register_extension(&plugin);
 }

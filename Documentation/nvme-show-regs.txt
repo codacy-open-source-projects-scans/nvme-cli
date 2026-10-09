@@ -9,9 +9,7 @@ NVMe over PCIe or the controller properties for NVMe over Fabrics.
 SYNOPSIS
 --------
 [verse]
-'nvme show-regs' <device>
-			[--human-readable | -H]
-			[<global-options>]
+'nvme' [<global-options>] 'show-regs' <device>
 
 DESCRIPTION
 -----------
@@ -29,11 +27,6 @@ Only the supported properties are displayed.
 
 OPTIONS
 -------
--H::
---human-readable::
-	Display values in a human-readable format where possible.
-	(deprecated, use --verbose)
-
 include::global-options.txt[]
 
 EXAMPLES

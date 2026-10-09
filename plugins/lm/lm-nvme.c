@@ -6,38 +6,28 @@
  */
 
 #include <assert.h>
-#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <sys/types.h>
 #include <time.h>
 #include <unistd.h>
 
-#include <asm/byteorder.h>
-#include <linux/fs.h>
-
-#include <sys/mman.h>
-#include <sys/shm.h>
-#include <sys/stat.h>
-#include <sys/sysinfo.h>
-#include <sys/types.h>
-
 #include <libnvme.h>
 
-#include "common.h"
+#include <ccan/array_size/array_size.h>
+#include <shared/compiler-attributes-util.h>
+
+#include "global-ctx.h"
+#include "lm-print.h"
 #include "nvme-cmds.h"
 #include "nvme-print.h"
-#include "nvme.h"
 #include "plugin.h"
-#include "util/cleanup.h"
-
-#define CREATE_CMD
-#include "lm-nvme.h"
-
-#include "lm-print.h"
+#include "src/cleanup.h"
 
 static inline const char * arg_str(const char * const *strings, size_t array_size, size_t idx)
 {
@@ -46,7 +36,6 @@ static inline const char * arg_str(const char * const *strings, size_t array_siz
 	return "unrecognized";
 }
 
-#define ARRAY_SIZE(arr) (sizeof(arr) / sizeof((arr)[0]))
 #define ARGSTR(s, i) arg_str(s, ARRAY_SIZE(s), i)
 
 static int lm_create_cdq(int argc, char **argv, struct command *acmd, struct plugin *plugin)
@@ -63,7 +52,7 @@ static int lm_create_cdq(int argc, char **argv, struct command *acmd, struct plu
 	__cleanup_nvme_transport_handle struct libnvme_transport_handle *hdl = NULL;
 	__cleanup_nvme_global_ctx struct libnvme_global_ctx *ctx = NULL;
 	struct lba_migration_queue_entry_type_0 *queue = NULL;
-	__cleanup_huge struct nvme_mem_huge mh = { 0, };
+	__cleanup_huge struct libnvme_mem_huge mh = { 0, };
 	struct libnvme_passthru_cmd cmd;
 	int err = -1;
 
@@ -100,22 +89,22 @@ static int lm_create_cdq(int argc, char **argv, struct command *acmd, struct plu
 
 	// Not that it really matters, but we setup memory as if the CDQ can be held
 	// in user space regardless.
-	queue = nvme_alloc_huge(cfg.sz << 2, &mh);
+	queue = libnvme_alloc_huge(cfg.sz << 2, &mh);
 	if (!queue) {
-		nvme_show_error("ERROR: nvme_alloc of size %dB failed %s", cfg.sz << 2,
+		nvme_show_error("ERROR: libnvme_alloc of size %dB failed %s", cfg.sz << 2,
 				libnvme_strerror(errno));
 		return -ENOMEM;
 	}
 
 	nvme_init_lm_cdq_create(&cmd, NVME_SET(cfg.qt, LM_QT),
 			 cfg.cntlid, cfg.sz, queue);
-	err = libnvme_submit_admin_passthru(hdl, &cmd);
+	err = libnvme_exec_admin_passthru(hdl, &cmd);
 	if (err < 0)
 		nvme_show_error("ERROR: nvme_lm_cdq() failed: %s", libnvme_strerror(errno));
 	else if (err)
 		nvme_show_status(err);
 	else
-		printf("Create CDQ Successful: CDQID=0x%04x\n",
+		nvme_show_verbose_result("Create CDQ Successful: CDQID=0x%04x",
 			NVME_GET((__u32)cmd.result, LM_CREATE_CDQ_CDQID));
 
 	return err;
@@ -147,13 +136,13 @@ static int lm_delete_cdq(int argc, char **argv, struct command *acmd, struct plu
 		return err;
 
 	nvme_init_lm_cdq_delete(&cmd, 0, cfg.cdqid);
-	err = libnvme_submit_admin_passthru(hdl, &cmd);
+	err = libnvme_exec_admin_passthru(hdl, &cmd);
 	if (err < 0)
 		nvme_show_error("ERROR: nvme_lm_cdq() failed: %s", libnvme_strerror(errno));
 	else if (err > 0)
 		nvme_show_status(err);
 	else
-		printf("Delete CDQ Successful: CDQID=0x%04x\n", cfg.cdqid);
+		nvme_show_verbose_result("Delete CDQ Successful: CDQID=0x%04x", cfg.cdqid);
 
 	return err;
 }
@@ -229,14 +218,14 @@ static int lm_track_send(int argc, char **argv, struct command *acmd, struct plu
 			cfg.mos = NVME_SET(NVME_LM_LACT_STOP_LOGGING, LM_LACT);
 	}
 
-	nvme_init_lm_track_send(&cmd, cfg.sel, cfg.mos, cfg.cdqid);
-	err = libnvme_submit_admin_passthru(hdl, &cmd);
+	nvme_init_lm_track_send(&cmd, cfg.sel, cfg.mos, cfg.cdqid, NULL, 0);
+	err = libnvme_exec_admin_passthru(hdl, &cmd);
 	if (err < 0)
 		nvme_show_error("ERROR: nvme_lm_track_send() failed %s", libnvme_strerror(errno));
 	else if (err)
 		nvme_show_status(err);
 	else
-		printf("Track Send (%s) Successful\n",
+		nvme_show_verbose_result("Track Send (%s) Successful",
 		       ARGSTR(lm_track_send_select_argstr, cfg.sel));
 
 	return err;
@@ -276,7 +265,7 @@ static int lm_migration_send(int argc, char **argv, struct command *acmd, struct
 
 	__cleanup_nvme_transport_handle struct libnvme_transport_handle *hdl = NULL;
 	__cleanup_nvme_global_ctx struct libnvme_global_ctx *ctx = NULL;
-	__cleanup_huge struct nvme_mem_huge mh = { 0, };
+	__cleanup_huge struct libnvme_mem_huge mh = { 0, };
 	__cleanup_file FILE *file = NULL;
 	struct libnvme_passthru_cmd cmd;
 	void *data = NULL;
@@ -319,7 +308,7 @@ static int lm_migration_send(int argc, char **argv, struct command *acmd, struct
 		OPT_BYTE("csuuidi",	'U', &cfg.csuuidi, csuuidi),
 		OPT_BYTE("csvi",	'V', &cfg.csvi, csvi),
 		OPT_BYTE("uidx",	'u', &cfg.uidx, uidx),
-		OPT_LONG("offset",	'o', &cfg.offset, offset),
+		OPT_LONG("offset",	'O', &cfg.offset, offset),
 		OPT_UINT("numd",	'n', &cfg.numd, numd),
 		OPT_FILE("input-file",	'f', &cfg.input, input));
 
@@ -358,13 +347,11 @@ static int lm_migration_send(int argc, char **argv, struct command *acmd, struct
 			return -EINVAL;
 		}
 
-		data = nvme_alloc_huge(cfg.numd << 2, &mh);
+		data = libnvme_alloc_huge(cfg.numd << 2, &mh);
 		if (!data)
 			return -ENOMEM;
 
 		size_t n_data = fread(data, 1, cfg.numd << 2, file);
-
-		fclose(file);
 
 		if (n_data != (size_t)(cfg.numd << 2)) {
 			nvme_show_error("failed to read controller state data %s", libnvme_strerror(errno));
@@ -377,13 +364,13 @@ static int lm_migration_send(int argc, char **argv, struct command *acmd, struct
 				    cfg.stype, cfg.dudmq, cfg.csvi, cfg.csuuidi,
 				    cfg.offset, cfg.uidx, data,
 				    (cfg.numd << 2));
-	err = libnvme_submit_admin_passthru(hdl, &cmd);
+	err = libnvme_exec_admin_passthru(hdl, &cmd);
 	if (err < 0)
 		nvme_show_error("ERROR: nvme_lm_migration_send() failed %s", libnvme_strerror(errno));
 	else if (err > 0)
 		nvme_show_status(err);
 	else
-		printf("Migration Send (%s) Successful\n",
+		nvme_show_verbose_result("Migration Send (%s) Successful",
 		       ARGSTR(lm_migration_send_select_argstr, cfg.sel));
 
 
@@ -408,7 +395,7 @@ static int lm_migration_recv(int argc, char **argv, struct command *acmd, struct
 
 	__cleanup_nvme_transport_handle struct libnvme_transport_handle *hdl = NULL;
 	__cleanup_nvme_global_ctx struct libnvme_global_ctx *ctx = NULL;
-	__cleanup_huge struct nvme_mem_huge mh = { 0, };
+	__cleanup_huge struct libnvme_mem_huge mh = { 0, };
 	__cleanup_file FILE *fd = NULL;
 	struct libnvme_passthru_cmd cmd;
 	nvme_print_flags_t flags;
@@ -446,7 +433,7 @@ static int lm_migration_recv(int argc, char **argv, struct command *acmd, struct
 		OPT_BYTE("csuuidi",		'U', &cfg.csuuidi, csuuidi),
 		OPT_BYTE("csvi",		'V', &cfg.csvi, csvi),
 		OPT_BYTE("uidx",		'u', &cfg.uidx, uidx),
-		OPT_LONG("offset",		'o', &cfg.offset, offset),
+		OPT_LONG("offset",		'O', &cfg.offset, offset),
 		OPT_UINT("numd",		'n', &cfg.numd, numd),
 		OPT_FILE("output-file",		'f', &cfg.output, output),
 		OPT_FLAG("human-readable",	'H', &cfg.human_readable, human_readable_info));
@@ -471,13 +458,13 @@ static int lm_migration_recv(int argc, char **argv, struct command *acmd, struct
 
 	if (cfg.output && strlen(cfg.output)) {
 		fd = fopen(cfg.output, "w");
-		if (fd < 0) {
+		if (!fd) {
 			nvme_show_perror(cfg.output);
 			return -errno;
 		}
 	}
 
-	data = nvme_alloc_huge((cfg.numd + 1) << 2, &mh);
+	data = libnvme_alloc_huge((cfg.numd + 1) << 2, &mh);
 	if (!data)
 		return -ENOMEM;
 
@@ -485,7 +472,7 @@ static int lm_migration_recv(int argc, char **argv, struct command *acmd, struct
 	nvme_init_lm_migration_recv(&cmd, cfg.offset, mos, cfg.cntlid,
 				    cfg.csuuidi, cfg.sel, cfg.uidx, 0, data,
 				    (cfg.numd + 1) << 2);
-	err = libnvme_submit_admin_passthru(hdl, &cmd);
+	err = libnvme_exec_admin_passthru(hdl, &cmd);
 	if (err < 0)
 		nvme_show_error("ERROR: nvme_lm_migration_recv() failed %s", libnvme_strerror(errno));
 	else if (err)
@@ -509,7 +496,7 @@ static int lm_migration_recv(int argc, char **argv, struct command *acmd, struct
 		}
 	}
 
-	return 0;
+	return err;
 }
 
 enum lm_controller_data_queue_feature_id {
@@ -558,7 +545,7 @@ static int lm_set_cdq(int argc, char **argv, struct command *acmd, struct plugin
 	else if (err)
 		nvme_show_status(err);
 	else
-		printf("Success. Head Pointer: %d\n", cfg.hp);
+		nvme_show_verbose_result("Success. Head Pointer: %d", cfg.hp);
 
 	return err;
 }
@@ -607,4 +594,71 @@ static int lm_get_cdq(int argc, char **argv, struct command *acmd, struct plugin
 		lm_show_controller_data_queue(&data, flags);
 
 	return err;
+}
+
+static struct command lm_create_cdq_cmd = {
+	.name = "create-cdq",
+	.help = "Create Controller Data Queue",
+	.fn = lm_create_cdq,
+};
+
+static struct command lm_delete_cdq_cmd = {
+	.name = "delete-cdq",
+	.help = "Delete Controller Data Queue",
+	.fn = lm_delete_cdq,
+};
+
+static struct command lm_track_send_cmd = {
+	.name = "track-send",
+	.help = "Track Send Command",
+	.fn = lm_track_send,
+};
+
+static struct command lm_migration_send_cmd = {
+	.name = "migration-send",
+	.help = "Migration Send",
+	.fn = lm_migration_send,
+};
+
+static struct command lm_migration_recv_cmd = {
+	.name = "migration-recv",
+	.help = "Migration Receive",
+	.fn = lm_migration_recv,
+};
+
+static struct command lm_set_cdq_cmd = {
+	.name = "set-cdq",
+	.help = "Set Feature - Controller Data Queue (FID 21h)",
+	.fn = lm_set_cdq,
+};
+
+static struct command lm_get_cdq_cmd = {
+	.name = "get-cdq",
+	.help = "Get Feature - Controller Data Queue (FID 21h)",
+	.fn = lm_get_cdq,
+};
+
+static struct command *commands[] = {
+	&lm_create_cdq_cmd,
+	&lm_delete_cdq_cmd,
+	&lm_track_send_cmd,
+	&lm_migration_send_cmd,
+	&lm_migration_recv_cmd,
+	&lm_set_cdq_cmd,
+	&lm_get_cdq_cmd,
+	NULL,
+};
+
+static struct plugin plugin = {
+	.name = "lm",
+	.desc = "Live Migration NVMe extensions",
+	.version = NVME_VERSION,
+	.core = true,
+	.group = "Controller Management",
+};
+
+static void __shr_constructor register_plugin(void)
+{
+	plugin_add_group(&plugin, NULL, commands);
+	register_extension(&plugin);
 }

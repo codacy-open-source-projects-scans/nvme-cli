@@ -1,20 +1,21 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-#include <fcntl.h>
 #include <errno.h>
+#include <fcntl.h>
+#include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
-#include <inttypes.h>
+
 #include <libnvme.h>
 
-#include "common.h"
+#include <ccan/endian/endian.h>
+#include <shared/compiler-attributes-util.h>
+
+#include "cleanup.h"
+#include "global-ctx.h"
 #include "nvme-cmds.h"
 #include "nvme-print.h"
-#include "nvme.h"
 #include "plugin.h"
-
-#define CREATE_CMD
-#include "shannon-nvme.h"
 
 enum {
 	PROGRAM_FAIL_CNT,
@@ -122,6 +123,7 @@ static int get_additional_smart_log(int argc, char **argv, struct command *acmd,
 	const char *raw = "dump output in binary format";
 	__cleanup_nvme_global_ctx struct libnvme_global_ctx *ctx = NULL;
 	__cleanup_nvme_transport_handle struct libnvme_transport_handle *hdl = NULL;
+	struct libnvme_passthru_cmd cmd;
 	struct config {
 		__u32 namespace_id;
 		bool  raw_binary;
@@ -139,8 +141,9 @@ static int get_additional_smart_log(int argc, char **argv, struct command *acmd,
 	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err)
 		return err;
-	err = nvme_get_nsid_log(hdl, cfg.namespace_id, false, 0xca,
-				&smart_log, sizeof(smart_log));
+	nvme_init_get_log(&cmd, cfg.namespace_id, 0xca, NVME_CSI_NVM,
+			  &smart_log, sizeof(smart_log));
+	err = libnvme_get_log(hdl, &cmd, false, NVME_LOG_PAGE_PDU_SIZE);
 	if (!err) {
 		if (!cfg.raw_binary)
 			show_shannon_smart_log(
@@ -177,7 +180,7 @@ static int get_additional_feature(int argc, char **argv, struct command *acmd, s
 	const char *human_readable = "show infos in readable format";
 	__cleanup_nvme_global_ctx struct libnvme_global_ctx *ctx = NULL;
 	__cleanup_nvme_transport_handle struct libnvme_transport_handle *hdl = NULL;
-	void *buf = NULL;
+	__cleanup_libnvme_free void *buf = NULL;
 	__u64 result;
 	int err;
 
@@ -213,24 +216,24 @@ static int get_additional_feature(int argc, char **argv, struct command *acmd, s
 		return err;
 
 	if (cfg.sel > 7) {
-		fprintf(stderr, "invalid 'select' param:%d\n", cfg.sel);
+		nvme_show_error("invalid 'select' param:%d", cfg.sel);
 		return -EINVAL;
 	}
 	if (!cfg.feature_id) {
-		fprintf(stderr, "feature-id required param\n");
+		nvme_show_error("feature-id required param");
 		return -EINVAL;
 	}
 	if (cfg.data_len) {
-		if (posix_memalign(&buf, getpagesize(), cfg.data_len))
+		buf = libnvme_alloc(cfg.data_len);
+		if (!buf)
 			return -ENOMEM;
-		memset(buf, 0, cfg.data_len);
 	}
 
 	err = nvme_get_features(hdl, cfg.namespace_id, cfg.feature_id, cfg.sel,
 			cfg.cdw11, 0, buf, cfg.data_len, &result);
 	if (err > 0)
 		nvme_show_status(err);
-	free(buf);
+
 	return err;
 }
 
@@ -255,7 +258,7 @@ static int set_additional_feature(int argc, char **argv, struct command *acmd, s
 	const char *save = "specifies that the controller shall save the attribute";
 	__cleanup_nvme_global_ctx struct libnvme_global_ctx *ctx = NULL;
 	__cleanup_nvme_transport_handle struct libnvme_transport_handle *hdl = NULL;
-	__cleanup_free void *buf = NULL;
+	__cleanup_libnvme_free void *buf = NULL;
 	int ffd = STDIN_FILENO;
 	__u64 result;
 	int err;
@@ -281,7 +284,7 @@ static int set_additional_feature(int argc, char **argv, struct command *acmd, s
 	NVME_ARGS(opts,
 		OPT_UINT("namespace-id", 'n', &cfg.namespace_id, namespace_id),
 		OPT_UINT("feature-id",	 'f', &cfg.feature_id,	 feature_id),
-		OPT_UINT("value",	 'v', &cfg.value,	 value),
+		OPT_UINT("value",	 'V', &cfg.value,	 value),
 		OPT_UINT("data-len",	 'l', &cfg.data_len,	 data_len),
 		OPT_FILE("data",	 'd', &cfg.file,	 data),
 		OPT_FLAG("save",	 's', &cfg.save,	 save));
@@ -291,13 +294,14 @@ static int set_additional_feature(int argc, char **argv, struct command *acmd, s
 		return err;
 
 	if (!cfg.feature_id) {
-		fprintf(stderr, "feature-id required param\n");
+		nvme_show_error("feature-id required param");
 		return -EINVAL;
 	}
 
 	if (cfg.data_len) {
-		if (posix_memalign(&buf, getpagesize(), cfg.data_len)) {
-			fprintf(stderr, "can not allocate feature payload\n");
+		buf = libnvme_alloc(cfg.data_len);
+		if (!buf) {
+			nvme_show_error("can not allocate feature payload");
 			return -ENOMEM;
 		}
 		memset(buf, 0, cfg.data_len);
@@ -306,29 +310,29 @@ static int set_additional_feature(int argc, char **argv, struct command *acmd, s
 	if (buf) {
 		if (strlen(cfg.file)) {
 			ffd = open(cfg.file, O_RDONLY);
-			if (ffd <= 0) {
-				fprintf(stderr, "no firmware file provided\n");
+			if (ffd < 0) {
+				nvme_show_error("no firmware file provided");
 				return -EINVAL;
 			}
 		}
 		err = read(ffd, (void *)buf, cfg.data_len);
+		if (ffd != STDIN_FILENO)
+			close(ffd);
 		if (err < 0) {
-			fprintf(stderr, "failed to read data buffer from input file\n");
+			nvme_show_error("failed to read data buffer from input file");
 			return -EINVAL;
 		}
 	}
 
 	err = nvme_set_features(hdl, cfg.namespace_id, cfg.feature_id, cfg.save,
 			cfg.value, 0, 0, 0, 0, buf, cfg.data_len, &result);
-	if (err < 0) {
-		perror("set-feature");
-		return -errno;
+	if (err) {
+		nvme_show_err(err, "set-feature");
+		return err;
 	}
-	if (!err) {
-		if (buf)
-			d(buf, cfg.data_len, 16, 1);
-	} else if (err > 0)
-		nvme_show_status(err);
+
+	if (buf)
+		d(buf, cfg.data_len, 16, 1);
 
 	return err;
 }
@@ -338,3 +342,46 @@ static int shannon_id_ctrl(int argc, char **argv, struct command *acmd, struct p
 	return __id_ctrl(argc, argv, acmd, plugin, NULL);
 }
 
+static struct command get_additional_smart_log_cmd = {
+	.name = "smart-log-add",
+	.help = "Retrieve Shannon SMART Log, show it",
+	.fn = get_additional_smart_log,
+};
+
+static struct command set_additional_feature_cmd = {
+	.name = "set-additioal-feature",
+	.help = "Set additional Shannon feature",
+	.fn = set_additional_feature,
+};
+
+static struct command get_additional_feature_cmd = {
+	.name = "get-additional-feature",
+	.help = "Get additional Shannon feature",
+	.fn = get_additional_feature,
+};
+
+static struct command shannon_id_ctrl_cmd = {
+	.name = "id-ctrl",
+	.help = "Retrieve Shannon ctrl id, show it",
+	.fn = shannon_id_ctrl,
+};
+
+static struct command *commands[] = {
+	&get_additional_smart_log_cmd,
+	&set_additional_feature_cmd,
+	&get_additional_feature_cmd,
+	&shannon_id_ctrl_cmd,
+	NULL,
+};
+
+static struct plugin plugin = {
+	.name = "shannon",
+	.desc = "Shannon vendor specific extensions",
+	.version = NVME_VERSION,
+};
+
+static void __shr_constructor register_plugin(void)
+{
+	plugin_add_group(&plugin, NULL, commands);
+	register_extension(&plugin);
+}

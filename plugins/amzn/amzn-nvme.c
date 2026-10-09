@@ -1,22 +1,20 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-#include <fcntl.h>
 #include <errno.h>
+#include <fcntl.h>
+#include <inttypes.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
-#include <inttypes.h>
 
 #include <libnvme.h>
 
-#include "common.h"
-#include "nvme-cmds.h"
-#include "nvme-print.h"
-#include "nvme.h"
-#include "plugin.h"
+#include <shared/compiler-attributes-util.h>
 
-#define CREATE_CMD
-#include "amzn-nvme.h"
+#include "cleanup.h"
+#include "global-ctx.h"
+#include "nvme-print.h"
+#include "plugin.h"
 
 #define AMZN_NVME_STATS_LOGPAGE_ID 0xD0
 #define AMZN_NVME_STATS_DETAIL_IO_VERSION 1
@@ -470,6 +468,20 @@ static void amzn_print_stats(struct amzn_latency_log_page *log,
 		amzn_print_normal_stats(log, detail);
 }
 
+/* the log page counts come from the device; cap to the buffer sizes */
+static void amzn_sanitize_log_page(struct amzn_latency_log_page *log)
+{
+	struct amzn_latency_log_page_base *base = &log->base;
+
+	if (base->num_of_hists > AMZN_NVME_STATS_NUM_HISTOGRAM)
+		base->num_of_hists = AMZN_NVME_STATS_NUM_HISTOGRAM;
+
+	if (base->read_io_latency_histogram.num_bins > AMZN_NVME_STATS_NUM_HISTOGRAM_BINS)
+		base->read_io_latency_histogram.num_bins = AMZN_NVME_STATS_NUM_HISTOGRAM_BINS;
+	if (base->write_io_latency_histogram.num_bins > AMZN_NVME_STATS_NUM_HISTOGRAM_BINS)
+		base->write_io_latency_histogram.num_bins = AMZN_NVME_STATS_NUM_HISTOGRAM_BINS;
+}
+
 static sig_atomic_t amzn_keep_polling = 1;
 
 static void amzn_sigint_handler(int sig)
@@ -591,8 +603,9 @@ static int get_stats(int argc, char **argv, struct command *acmd,
 	if (rc)
 		return rc;
 
-	if (nvme_identify_ctrl(hdl, &ctrl)) {
-		fprintf(stderr, "Failed to get identify controller\n");
+	nvme_init_identify_ctrl(&cmd, &ctrl);
+	if (libnvme_exec_admin_passthru(hdl, &cmd)) {
+		nvme_show_error("Failed to get identify controller");
 		rc = -errno;
 		goto done;
 	}
@@ -602,7 +615,8 @@ static int get_stats(int argc, char **argv, struct command *acmd,
 		if (libnvme_get_nsid(hdl, &nsid) < 0) {
 			struct nvme_id_ctrl test_ctrl;
 
-			if (nvme_identify_ctrl(hdl, &test_ctrl) == 0) {
+			nvme_init_identify_ctrl(&cmd, &test_ctrl);
+			if (libnvme_exec_admin_passthru(hdl, &cmd) == 0) {
 				nsid = NVME_NSID_ALL;
 			} else {
 				rc = -errno;
@@ -618,14 +632,16 @@ static int get_stats(int argc, char **argv, struct command *acmd,
 			  &log, len);
 	rc = libnvme_get_log(hdl, &cmd, false, NVME_LOG_PAGE_PDU_SIZE);
 	if (rc != 0) {
-		fprintf(stderr, "[ERROR] %s: Failed to get log page, rc = %d\n",
+		nvme_show_error("[ERROR] %s: Failed to get log page, rc = %d",
 			__func__, rc);
 		goto done;
 	}
 
+	amzn_sanitize_log_page(&log);
+
 	if (log.base.magic != AMZN_NVME_EBS_STATS_MAGIC &&
 		log.base.magic != AMZN_NVME_LOCAL_STORAGE_STATS_MAGIC) {
-		fprintf(stderr, "[ERROR] %s: Not an EC2 device\n", __func__);
+		nvme_show_error("[ERROR] %s: Not an EC2 device", __func__);
 		rc = -ENOTSUP;
 		goto done;
 	}
@@ -638,10 +654,15 @@ static int get_stats(int argc, char **argv, struct command *acmd,
 
 	if (interval > 0) {
 		struct amzn_latency_log_page prev, curr, diff;
+
+#if NVME_HAVE_SIGACTION
 		struct sigaction sa = { .sa_handler = amzn_sigint_handler };
 
 		sigemptyset(&sa.sa_mask);
 		sigaction(SIGINT, &sa, NULL);
+#else
+		signal(SIGINT, amzn_sigint_handler);
+#endif
 
 		printf("Polling NVMe stats every %u sec(s);"
 		       " press Ctrl+C to stop\n\n",
@@ -669,6 +690,8 @@ static int get_stats(int argc, char **argv, struct command *acmd,
 				goto done;
 			}
 
+			amzn_sanitize_log_page(&curr);
+
 			memset(&diff, 0, sizeof(diff));
 			amzn_compute_stats_diff(&diff, &curr, &prev);
 
@@ -683,4 +706,34 @@ static int get_stats(int argc, char **argv, struct command *acmd,
 
 done:
 	return rc;
+}
+
+static struct command id_ctrl_cmd = {
+	.name = "id-ctrl",
+	.help = "Send NVMe Identify Controller",
+	.fn = id_ctrl,
+};
+
+static struct command get_stats_cmd = {
+	.name = "stats",
+	.help = "Get EBS volume stats",
+	.fn = get_stats,
+};
+
+static struct command *commands[] = {
+	&id_ctrl_cmd,
+	&get_stats_cmd,
+	NULL,
+};
+
+static struct plugin plugin = {
+	.name = "amzn",
+	.desc = "Amazon vendor specific extensions",
+	.version = NVME_VERSION,
+};
+
+static void __shr_constructor register_plugin(void)
+{
+	plugin_add_group(&plugin, NULL, commands);
+	register_extension(&plugin);
 }

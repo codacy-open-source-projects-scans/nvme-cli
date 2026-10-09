@@ -4,12 +4,13 @@
  *
  * Authors: karl.dedow@solidigm.com
  */
+#pragma once
+
+#include "plugin.h"
+
 #include <libnvme.h>
 
-#include "common.h"
-
-#ifndef OCP_FIRMWARE_ACTIVATION_HISTORY_H
-#define OCP_FIRMWARE_ACTIVATION_HISTORY_H
+#include <shared/compiler-attributes-util.h>
 
 struct command;
 struct plugin;
@@ -43,4 +44,3 @@ struct __packed fw_activation_history {
 int ocp_fw_activation_history_log(int argc, char **argv, struct command *acmd,
 				  struct plugin *plugin);
 
-#endif

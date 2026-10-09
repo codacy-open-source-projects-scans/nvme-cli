@@ -7,22 +7,32 @@
  * haro.panosyan@solidigm.com
  */
 
-#include <fcntl.h>
+#include <ctype.h>
+#include <dirent.h>
 #include <errno.h>
+#include <fcntl.h>
+#include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <unistd.h>
-#include <inttypes.h>
+#include <string.h>
+#include <sys/stat.h>
 #include <time.h>
+#include <unistd.h>
 
 #include <libnvme.h>
 
-#include "common.h"
+#include <ccan/array_size/array_size.h>
+#include <ccan/endian/endian.h>
+#include <ccan/minmax/minmax.h>
+#include <shared/archive-util.h>
+#include <shared/fs-util.h>
+#include <shared/string-util.h>
+
+#include "cleanup.h"
+#include "global-ctx.h"
 #include "nvme-cmds.h"
 #include "nvme-print.h"
-#include "nvme.h"
 #include "plugin.h"
-
 #include "solidigm-util.h"
 
 #define DWORD_SIZE 4
@@ -185,14 +195,14 @@ static int cmd_dump_repeat(struct libnvme_passthru_cmd *cmd, __u32 total_dw_size
 
 		cmd->cdw10 = force_max_transfer ? INTERNAL_LOG_MAX_DWORD_TRANSFER : dword_tfer;
 		cmd->data_len = dword_tfer * 4;
-		err = libnvme_submit_admin_passthru(hdl, cmd);
+		err = libnvme_exec_admin_passthru(hdl, cmd);
 		if (err)
 			return err;
 
 		if (out_fd > 0) {
 			err = write(out_fd, (const void *)(uintptr_t)cmd->addr, cmd->data_len);
 			if (err < 0) {
-				perror("write failure");
+				nvme_show_perror("write failure");
 				return err;
 			}
 			err = 0;
@@ -216,19 +226,20 @@ static int read_header(struct libnvme_passthru_cmd *cmd, struct libnvme_transpor
 	return cmd_dump_repeat(cmd, INTERNAL_LOG_MAX_DWORD_TRANSFER, -1, hdl, false);
 }
 
-static int get_serial_number(char *str, struct libnvme_transport_handle *hdl)
+static int get_serial_number(char *str, size_t str_size,
+			     struct libnvme_transport_handle *hdl)
 {
 	struct nvme_id_ctrl ctrl = {0};
+	struct libnvme_passthru_cmd cmd;
 	int err;
 
-	err = nvme_identify_ctrl(hdl, &ctrl);
+	nvme_init_identify_ctrl(&cmd, &ctrl);
+	err = libnvme_exec_admin_passthru(hdl, &cmd);
 	if (err)
 		return err;
 
-	/* Remove trailing spaces  */
-	for (int i = sizeof(ctrl.sn) - 1; i && ctrl.sn[i] == ' '; i--)
-		ctrl.sn[i] = '\0';
-	sprintf(str, "%-.*s", (int)sizeof(ctrl.sn), ctrl.sn);
+	snprintf(str, str_size, "%-.*s", (int)sizeof(ctrl.sn), ctrl.sn);
+	shr_sanitize_name(shr_rtrim(str));
 	return err;
 }
 
@@ -242,7 +253,7 @@ static int ilog_dump_assert_logs(struct libnvme_transport_handle *hdl, struct il
 	struct libnvme_passthru_cmd cmd = {
 		.opcode = 0xd2,
 		.nsid = NVME_NSID_ALL,
-		.addr = (unsigned long)(void *)head_buf,
+		.addr = (__u64)(uintptr_t)head_buf,
 		.cdw12 = ASSERTLOG,
 		.cdw13 = 0,
 	};
@@ -256,16 +267,16 @@ static int ilog_dump_assert_logs(struct libnvme_transport_handle *hdl, struct il
 		 (int) (sizeof(file_path) - sizeof(file_name) - 1),
 		 ilog->cfg->out_dir, file_name) < 0)
 		return -errno;
-	output = open(file_path, O_WRONLY | O_CREAT | O_TRUNC, LOG_FILE_PERMISSION);
+	output = shr_open_rawdata(file_path, O_WRONLY | O_CREAT | O_TRUNC, LOG_FILE_PERMISSION);
 	if (output < 0)
 		return -errno;
 	err = write_header((__u8 *)ad, output, ad->header.header_size * DWORD_SIZE);
 	if (err) {
-		perror("write failure");
-		close(output);
+		nvme_show_perror("write failure");
+		shr_close(output);
 		return err;
 	}
-	cmd.addr = (unsigned long)(void *)buf;
+	cmd.addr = (__u64)(uintptr_t)buf;
 
 	if (ilog->cfg->verbose) {
 		printf("Assert Log, cores: %d log size: %d header size: %d\n", ad->header.numcores,
@@ -281,12 +292,12 @@ static int ilog_dump_assert_logs(struct libnvme_transport_handle *hdl, struct il
 		err = cmd_dump_repeat(&cmd, ad->core[i].assertsize, output,
 				      hdl, false);
 		if (err) {
-			close(output);
+			shr_close(output);
 			return err;
 		}
 	}
-	close(output);
-	printf("Successfully wrote Assert to %s\n", file_path);
+	shr_close(output);
+	nvme_show_verbose_result("Successfully wrote Assert to %s", file_path);
 	return err;
 }
 
@@ -299,7 +310,7 @@ static int ilog_dump_event_logs(struct libnvme_transport_handle *hdl, struct ilo
 	struct libnvme_passthru_cmd cmd = {
 		.opcode = 0xd2,
 		.nsid = NVME_NSID_ALL,
-		.addr = (unsigned long)(void *)head_buf,
+		.addr = (__u64)(uintptr_t)head_buf,
 		.cdw12 = EVENTLOG,
 		.cdw13 = 0,
 	};
@@ -311,7 +322,7 @@ static int ilog_dump_event_logs(struct libnvme_transport_handle *hdl, struct ilo
 		return err;
 	if (asprintf(&file_path, "%s/EventLog.bin", ilog->cfg->out_dir))
 		return -errno;
-	output = open(file_path, O_WRONLY | O_CREAT | O_TRUNC, LOG_FILE_PERMISSION);
+	output = shr_open_rawdata(file_path, O_WRONLY | O_CREAT | O_TRUNC, LOG_FILE_PERMISSION);
 	if (output < 0)
 		return -errno;
 	err = write_header(head_buf, output, INTERNAL_LOG_MAX_BYTE_TRANSFER);
@@ -319,10 +330,10 @@ static int ilog_dump_event_logs(struct libnvme_transport_handle *hdl, struct ilo
 	core_num = ehdr->header.numcores;
 
 	if (err) {
-		close(output);
+		shr_close(output);
 		return err;
 	}
-	cmd.addr = (unsigned long)(void *)buf;
+	cmd.addr = (__u64)(uintptr_t)buf;
 
 	if (ilog->cfg->verbose)
 		printf("Event Log, cores: %d log size: %d\n", core_num, ehdr->header.log_size * 4);
@@ -339,12 +350,12 @@ static int ilog_dump_event_logs(struct libnvme_transport_handle *hdl, struct ilo
 		err = cmd_dump_repeat(&cmd, ehdr->edumps[j].coresize,
 				output, hdl, false);
 		if (err) {
-			close(output);
+			shr_close(output);
 			return err;
 		}
 	}
-	close(output);
-	printf("Successfully wrote Events to %s\n", file_path);
+	shr_close(output);
+	nvme_show_verbose_result("Successfully wrote Events to %s", file_path);
 	return err;
 }
 
@@ -374,7 +385,7 @@ static int ilog_dump_nlogs(struct libnvme_transport_handle *hdl, struct ilog *il
 	struct libnvme_passthru_cmd cmd = {
 		.opcode = 0xd2,
 		.nsid = NVME_NSID_ALL,
-		.addr = (unsigned long)(void *)buf
+		.addr = (__u64)(uintptr_t)buf
 	};
 
 	struct dump_select {
@@ -400,14 +411,14 @@ static int ilog_dump_nlogs(struct libnvme_transport_handle *hdl, struct ilog *il
 			err = read_header(&cmd, hdl);
 			if (err) {
 				if (is_open)
-					close(output);
+					shr_close(output);
 				return err;
 			}
 			count = nlog_header->totalnlogs;
 			core_num = core < 0 ? nlog_header->corecount : 0;
 			if (!header_size) {
 				if (asprintf(&file_path, "%s/NLog.bin", ilog->cfg->out_dir) >= 0) {
-					output = open(file_path, O_WRONLY | O_CREAT | O_TRUNC,
+					output = shr_open_rawdata(file_path, O_WRONLY | O_CREAT | O_TRUNC,
 							LOG_FILE_PERMISSION);
 					if (output < 0)
 						return -errno;
@@ -431,8 +442,8 @@ static int ilog_dump_nlogs(struct libnvme_transport_handle *hdl, struct ilog *il
 			break;
 	} while (++log_select.selectCore < core_num);
 	if (is_open) {
-		close(output);
-		printf("Successfully wrote Nlog to %s\n", file_path);
+		shr_close(output);
+		nvme_show_verbose_result("Successfully wrote Nlog to %s", file_path);
 	}
 	return err;
 }
@@ -446,8 +457,8 @@ int ensure_dir(const char *parent_dir_name, const char *name)
 		return -errno;
 
 	if (!(stat(file_path, &sb) == 0 && S_ISDIR(sb.st_mode))) {
-		if (mkdir(file_path, 777) != 0) {
-			perror(file_path);
+		if (shr_mkdir(file_path, 777) != 0) {
+			nvme_show_perror("%s", file_path);
 			return -errno;
 		}
 	}
@@ -474,7 +485,7 @@ static int log_save(struct log *log, const char *parent_dir_name, const char *su
 	if (asprintf(&file_path, "%s/%s/%s", parent_dir_name, subdir_name, file_name) < 0)
 		return -errno;
 
-	output = open(file_path, O_WRONLY | O_CREAT | O_TRUNC, LOG_FILE_PERMISSION);
+	output = shr_open_rawdata(file_path, O_WRONLY | O_CREAT | O_TRUNC, LOG_FILE_PERMISSION);
 	if (output < 0)
 		return -errno;
 
@@ -489,7 +500,7 @@ static int log_save(struct log *log, const char *parent_dir_name, const char *su
 		bytes_remaining -= bytes_written;
 		buffer += bytes_written;
 	}
-	printf("Successfully wrote %s to %s\n", log->desc, file_path);
+	nvme_show_verbose_result("Successfully wrote %s to %s", log->desc, file_path);
 	return 0;
 }
 
@@ -499,10 +510,15 @@ static int ilog_dump_identify_page(struct libnvme_transport_handle *hdl,
 	__u8 data[NVME_IDENTIFY_DATA_SIZE];
 	__u8 *buff = cns->buffer ? cns->buffer : data;
 	__cleanup_free char *filename = NULL;
+	struct libnvme_passthru_cmd cmd;
 	int err;
 
-	err = nvme_identify(hdl, nsid, NVME_CSI_NVM, cns->id, buff,
-		sizeof(data));
+	if (!ilog || !ilog->cfg)
+		return -EINVAL;
+
+	nvme_init_identify(&cmd, nsid, NVME_CSI_NVM, cns->id, buff, sizeof(data));
+
+	err = libnvme_exec_admin_passthru(hdl, &cmd);
 	if (err)
 		return err;
 
@@ -577,14 +593,14 @@ static int ilog_dump_telemetry(struct libnvme_transport_handle *hdl, struct ilog
 
 	if (da == 4) {
 		nvme_init_get_features_host_behavior(&cmd, 0, &prev);
-		int err = libnvme_submit_admin_passthru(hdl, &cmd);
+		int err = libnvme_exec_admin_passthru(hdl, &cmd);
 
 		if (!err && !prev.etdas) {
 			struct nvme_feat_host_behavior da4_enable = prev;
 
 			da4_enable.etdas = 1;
 			nvme_init_set_features_host_behavior(&cmd, 0, &da4_enable);
-			libnvme_submit_admin_passthru(hdl, &cmd);
+			libnvme_exec_admin_passthru(hdl, &cmd);
 			host_behavior_changed = true;
 		}
 	}
@@ -612,7 +628,7 @@ static int ilog_dump_telemetry(struct libnvme_transport_handle *hdl, struct ilog
 
 	if (host_behavior_changed) {
 		nvme_init_set_features_host_behavior(&cmd, 0, &prev);
-		libnvme_submit_admin_passthru(hdl, &cmd);
+		libnvme_exec_admin_passthru(hdl, &cmd);
 	}
 
 	if (err)
@@ -686,16 +702,18 @@ static int ilog_dump_log_page(struct libnvme_transport_handle *hdl, struct ilog 
 {
 	__u8 *buff = lp->buffer;
 	__cleanup_free char *filename = NULL;
+	struct libnvme_passthru_cmd cmd;
 
 	int err;
 	if (!lp->buffer_size)
 		return -EINVAL;
 	if (!buff) {
-		buff = nvme_alloc(lp->buffer_size);
+		buff = libnvme_alloc(lp->buffer_size);
 		if (!buff)
 			return -ENOMEM;
 	}
-	err = nvme_get_nsid_log(hdl, 0, 0, lp->id, buff, lp->buffer_size);
+	nvme_init_get_log(&cmd, 0, lp->id, NVME_CSI_NVM, buff, lp->buffer_size);
+	err = libnvme_get_log(hdl, &cmd, false, NVME_LOG_PAGE_PDU_SIZE);
 	if (err)
 		return err;
 
@@ -725,7 +743,7 @@ static int ilog_dump_no_lsp_log_pages(struct libnvme_transport_handle *hdl, stru
 		 (ilog->id_ctrl.elpe + 1) * sizeof(struct nvme_error_log_page)},
 		{NVME_LOG_LID_SMART, NULL, sizeof(struct nvme_smart_log)},
 		{NVME_LOG_LID_FW_SLOT, NULL, sizeof(struct nvme_firmware_slot)},
-		{NVME_LOG_LID_CHANGED_NS, NULL, sizeof(struct nvme_ns_list)},
+		{NVME_LOG_LID_CHANGED_ATTACHED_NS, NULL, sizeof(struct nvme_ns_list)},
 		{NVME_LOG_LID_CMD_EFFECTS, NULL, sizeof(struct nvme_cmd_effects_log)},
 		{NVME_LOG_LID_DEVICE_SELF_TEST, NULL, sizeof(struct nvme_self_test_log)},
 		{NVME_LOG_LID_LBA_STATUS, NULL, sizeof(lba_status), (__u8 *) &lba_status},
@@ -776,25 +794,26 @@ static int ilog_dump_no_lsp_log_pages(struct libnvme_transport_handle *hdl, stru
 
 static int ilog_dump_pel(struct libnvme_transport_handle *hdl, struct ilog *ilog)
 {
-	__cleanup_free struct nvme_persistent_event_log *pevent = NULL;
-	__cleanup_huge struct nvme_mem_huge mh = {0};
+	__cleanup_libnvme_free struct nvme_persistent_event_log *pevent = NULL;
+	__cleanup_huge struct libnvme_mem_huge mh = {0};
 	void *pevent_log_full;
-	size_t max_data_tx;
 	struct log lp = {
 		NVME_LOG_LID_PERSISTENT_EVENT,
 		nvme_log_to_string(NVME_LOG_LID_PERSISTENT_EVENT)
 	};
 	int err;
 
-	err = nvme_get_log_persistent_event(hdl, NVME_PEVENT_LOG_RELEASE_CTX,
-					    pevent, sizeof(*pevent));
-	if (err)
-		return err;
-
-
-	pevent = nvme_alloc(sizeof(*pevent));
+	pevent = libnvme_alloc(sizeof(*pevent));
 	if (!pevent)
 		return -ENOMEM;
+
+	/*
+	 * Best-effort: release any context left open by a prior run before
+	 * establishing a fresh one. Whether this succeeds or fails doesn't
+	 * change what we do next, so its result is intentionally ignored.
+	 */
+	(void)nvme_get_log_persistent_event(hdl, NVME_PEVENT_LOG_RELEASE_CTX,
+					    pevent, sizeof(*pevent));
 
 	err = nvme_get_log_persistent_event(hdl, NVME_PEVENT_LOG_EST_CTX_AND_READ,
 					    pevent, sizeof(*pevent));
@@ -802,20 +821,12 @@ static int ilog_dump_pel(struct libnvme_transport_handle *hdl, struct ilog *ilog
 		return err;
 
 	lp.buffer_size = le64_to_cpu(pevent->tll);
-
-	pevent_log_full = nvme_alloc_huge(lp.buffer_size, &mh);
+	pevent_log_full = libnvme_alloc_huge(lp.buffer_size, &mh);
 	if (!pevent_log_full)
 		return -ENOMEM;
 
 	err = nvme_get_log_persistent_event(hdl, NVME_PEVENT_LOG_READ,
 						pevent_log_full, lp.buffer_size);
-	max_data_tx = (1 << ilog->id_ctrl.mdts) * NVME_LOG_PAGE_PDU_SIZE;
-	do {
-		err = nvme_get_log_persistent_event(hdl, NVME_PEVENT_LOG_READ,
-			pevent_log_full, lp.buffer_size);
-		max_data_tx /= 2;
-	} while (err == -EPERM && max_data_tx >= NVME_LOG_PAGE_PDU_SIZE);
-
 	if (err)
 		return err;
 
@@ -824,7 +835,8 @@ static int ilog_dump_pel(struct libnvme_transport_handle *hdl, struct ilog *ilog
 	err = log_save(&lp, ilog->cfg->out_dir, "log_pages", "lid_0x0d_lsp_0x00_lsi_0x0000.bin",
 		       pevent_log_full, lp.buffer_size);
 
-	nvme_get_log_persistent_event(hdl, NVME_PEVENT_LOG_RELEASE_CTX,
+	/* Best-effort release; the dump above already succeeded or failed. */
+	(void)nvme_get_log_persistent_event(hdl, NVME_PEVENT_LOG_RELEASE_CTX,
 				      pevent, sizeof(*pevent));
 
 	return err;
@@ -885,7 +897,7 @@ int solidigm_get_internal_log(int argc, char **argv, struct command *acmd,
 	else if (!strcmp(cfg.type, "EXTENDED"))
 		log_type = EXTENDED;
 	else {
-		fprintf(stderr, "Invalid log type: %s\n", cfg.type);
+		nvme_show_error("Invalid log type: %s", cfg.type);
 		return -EINVAL;
 	}
 
@@ -893,13 +905,13 @@ int solidigm_get_internal_log(int argc, char **argv, struct command *acmd,
 	if (dir)
 		closedir(dir);
 	else  {
-		perror(cfg.out_dir);
+		nvme_show_perror("%s", cfg.out_dir);
 		return -errno;
 	}
 
 	initial_folder = cfg.out_dir;
 
-	err = get_serial_number(sn_prefix, hdl);
+	err = get_serial_number(sn_prefix, sizeof(sn_prefix), hdl);
 	if (err)
 		return err;
 
@@ -910,8 +922,8 @@ int solidigm_get_internal_log(int argc, char **argv, struct command *acmd,
 	if (asprintf(&full_folder, "%s/%s", cfg.out_dir, unique_folder) < 0)
 		return -errno;
 
-	if (mkdir(full_folder, 0755) !=  0) {
-		perror("mkdir");
+	if (shr_mkdir(full_folder, 0755) !=  0) {
+		nvme_show_perror("mkdir");
 		return -errno;
 	}
 
@@ -924,81 +936,87 @@ int solidigm_get_internal_log(int argc, char **argv, struct command *acmd,
 		if (err == 0)
 			ilog.count++;
 		else if (err < 0)
-			perror("Error retrieving Host Initiated Telemetry");
+			nvme_show_err(err, "Error retrieving Host Initiated Telemetry");
 	}
 	if (log_type == ALL || log_type == NLOG || log_type == EXTENDED) {
 		err = ilog_dump_nlogs(hdl, &ilog, -1);
 		if (err == 0)
 			ilog.count++;
 		else if (err < 0)
-			perror("Error retrieving Nlog");
+			nvme_show_err(err, "Error retrieving Nlog");
 	}
 	if (log_type == ALL || log_type == CIT || log_type == EXTENDED) {
 		err = ilog_dump_telemetry(hdl, &ilog, CIT);
 		if (err == 0)
 			ilog.count++;
 		else if (err < 0)
-			perror("Error retrieving Controller Initiated Telemetry");
+			nvme_show_err(err, "Error retrieving Controller Initiated Telemetry");
 	}
 	if (log_type == ALL || log_type == ASSERTLOG || log_type == EXTENDED) {
 		err = ilog_dump_assert_logs(hdl, &ilog);
 		if (err == 0)
 			ilog.count++;
 		else if (err < 0)
-			perror("Error retrieving Assert log");
+			nvme_show_err(err, "Error retrieving Assert log");
 	}
 	if (log_type == ALL || log_type == EVENTLOG || log_type == EXTENDED) {
 		err = ilog_dump_event_logs(hdl, &ilog);
 		if (err == 0)
 			ilog.count++;
 		else if (err < 0)
-			perror("Error retrieving Event log");
+			nvme_show_err(err, "Error retrieving Event log");
 	}
 	if (log_type == ALL || log_type == EXTENDED) {
 		err = ilog_dump_identify_pages(hdl, &ilog);
 		if (err < 0)
-			perror("Error retrieving Identify pages");
+			nvme_show_err(err, "Error retrieving Identify pages");
 
 		err = ilog_dump_pel(hdl, &ilog);
 		if (err < 0)
-			perror("Error retrieving Persistent Event Log page");
+			nvme_show_err(err, "Error retrieving Persistent Event Log page");
 
 		err = ilog_dump_no_lsp_log_pages(hdl, &ilog);
 		if (err < 0)
-			perror("Error retrieving no LSP Log pages");
+			nvme_show_err(err, "Error retrieving no LSP Log pages");
 	}
 
 	if (ilog.count > 0) {
 		int ret_cmd;
-		__cleanup_free char *cmd = NULL;
-		char *quiet = nvme_args.verbose ? "" : " -q";
+		__cleanup_free char *zip_path = NULL;
 
 		if (asprintf(&zip_name, "%s.zip", unique_folder) < 0)
 			return -errno;
 
-		if (asprintf(&cmd, "cd \"%s\" && zip -MM -r \"../%s\" ./* %s", cfg.out_dir,
-			     zip_name, quiet) < 0) {
-			err = errno;
-			perror("Can't allocate string for zip command");
-			goto out;
-		}
+		/*
+		 * initial_folder is cfg.out_dir as given on the command line,
+		 * before it was extended to initial_folder/unique_folder
+		 * below; the archive is written there, next to unique_folder,
+		 * not inside it (shr_rmdir_recursive() removes cfg.out_dir
+		 * right after, which would delete the archive too).
+		 */
+		if (asprintf(&zip_path, "%s/%s", initial_folder, zip_name) < 0)
+			return -errno;
+
 		printf("Compressing logs to %s\n", zip_name);
-		ret_cmd = system(cmd);
-		if (ret_cmd)
-			perror(cmd);
-		else {
+
+		/* no external process: archive cfg.out_dir directly */
+		ret_cmd = shr_archive_create_dir(zip_path, cfg.out_dir, "",
+						  SHR_ARCHIVE_ZIP);
+
+		if (ret_cmd) {
+			nvme_show_error("Failed to create \"%s\": %s", zip_path,
+					 strerror(-ret_cmd));
+			err = ret_cmd;
+		} else {
 			output_path = zip_name;
-			if (asprintf(&cmd, "rm -rf %s", cfg.out_dir) < 0) {
-				err = errno;
-				perror("Can't allocate string for cleanup");
-				goto out;
+			ret_cmd = shr_rmdir_recursive(cfg.out_dir);
+			if (ret_cmd) {
+				errno = -ret_cmd;
+				nvme_show_perror("Failed removing logs folder");
 			}
-			if (system(cmd) != 0)
-				perror("Failed removing logs folder");
 		}
 	}
 
-out:
 	if (ilog.count == 0) {
 		if (err > 0)
 			nvme_show_status(err);

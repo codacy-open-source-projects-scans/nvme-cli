@@ -5,6 +5,7 @@
  *
  * Authors: Keith Busch <keith.busch@wdc.com>
  *	    Chaitanya Kulkarni <chaitanya.kulkarni@wdc.com>
+ *	    Daniel Wagner <dwagner@suse.de>
  */
 
 #pragma once
@@ -27,30 +28,100 @@
 #define NVME_LOG_PAGE_PDU_SIZE 4096
 
 /**
- * libnvme_submit_admin_passthru() - Submit an nvme passthrough admin command
+ * struct libnvme_passthru_completion - Async passthru completion record
+ * @cmd:	Command that completed
+ * @cookie:	User cookie provided to libnvme_submit_*_passthru()
+ * @status:	Completion status (NVMe status or negative errno)
+ *
+ * Used for both admin and IO passthru command completions.
+ */
+struct libnvme_passthru_completion {
+	struct libnvme_passthru_cmd *cmd;
+	void *cookie;
+	int status;
+};
+
+/**
+ * libnvme_submit_admin_passthru() - Queue admin passthru command
+ * @hdl:	Transport handle
+ * @cmd:	The nvme admin command to send
+ * @cookie:	User-defined opaque value returned at completion
+ *
+ * Queues @cmd for asynchronous execution. Completion is reported via
+ * libnvme_reap_passthru().
+ *
+ * Return: 0 on successful queueing, negative error code otherwise.
+ */
+int libnvme_submit_admin_passthru(struct libnvme_transport_handle *hdl,
+		struct libnvme_passthru_cmd *cmd, void *cookie);
+
+/**
+ * libnvme_exec_admin_passthru() - Submit an admin passthru command and wait
  * @hdl:	Transport handle
  * @cmd:	The nvme admin command to send
  *
- * Uses LIBNVME_IOCTL_ADMIN_CMD for the ioctl request.
+ * Synchronous command execution.
  *
- * Return: 0 on success, the nvme command status if a response was
- * received (see &enum nvme_status_field) or a negative error otherwise.
+ * Return: The nvme command status if a response was received (see
+ * &enum nvme_status_field), or negative error code otherwise.
  */
-int libnvme_submit_admin_passthru(struct libnvme_transport_handle *hdl,
+int libnvme_exec_admin_passthru(struct libnvme_transport_handle *hdl,
 		struct libnvme_passthru_cmd *cmd);
 
 /**
- * libnvme_submit_io_passthru() - Submit an nvme passthrough command
+ * libnvme_submit_io_passthru() - Queue IO passthru command
  * @hdl:	Transport handle
- * @cmd:	The nvme io command to send
+ * @cmd:	The nvme IO command to send
+ * @cookie:	User-defined opaque value returned at completion
  *
- * Uses LIBNVME_IOCTL_IO_CMD for the ioctl request.
+ * Queues @cmd for asynchronous execution. Completion is reported via
+ * libnvme_reap_passthru().
  *
- * Return: 0 on success, the nvme command status if a response was
- * received (see &enum nvme_status_field) or a negative error otherwise.
+ * Return: 0 on successful queueing, negative error code otherwise.
  */
 int libnvme_submit_io_passthru(struct libnvme_transport_handle *hdl,
+		struct libnvme_passthru_cmd *cmd, void *cookie);
+
+/**
+ * libnvme_exec_io_passthru() - Submit an IO passthru command and wait
+ * @hdl:	Transport handle
+ * @cmd:	The nvme IO command to send
+ *
+ * Synchronous command execution. Note: when io_uring is enabled, this shares
+ * the async queue. Avoid mixing this with direct async API usage on the same
+ * handle. For batching, use the async API exclusively.
+ *
+ * Return: The nvme command status if a response was received (see
+ * &enum nvme_status_field), or negative error code otherwise.
+ */
+int libnvme_exec_io_passthru(struct libnvme_transport_handle *hdl,
 		struct libnvme_passthru_cmd *cmd);
+
+/**
+ * libnvme_reap_passthru() - Reap one async completion
+ * @hdl:	Transport handle
+ * @completion: Completion output structure
+ *
+ * Waits for one queued passthru command to complete and stores the
+ * completed command pointer, associated cookie, and completion status in
+ * @completion.
+ *
+ * Return: 0 on success, negative error code otherwise.
+ */
+int libnvme_reap_passthru(struct libnvme_transport_handle *hdl,
+		struct libnvme_passthru_completion *completion);
+
+/**
+ * libnvme_wait_passthru() - Wait for all pending passthru completions
+ * @hdl:	Transport handle
+ *
+ * Drains all pending passthru commands from the async queue. Use this
+ * after batching multiple libnvme_submit_admin_passthru() calls when io_uring
+ * is enabled.
+ *
+ * Return: 0 on success, or the first non-zero status encountered.
+ */
+int libnvme_wait_passthru(struct libnvme_transport_handle *hdl);
 
 /**
  * libnvme_reset_subsystem() - Initiate a subsystem reset
@@ -58,7 +129,7 @@ int libnvme_submit_io_passthru(struct libnvme_transport_handle *hdl,
  *
  * This should only be sent to controller handles, not to namespaces.
  *
- * Return: Zero if a subsystem reset was initiated or -1 with errno set
+ * Return: Zero if a subsystem reset was initiated or negative error code
  * otherwise.
  */
 int libnvme_reset_subsystem(struct libnvme_transport_handle *hdl);
@@ -69,7 +140,7 @@ int libnvme_reset_subsystem(struct libnvme_transport_handle *hdl);
  *
  * This should only be sent to controller handles, not to namespaces.
  *
- * Return: 0 if a reset was initiated or -1 with errno set otherwise.
+ * Return: 0 if a reset was initiated or negative error code otherwise.
  */
 int libnvme_reset_ctrl(struct libnvme_transport_handle *hdl);
 
@@ -79,7 +150,7 @@ int libnvme_reset_ctrl(struct libnvme_transport_handle *hdl);
  *
  * This should only be sent to controller handles, not to namespaces.
  *
- * Return: 0 if a rescan was initiated or -1 with errno set otherwise.
+ * Return: 0 if a rescan was initiated or negative error code otherwise.
  */
 int libnvme_rescan_ns(struct libnvme_transport_handle *hdl);
 
@@ -93,7 +164,7 @@ int libnvme_rescan_ns(struct libnvme_transport_handle *hdl);
  * for many architectures that are incapable of allowing distinguishing a
  * namespace id > 0x80000000 from a negative error number.
  *
- * Return: 0 if @nsid was set successfully or -1 with errno set otherwise.
+ * Return: 0 if @nsid was set successfully or negative error code otherwise.
  */
 int libnvme_get_nsid(struct libnvme_transport_handle *hdl, __u32 *nsid);
 
@@ -109,3 +180,16 @@ int libnvme_get_nsid(struct libnvme_transport_handle *hdl, __u32 *nsid);
  */
 int libnvme_update_block_size(struct libnvme_transport_handle *hdl,
 		int block_size);
+
+/**
+ * libnvme_reread_partitions() - Reread the partition table
+ * @hdl:	Transport handle
+ *
+ * Ask the kernel to reread the partition table of a namespace, e.g. after
+ * the namespace has become readable again. This should only be used for
+ * namespace handles, not controllers.
+ *
+ * Return: 0 if the partition table was reread or a negative error code
+ * otherwise.
+ */
+int libnvme_reread_partitions(struct libnvme_transport_handle *hdl);

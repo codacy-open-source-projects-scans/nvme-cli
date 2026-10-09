@@ -9,7 +9,7 @@
 # Verify that every symbol exported in a version script has a prototype
 # declared in one of the installed header files.
 #
-# A __public function that appears in a .ld version script but not in any
+# A __shr_public function that appears in a .ld version script but not in any
 # installed header is technically callable by external code, but callers have
 # no declaration to include — they would need to write their own prototype or
 # use dlsym(), which defeats the purpose of a stable public API.
@@ -73,7 +73,7 @@ def main():
     ld_syms = {}   # symbol -> Path of the .ld file that declares it
 
     for ld_path in ld_files:
-        for line in ld_path.read_text().splitlines():
+        for line in ld_path.read_text(encoding='utf-8').splitlines():
             m = re.match(r'^\s+([a-z]\w+);', line)
             if m:
                 ld_syms[m.group(1)] = ld_path
@@ -89,7 +89,8 @@ def main():
     header_syms = set()
 
     for hdr_path in headers:
-        for m in re.finditer(r'\b([a-z_]\w+)\s*\(', hdr_path.read_text()):
+        text = hdr_path.read_text(encoding='utf-8')
+        for m in re.finditer(r'\b([a-z_]\w+)\s*\(', text):
             header_syms.add(m.group(1))
 
     # -----------------------------------------------------------------------

@@ -13,7 +13,6 @@ usage() {
     echo ""
     echo " -d:  no documentation update"
     echo " -f:  disable all sanity checks and just do the release"
-    echo " -l:  do not update library dependency"
     echo ""
     echo "Note: The version number needs to be exactly"
     echo "      '^v[\d]+.[\d]+(.[\d\]+(-rc[0-9]+)?$'"
@@ -24,19 +23,15 @@ usage() {
 }
 
 build_doc=true
-update_lib_dep=true
 force=false
 
-while getopts "dfl" o; do
+while getopts "df" o; do
     case "${o}" in
         d)
             build_doc=false
             ;;
         f)
             force=true
-            ;;
-        l)
-            update_lib_dep=false
             ;;
         *)
             usage
@@ -56,7 +51,7 @@ cleanup() {
     if [ -z "${OLD_HEAD}" ] ; then
         exit
     fi
-    git tag -d "Release $VERSION" "$VERSION"
+    git tag -d "$VERSION"
     git reset --hard "${OLD_HEAD}"
 }
 
@@ -70,10 +65,8 @@ unregister_cleanup() {
 
 trap cleanup EXIT
 
-register_cleanup
-
 # expected version regex
-re='^v([0-9]+\.[0-9]+(\.[0-9]+)?)(-(rc|a|b)\.[0-9]+)?$'
+re='^v([0-9]+\.[0-9]+(\.[0-9]+)?)(-(rc|a|b)\.?[0-9]+)?$'
 
 # use the version string provided from the command line
 if [[ "$VERSION" =~ ${re} ]]; then
@@ -86,14 +79,14 @@ else
     exit 1
 fi
 
+register_cleanup
+
 cd "$(git rev-parse --show-toplevel)" || exit 1
 
 if [ "$force" = false ] ; then
     if [[ -n $(git status -s) ]]; then
         echo "tree is dirty."
-        if [[ "${dry_run}" = false ]]; then
-            exit 1
-        fi
+        exit 1
     fi
 
     if [ "$(git rev-parse --abbrev-ref HEAD)" != "master" ] ; then
@@ -103,9 +96,62 @@ if [ "$force" = false ] ; then
 fi
 
 if [ "$build_doc" = true ]; then
-    ./scripts/update-docs.sh
+    if ! ./scripts/update-docs.sh; then
+        echo "release.sh: failed to regenerate the documentation" >&2
+        exit 1
+    fi
     git add Documentation libnvme/doc
     git commit -s -m "doc: Regenerate all docs for $VERSION"
+fi
+
+BUILDDIR="$(mktemp -d)"
+
+if ! meson setup -Dlibnvme=enabled -Djson-c=enabled "${BUILDDIR}" > "${BUILDDIR}/setup.log" 2>&1; then
+    echo "release.sh: failed to configure a build for completion generation:" >&2
+    cat "${BUILDDIR}/setup.log" >&2
+    rm -rf -- "${BUILDDIR}"
+    exit 1
+fi
+
+if ! meson compile -C "${BUILDDIR}" > "${BUILDDIR}/compile.log" 2>&1; then
+    echo "release.sh: failed to build nvme for completion generation:" >&2
+    cat "${BUILDDIR}/compile.log" >&2
+    rm -rf -- "${BUILDDIR}"
+    exit 1
+fi
+
+if ! "${BUILDDIR}/nvme" utils dump-command-metadata > "${BUILDDIR}/metadata.json" 2> "${BUILDDIR}/metadata.err"; then
+    echo "release.sh: 'nvme utils dump-command-metadata' failed; is nvme built with json-c support?" >&2
+    cat "${BUILDDIR}/metadata.err" >&2
+    rm -rf -- "${BUILDDIR}"
+    exit 1
+fi
+
+if ! ./completions/generate-completions.py \
+    --bash completions/bash-nvme-completion.sh \
+    --zsh completions/_nvme \
+    --powershell completions/nvme-completion.ps1 \
+    < "${BUILDDIR}/metadata.json"; then
+    echo "release.sh: failed to generate completions" >&2
+    rm -rf -- "${BUILDDIR}"
+    exit 1
+fi
+rm -rf -- "${BUILDDIR}"
+
+if [[ -n $(git status -s -- completions/bash-nvme-completion.sh completions/_nvme completions/nvme-completion.ps1) ]]; then
+    git add completions/bash-nvme-completion.sh completions/_nvme completions/nvme-completion.ps1
+    git commit -s -m "completions: regenerate bash, zsh, and PowerShell completions for $VERSION"
+fi
+
+if [[ "$ver" != *-* ]]; then
+    news_ver="${ver%%.*}.$(echo "$ver" | cut -d. -f2)"
+    news_heading="## Changes in $news_ver (unreleased)"
+    if ! grep -qF "$news_heading" NEWS.md; then
+        echo "release.sh: could not find '$news_heading' in NEWS.md" >&2
+        exit 1
+    fi
+    sed -i "0,/^${news_heading//./\\.}$/s//## Changes in $news_ver ($(date +%Y-%m-%d))/" NEWS.md
+    git add NEWS.md
 fi
 
 # update meson.build

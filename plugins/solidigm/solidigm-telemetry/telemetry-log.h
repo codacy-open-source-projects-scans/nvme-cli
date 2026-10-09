@@ -4,16 +4,16 @@
  *
  * Author: leonardo.da.cunha@solidigm.com
  */
-
-#ifndef _SOLIDIGM_TELEMETRY_LOG_H
-#define _SOLIDIGM_TELEMETRY_LOG_H
+#pragma once
 
 #include <assert.h>
 #include <stdbool.h>
+#include <stdint.h>
+#include <stdio.h>
 
 #include <libnvme.h>
 
-#include "util/json.h"
+#include "nvme-json.h"
 
 #if !defined __cplusplus
 #define static_assert _Static_assert
@@ -30,7 +30,5 @@ struct telemetry_log {
 	struct json_object *root;
 	struct json_object *configuration;
 	bool is_ocp;
-	bool is_skhT;
+	uint32_t skhT_offset;
 };
-
-#endif /* _SOLIDIGM_TELEMETRY_LOG_H */

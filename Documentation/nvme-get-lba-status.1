@@ -2,12 +2,12 @@
 .\"     Title: nvme-get-lba-status
 .\"    Author: [FIXME: author] [see http://www.docbook.org/tdg5/en/html/author]
 .\" Generator: DocBook XSL Stylesheets vsnapshot <http://docbook.sf.net/>
-.\"      Date: 04/17/2026
+.\"      Date: 09/18/2026
 .\"    Manual: NVMe Manual
 .\"    Source: NVMe
 .\"  Language: English
 .\"
-.TH "NVME\-GET\-LBA\-STAT" "1" "04/17/2026" "NVMe" "NVMe Manual"
+.TH "NVME\-GET\-LBA\-STAT" "1" "09/18/2026" "NVMe" "NVMe Manual"
 .\" -----------------------------------------------------------------
 .\" * Define some portability stuff
 .\" -----------------------------------------------------------------
@@ -32,12 +32,12 @@ nvme-get-lba-status \- Get LBA Status from NVMe device
 .SH "SYNOPSIS"
 .sp
 .nf
-\fInvme get\-lba\-status\fR <device> [\-\-namespace\-id=<nsid> | \-n <nsid>]
+\fInvme\fR [<global\-options>] \fIget\-lba\-status\fR <device>
+                        [\-\-namespace\-id=<nsid> | \-n <nsid>]
                         [\-\-start\-lba=<slba> | \-s <slba>]
                         [\-\-max\-dw=<max\-dw> | \-m <max\-dw>]
                         [\-\-action=<action\-type> | \-a <action\-type>]
                         [\-\-range\-len=<range\-len> | \-l <range\-len>]
-                        [<global\-options>]
 .fi
 .SH "DESCRIPTION"
 .sp
@@ -117,6 +117,8 @@ Set the timeout for the command in milliseconds\&.
 .RS 4
 Increase the level of detail in the output\&. May be specified multiple times to further increase verbosity\&.
 .RE
+.sp
+These options can also be set as machine\-wide defaults in nvme\-cli\&.conf(5)\&. A command\-line flag always overrides the file\&.
 .SH "EXAMPLES"
 .sp
 .RS 4

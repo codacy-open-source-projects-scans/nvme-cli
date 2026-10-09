@@ -2,16 +2,24 @@
 /*
  * Copyright (c) 2024
  */
-#include <stdio.h>
 #include <errno.h>
+#include <limits.h>
+#include <stdio.h>
 
-#include "common.h"
-#include "util/types.h"
+#include <libnvme.h>
+
+#include <ccan/array_size/array_size.h>
+#include <ccan/endian/endian.h>
+#include <shared/uint128-util.h>
+
+#include "cleanup.h"
+#include "global-ctx.h"
 #include "logging.h"
 #include "nvme-print.h"
 #include "ocp-hardware-component-log.h"
 #include "ocp-print.h"
 #include "ocp-utils.h"
+#include "plugin.h"
 
 //#define HWCOMP_DUMMY
 
@@ -24,7 +32,7 @@
 #define print_info_error(...) \
 	do { \
 		if (log_level >= LIBNVME_LOG_INFO) \
-			fprintf(stderr, __VA_ARGS__); \
+			nvme_show_error( __VA_ARGS__); \
 	} while (false)
 
 #ifdef HWCOMP_DUMMY
@@ -171,13 +179,15 @@ static int get_hwcomp_log_data(struct libnvme_transport_handle *hdl, struct hwco
 {
 	size_t desc_offset = offsetof(struct hwcomp_log, desc);
 	struct libnvme_passthru_cmd cmd;
-	nvme_uint128_t log_size;
+	shr_uint128_t log_size;
 	long double log_bytes;
 	__u32 len;
 	__u8 uidx;
-	int ret = 0;
+	int ret;
 
-	ocp_get_uuid_index(hdl, &uidx);
+	ret = ocp_get_uuid_index(hdl, &uidx);
+	if (ret < 0)
+		return ret;
 
 #ifdef HWCOMP_DUMMY
 	memcpy(log, hwcomp_dummy, desc_offset);
@@ -211,13 +221,19 @@ static int get_hwcomp_log_data(struct libnvme_transport_handle *hdl, struct hwco
 		return -EINVAL;
 	}
 
+	if (log_bytes - desc_offset > UINT_MAX) {
+		print_info_error("error: ocp: hwcomp log too large: %.0Lf\n", log_bytes);
+		return -EOVERFLOW;
+	}
+
 	len = log_bytes - desc_offset;
+	log->desc_len = len;
 
 	print_info("args.len: %u\n", len);
 
 	log->desc = calloc(1, len);
 	if (!log->desc) {
-		fprintf(stderr, "error: ocp: calloc: %s\n", libnvme_strerror(errno));
+		nvme_show_error("error: ocp: calloc: %s", libnvme_strerror(errno));
 		return -errno;
 	}
 
@@ -250,7 +266,7 @@ static int get_hwcomp_log(struct libnvme_transport_handle *hdl, __u32 id, bool l
 
 	ret = validate_output_format(nvme_args.output_format, &fmt);
 	if (ret < 0) {
-		fprintf(stderr, "error: ocp: invalid output format\n");
+		nvme_show_error("error: ocp: invalid output format");
 		return ret;
 	}
 
@@ -307,7 +323,7 @@ int ocp_hwcomp_log(int argc, char **argv, struct command *acmd, struct plugin *p
 
 	ret = get_hwcomp_log(hdl, cfg.id, cfg.list);
 	if (ret)
-		fprintf(stderr, "error: ocp: failed to get hwcomp log: %02X, ret: %d\n",
+		nvme_show_error("error: ocp: failed to get hwcomp log: %02X, ret: %d",
 			OCP_LID_HWCOMP, ret);
 
 	return ret;

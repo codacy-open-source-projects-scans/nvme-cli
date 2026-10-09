@@ -14,10 +14,12 @@
 
 #include <ccan/endian/endian.h>
 
+#include <shared/compiler-attributes-util.h>
+#include <shared/nqn-util.h>
+
 #include <libnvme.h>
 
 #include "private.h"
-#include "compiler-attributes.h"
 
 static __u8 csum(const __u8 *buffer, ssize_t length)
 {
@@ -42,19 +44,46 @@ static void format_ip_addr(char *buf, size_t buflen, __u8 *addr)
 		inet_ntop(AF_INET6, &addr_ipv6, buf, buflen);
 }
 
+static bool range_valid(size_t offset, size_t length, size_t limit)
+{
+	return offset <= limit && length <= limit - offset;
+}
+
 static bool in_heap(struct nbft_header *header, struct nbft_heap_obj obj)
 {
-	if (le16_to_cpu(obj.length) == 0)
+	size_t heap_offset = le32_to_cpu(header->heap_offset);
+	size_t heap_length = le32_to_cpu(header->heap_length);
+	size_t obj_offset = le32_to_cpu(obj.offset);
+	size_t obj_length = le16_to_cpu(obj.length);
+	size_t table_length = le32_to_cpu(header->length);
+
+	if (obj_length == 0)
 		return true;
-	if (le32_to_cpu(obj.offset) < le32_to_cpu(header->heap_offset))
+	if (!range_valid(heap_offset, heap_length, table_length))
 		return false;
-	if (le32_to_cpu(obj.offset) >
-	    le32_to_cpu(header->heap_offset) + le32_to_cpu(header->heap_length))
+	if (obj_offset < heap_offset)
 		return false;
-	if (le32_to_cpu(obj.offset) + le16_to_cpu(obj.length) >
-	    le32_to_cpu(header->heap_offset) + le32_to_cpu(header->heap_length))
+
+	return range_valid(obj_offset - heap_offset, obj_length, heap_length);
+}
+
+static bool descriptor_list_valid(struct nbft_header *header, __le32 offset,
+		__le16 length, __u8 count, size_t minimum_length)
+{
+	size_t table_length = le32_to_cpu(header->length);
+	size_t list_offset = le32_to_cpu(offset);
+	size_t descriptor_length = le16_to_cpu(length);
+
+	if (descriptor_length < minimum_length || list_offset == 0 ||
+	    list_offset > table_length)
 		return false;
-	return true;
+
+	return count <= (table_length - list_offset) / descriptor_length;
+}
+
+static void *descriptor_at(__u8 *array, size_t index, size_t length)
+{
+	return array + index * length;
 }
 
 /*
@@ -83,9 +112,14 @@ static int __get_heap_obj(struct libnvme_global_ctx *ctx,
 		struct nbft_header *header, const char *filename,
 		const char *descriptorname, const char *fieldname,
 		struct nbft_heap_obj obj, bool is_string,
-		char **output)
+		size_t min_len, char **output, __u16 *length)
 {
-	if (le16_to_cpu(obj.length) == 0)
+	__u16 obj_length = le16_to_cpu(obj.length);
+
+	*output = NULL;
+	if (length)
+		*length = 0;
+	if (obj_length == 0)
 		return -ENOENT;
 
 	if (!in_heap(header, obj)) {
@@ -95,19 +129,24 @@ static int __get_heap_obj(struct libnvme_global_ctx *ctx,
 		return -EINVAL;
 	}
 
+	if (!is_string && obj_length < min_len) {
+		libnvme_msg(ctx, LIBNVME_LOG_DEBUG,
+			"file %s: object '%s' in descriptor '%s' is too short (%d, expected %zu)\n",
+			filename, fieldname, descriptorname,
+			obj_length, min_len);
+		return -EINVAL;
+	}
+
 	/* check that string is zero terminated correctly */
 	*output = (char *)header + le32_to_cpu(obj.offset);
 
 	if (is_string) {
-		if (strnlen(*output, le16_to_cpu(obj.length) + 1) <
-				le16_to_cpu(obj.length)) {
+		if (strnlen(*output, obj_length + 1) < obj_length) {
 			libnvme_msg(ctx, LIBNVME_LOG_DEBUG,
 				"file %s: string '%s' in descriptor '%s' is shorter (%zd) than specified length (%d)\n",
 				filename, fieldname, descriptorname,
-				strnlen(*output, le16_to_cpu(obj.length) + 1),
-					le16_to_cpu(obj.length));
-		} else if (strnlen(*output, le16_to_cpu(obj.length) + 1) >
-				le16_to_cpu(obj.length)) {
+				strnlen(*output, obj_length + 1), obj_length);
+		} else if (strnlen(*output, obj_length + 1) > obj_length) {
 			libnvme_msg(ctx, LIBNVME_LOG_DEBUG,
 				"file %s: string '%s' in descriptor '%s' is not zero terminated\n",
 				filename, fieldname, descriptorname);
@@ -115,14 +154,36 @@ static int __get_heap_obj(struct libnvme_global_ctx *ctx,
 		}
 	}
 
+	if (length)
+		*length = obj_length;
 	return 0;
 }
 
-#define get_heap_obj(ctx, descriptor, obj, is_string, output)	\
-	__get_heap_obj(ctx, header, nbft->filename,		\
-		       stringify(descriptor), stringify(obj),	\
-		       descriptor->obj, is_string,		\
-		       output)
+/*
+ * Heap objects with structured (non-string) content are dereferenced as a
+ * struct by the caller, so make sure the object is at least as large as the
+ * structure it is interpreted as.  String and plain byte-array objects
+ * have no minimum.  The SSNS extended-info reader performs its own
+ * spec-length validation, so it is exempt here too.
+ */
+#define get_heap_obj(ctx, descriptor, obj, is_string, output)		\
+	__get_heap_obj(ctx, header, nbft->filename,			\
+		       stringify(descriptor), stringify(obj),		\
+		       descriptor->obj, is_string,			\
+		       _Generic((output),				\
+			   char **: 0,				\
+			   __u8 **: 0,				\
+			   struct nbft_hfi_info_tcp **:		\
+				   sizeof(**(output)),			\
+			   struct nbft_hfi_info_ext **:		\
+				   sizeof(**(output)),			\
+			   struct nbft_ssns_ext_info **: 0),		\
+		       (char **)(output), NULL)
+
+#define get_heap_obj_len(ctx, descriptor, obj, is_string, output, length) \
+	__get_heap_obj(ctx, header, nbft->filename,			\
+		       stringify(descriptor), stringify(obj),		\
+		       descriptor->obj, is_string, 0, output, length)
 
 static struct libnbft_discovery *discovery_from_index(struct libnbft_info *nbft,
 		int i)
@@ -161,10 +222,13 @@ static struct libnbft_security *security_from_index(struct libnbft_info *nbft,
 
 static int read_ssns_exended_info(struct libnvme_global_ctx *ctx,
 		struct libnbft_info *nbft, struct libnbft_subsystem_ns *ssns,
-		struct nbft_ssns_ext_info *raw_ssns_ei)
+		struct nbft_ssns_ext_info *raw_ssns_ei, __u16 descriptor_len)
 {
 	struct nbft_header *header = (struct nbft_header *)nbft->raw_nbft;
 
+	/* Verify minimum size of the NBFT rev. 1.0 ssns_ext_info structure */
+	verify(ctx, descriptor_len >= offsetof(struct nbft_ssns_ext_info, naed),
+	       "SSNS extended info descriptor too short");
 	verify(ctx, raw_ssns_ei->structure_id == NBFT_DESC_SSNS_EXT_INFO,
 	       "invalid ID in SSNS extended info descriptor");
 	verify(ctx, raw_ssns_ei->version == 1,
@@ -180,6 +244,14 @@ static int read_ssns_exended_info(struct libnvme_global_ctx *ctx,
 	ssns->controller_id = le16_to_cpu(raw_ssns_ei->cntlid);
 	get_heap_obj(ctx, raw_ssns_ei, dhcp_root_path_str_obj, 1,
 		&ssns->dhcp_root_path_string);
+
+	/* NBFT rev. 1.1 structure fields */
+	if (descriptor_len >= sizeof(struct nbft_ssns_ext_info)) {
+		ssns->naed = raw_ssns_ei->naed;
+		ssns->cipeec = raw_ssns_ei->cipeec;
+		ssns->cto = le16_to_cpu(raw_ssns_ei->cto);
+		ssns->nceec = raw_ssns_ei->nceec;
+	}
 
 	return 0;
 }
@@ -210,17 +282,11 @@ static int read_ssns(struct libnvme_global_ctx *ctx,
 
 	ssns->index = le16_to_cpu(raw_ssns->index);
 	strncpy(ssns->transport, trtype_to_string(raw_ssns->trtype),
-		sizeof(ssns->transport));
+		sizeof(ssns->transport) - 1);
+	ssns->transport[sizeof(ssns->transport) - 1] = '\0';
 
 	/* transport specific flags */
-	if (raw_ssns->trtype == NBFT_TRTYPE_TCP) {
-		if (le16_to_cpu(raw_ssns->trflags) &
-				NBFT_SSNS_PDU_HEADER_DIGEST)
-			ssns->pdu_header_digest_required = true;
-		if (le16_to_cpu(raw_ssns->trflags) &
-				NBFT_SSNS_DATA_DIGEST)
-			ssns->data_digest_required = true;
-	}
+	ssns->trflags = le16_to_cpu(raw_ssns->trflags);
 
 	/* primary discovery controller */
 	if (raw_ssns->primary_discovery_ctrl_index) {
@@ -233,9 +299,19 @@ static int read_ssns(struct libnvme_global_ctx *ctx,
 	}
 
 	/* subsystem transport address */
-	ret = get_heap_obj(ctx, raw_ssns, subsys_traddr_obj, 0, (char **)&tmp);
+	ret = get_heap_obj(ctx, raw_ssns, subsys_traddr_obj, 0, &tmp);
 	if (ret)
 		goto fail;
+
+	/* format_ip_addr() always reads a full 16 bytes of IP address */
+	if (le16_to_cpu(raw_ssns->subsys_traddr_obj.length) < sizeof(struct in6_addr)) {
+		libnvme_msg(ctx, LIBNVME_LOG_DEBUG,
+			"file %s: SSNS %d transport address heap object too short (%d bytes)\n",
+			nbft->filename, ssns->index,
+			le16_to_cpu(raw_ssns->subsys_traddr_obj.length));
+		ret = -EINVAL;
+		goto fail;
+	}
 
 	format_ip_addr(ssns->traddr, sizeof(ssns->traddr), tmp);
 
@@ -254,24 +330,25 @@ static int read_ssns(struct libnvme_global_ctx *ctx,
 	ssns->nid = raw_ssns->nid;
 
 	/* flags */
-	ssns->unavailable = !!(le16_to_cpu(raw_ssns->flags) &
-			       NBFT_SSNS_UNAVAIL_NAMESPACE_UNAVAIL);
-	ssns->discovered = !!(le16_to_cpu(raw_ssns->flags) &
-			      NBFT_SSNS_DISCOVERED_NAMESPACE);
+	ssns->flags = le16_to_cpu(raw_ssns->flags);
 
 	/* security profile */
 	if (raw_ssns->security_desc_index) {
 		ssns->security = security_from_index(nbft,
 			raw_ssns->security_desc_index);
-		if (!ssns->security)
-			libnvme_msg(ctx, LIBNVME_LOG_DEBUG,
-				 "file %s: namespace %d security controller not found\n",
-				 nbft->filename, ssns->index);
+		if (!ssns->security) {
+			libnvme_msg(ctx, LIBNVME_LOG_WARN,
+				 "file %s: namespace %d security descriptor %d not found, skipping entry\n",
+				 nbft->filename, ssns->index,
+				 raw_ssns->security_desc_index);
+			ret = -EINVAL;
+			goto fail;
+		}
 	}
 
 	/* HFI descriptors */
 	ret = get_heap_obj(ctx, raw_ssns, secondary_hfi_assoc_obj,
-		0, (char **)&ss_hfi_indexes);
+		0, &ss_hfi_indexes);
 	if (ret)
 		goto fail;
 
@@ -294,6 +371,7 @@ static int read_ssns(struct libnvme_global_ctx *ctx,
 	ssns->num_hfis = 1;
 	for (i = 0; i < le16_to_cpu(raw_ssns->secondary_hfi_assoc_obj.length);
 			i++) {
+		struct libnbft_hfi *hfi;
 		bool duplicate = false;
 		int j;
 
@@ -315,13 +393,17 @@ static int read_ssns(struct libnvme_global_ctx *ctx,
 			continue;
 		}
 
-		ssns->hfis[i + 1] = hfi_from_index(nbft, ss_hfi_indexes[i]);
-		if (ss_hfi_indexes[i] && !ssns->hfis[i + 1])
+		hfi = hfi_from_index(nbft, ss_hfi_indexes[i]);
+		if (!hfi) {
+			if (!ss_hfi_indexes[i])
+				continue;
 			libnvme_msg(ctx, LIBNVME_LOG_DEBUG,
 				"file %s: SSNS %d HFI %d not found\n",
 				nbft->filename, ssns->index, ss_hfi_indexes[i]);
-		else
-			ssns->num_hfis++;
+			continue;
+		}
+
+		ssns->hfis[ssns->num_hfis++] = hfi;
 	}
 
 	/* SSNS NQN */
@@ -335,9 +417,10 @@ static int read_ssns(struct libnvme_global_ctx *ctx,
 		struct nbft_ssns_ext_info *ssns_extended_info;
 
 		if (!get_heap_obj(ctx, raw_ssns, ssns_extended_info_desc_obj,
-				0, (char **)&ssns_extended_info)) {
+				0, &ssns_extended_info)) {
 			read_ssns_exended_info(ctx, nbft, ssns,
-				ssns_extended_info);
+				ssns_extended_info,
+				le16_to_cpu(raw_ssns->ssns_extended_info_desc_obj.length));
 		}
 	}
 
@@ -345,8 +428,38 @@ static int read_ssns(struct libnvme_global_ctx *ctx,
 	return 0;
 
 fail:
+	free(ssns->hfis);
 	free(ssns);
 	return ret;
+}
+
+static void read_hfi_info_dhcp(struct libnvme_global_ctx *ctx,
+		struct libnbft_info *nbft,
+		struct nbft_hfi_info_ext *hfi_ext_info,
+		struct libnbft_hfi *hfi)
+{
+	struct nbft_header *header = (struct nbft_header *)nbft->raw_nbft;
+	char *iaid_raw = NULL;
+	char *duid_raw = NULL;
+	__u16 duid_len;
+
+	if (hfi_ext_info->structure_id != NBFT_DESC_HFI_EXT_INFO ||
+	    hfi_ext_info->version != 1)
+		return;
+	if (!(le32_to_cpu(hfi_ext_info->flags) & NBFT_HFI_INFO_EXT_VALID))
+		return;
+	if (!(le32_to_cpu(hfi_ext_info->flags) & NBFT_HFI_INFO_EXT_DCI))
+		return;
+
+	if (!get_heap_obj(ctx, hfi_ext_info, dhcp_iaid_obj, 0, &iaid_raw))
+		hfi->tcp_info.dhcp_iaid = le32_to_cpu(*(__le32 *)iaid_raw);
+	if (!get_heap_obj(ctx, hfi_ext_info, dhcp_duid_obj, 0, &duid_raw)) {
+		duid_len = le16_to_cpu(hfi_ext_info->dhcp_duid_obj.length);
+		if (duid_len > sizeof(hfi->tcp_info.dhcp_duid))
+			duid_len = sizeof(hfi->tcp_info.dhcp_duid);
+		memcpy(hfi->tcp_info.dhcp_duid, duid_raw, duid_len);
+		hfi->tcp_info.dhcp_duid_len = duid_len;
+	}
 }
 
 static int read_hfi_info_tcp(struct libnvme_global_ctx *ctx,
@@ -386,16 +499,23 @@ static int read_hfi_info_tcp(struct libnvme_global_ctx *ctx,
 	format_ip_addr(hfi->tcp_info.secondary_dns_ipaddr,
 		sizeof(hfi->tcp_info.secondary_dns_ipaddr),
 		raw_hfi_info_tcp->secondary_dns);
-	if (raw_hfi_info_tcp->flags & NBFT_HFI_INFO_TCP_DHCP_OVERRIDE) {
-		hfi->tcp_info.dhcp_override = true;
+	hfi->tcp_info.flags = raw_hfi_info_tcp->flags;
+	if (raw_hfi_info_tcp->flags & NBFT_HFI_INFO_TCP_DHCP_OVERRIDE)
 		format_ip_addr(hfi->tcp_info.dhcp_server_ipaddr,
 			sizeof(hfi->tcp_info.dhcp_server_ipaddr),
 			raw_hfi_info_tcp->dhcp_server);
-	}
 	get_heap_obj(ctx, raw_hfi_info_tcp, host_name_obj,
 		1, &hfi->tcp_info.host_name);
-	if (raw_hfi_info_tcp->flags & NBFT_HFI_INFO_TCP_GLOBAL_ROUTE)
-		hfi->tcp_info.this_hfi_is_default_route = true;
+
+	if (raw_hfi_info_tcp->trinfo_version >= 2) {
+		struct nbft_hfi_info_ext *hfi_ext_info;
+
+		hfi->tcp_info.pcie_seg_num = raw_hfi_info_tcp->pcie_seg_num;
+
+		if (!get_heap_obj(ctx, raw_hfi_info_tcp, hfi_ext_info_obj,
+				0, &hfi_ext_info))
+			read_hfi_info_dhcp(ctx, nbft, hfi_ext_info, hfi);
+	}
 
 	return 0;
 }
@@ -427,10 +547,11 @@ static int read_hfi(struct libnvme_global_ctx *ctx, struct libnbft_info *nbft,
 		struct nbft_hfi_info_tcp *raw_hfi_info_tcp;
 
 		strncpy(hfi->transport, trtype_to_string(raw_hfi->trtype),
-			sizeof(hfi->transport));
+			sizeof(hfi->transport) - 1);
+		hfi->transport[sizeof(hfi->transport) - 1] = '\0';
 
 		ret = get_heap_obj(ctx, raw_hfi, trinfo_obj,
-			0, (char **)&raw_hfi_info_tcp);
+			0, &raw_hfi_info_tcp);
 		if (ret)
 			goto fail;
 
@@ -480,22 +601,39 @@ static int read_discovery(struct libnvme_global_ctx *ctx,
 			1, &discovery->uri))
 		goto error;
 
-	if (get_heap_obj(ctx, raw_discovery, discovery_ctrl_nqn_obj,
-			1, &discovery->nqn))
+	/*
+	 * A DCNQNHOR cleared to 0h is spec-legal: it means "no unique NQN,
+	 * use the well-known Discovery NQN" (Boot Specification rev 1.4).
+	 * get_heap_obj() reports that as -ENOENT, not a parse failure --
+	 * only a genuinely malformed reference (-EINVAL) should drop the
+	 * whole descriptor.
+	 */
+	r = get_heap_obj(ctx, raw_discovery, discovery_ctrl_nqn_obj,
+			1, &discovery->nqn);
+	if (r && r != -ENOENT)
 		goto error;
 
 	discovery->hfi = hfi_from_index(nbft, raw_discovery->hfi_index);
-	if (raw_discovery->hfi_index && !discovery->hfi)
+	if (!discovery->hfi) {
 		libnvme_msg(ctx, LIBNVME_LOG_DEBUG,
 			 "file %s: discovery %d HFI not found\n",
 			 nbft->filename, discovery->index);
+		r = -EINVAL;
+		goto error;
+	}
 
-	discovery->security =
-		security_from_index(nbft, raw_discovery->sec_index);
-	if (raw_discovery->sec_index && !discovery->security)
-		libnvme_msg(ctx, LIBNVME_LOG_DEBUG,
-			 "file %s: discovery %d security descriptor not found\n",
-			 nbft->filename, discovery->index);
+	if (raw_discovery->sec_index) {
+		discovery->security =
+			security_from_index(nbft, raw_discovery->sec_index);
+		if (!discovery->security) {
+			libnvme_msg(ctx, LIBNVME_LOG_WARN,
+				 "file %s: discovery %d security descriptor %d not found, skipping entry\n",
+				 nbft->filename, discovery->index,
+				 raw_discovery->sec_index);
+			r = -EINVAL;
+			goto error;
+		}
+	}
 
 	*d = discovery;
 	r = 0;
@@ -510,18 +648,98 @@ static int read_security(struct libnvme_global_ctx *ctx, struct libnbft_info *nb
 		struct nbft_security *raw_security,
 		struct libnbft_security **s)
 {
-	return -EINVAL;
+	struct nbft_header *header = (struct nbft_header *)nbft->raw_nbft;
+	struct libnbft_security *security;
+	__u16 flags = le16_to_cpu(raw_security->flags);
+	char *policy_list;
+	int ret;
+
+	if (!(flags & NBFT_SECURITY_VALID))
+		return -EINVAL;
+	verify(ctx, raw_security->structure_id == NBFT_DESC_SECURITY,
+	       "invalid ID in security descriptor");
+
+	security = calloc(1, sizeof(*security));
+	if (!security)
+		return -ENOMEM;
+
+	security->index = raw_security->index;
+	security->flags = flags;
+	security->secret_type = raw_security->secret_type;
+
+	/* Policy lists point into the raw NBFT heap when enabled. */
+	ret = 0;
+	if ((flags & NBFT_SECURITY_SEC_POLICY_LIST_MASK) !=
+	    NBFT_SECURITY_SEC_POLICY_LIST_NOT_SUPPORTED &&
+	    le16_to_cpu(raw_security->sec_chan_alg_obj.length)) {
+		ret = get_heap_obj_len(ctx, raw_security, sec_chan_alg_obj, 0,
+				       &policy_list,
+				       &security->sec_chan_algs_len);
+		if (!ret)
+			security->sec_chan_algs = (__u8 *)policy_list;
+	}
+	if (!ret && (flags & NBFT_SECURITY_AUTH_POLICY_LIST_MASK) !=
+	    NBFT_SECURITY_AUTH_POLICY_LIST_NOT_SUPPORTED &&
+	    le16_to_cpu(raw_security->auth_proto_obj.length)) {
+		ret = get_heap_obj_len(ctx, raw_security, auth_proto_obj, 0,
+				       &policy_list,
+				       &security->auth_protocols_len);
+		if (!ret)
+			security->auth_protocols = (__u8 *)policy_list;
+	}
+	if (!ret && (flags & NBFT_SECURITY_CIPHER_RESTRICTED) &&
+	    le16_to_cpu(raw_security->cipher_suite_obj.length)) {
+		ret = get_heap_obj_len(ctx, raw_security, cipher_suite_obj, 0,
+				       &policy_list,
+				       &security->cipher_suites_len);
+		if (!ret)
+			security->cipher_suites = (__u8 *)policy_list;
+	}
+	if (!ret && (flags & NBFT_SECURITY_AUTH_KX_GROUPS_RESTRICTED) &&
+	    le16_to_cpu(raw_security->kx_grp_obj.length)) {
+		ret = get_heap_obj_len(ctx, raw_security, kx_grp_obj, 0,
+				       &policy_list,
+				       &security->kx_groups_len);
+		if (!ret)
+			security->kx_groups = (__u8 *)policy_list;
+	}
+	if (!ret && (flags & NBFT_SECURITY_SEC_HASH_FUNC_POLICY_LIST) &&
+	    le16_to_cpu(raw_security->sec_hash_func_obj.length)) {
+		ret = get_heap_obj_len(ctx, raw_security, sec_hash_func_obj, 0,
+				       &policy_list,
+				       &security->sec_hash_funcs_len);
+		if (!ret)
+			security->sec_hash_funcs = (__u8 *)policy_list;
+	}
+	if (ret) {
+		free(security);
+		return ret;
+	}
+
+	/* The key URI also points into the heap. An absent URI is valid. */
+	ret = get_heap_obj(ctx, raw_security, sec_keypath_obj, 1,
+			   &security->secret_keypath);
+	if (ret && ret != -ENOENT) {
+		free(security);
+		return ret;
+	}
+
+	*s = security;
+	return 0;
 }
 
 static void read_hfi_descriptors(struct libnvme_global_ctx *ctx,
 		struct libnbft_info *nbft, int num_hfi,
-		struct nbft_hfi *raw_hfi_array, int hfi_len)
+		__u8 *raw_hfi_array, size_t hfi_len)
 {
 	int i, cnt;
 
-	nbft->hfi_list = calloc(num_hfi + 1, sizeof(struct libnbft_hfi));
+	nbft->hfi_list = calloc(num_hfi + 1, sizeof(struct libnbft_hfi *));
 	for (i = 0, cnt = 0; i < num_hfi; i++) {
-		if (read_hfi(ctx, nbft, &raw_hfi_array[i],
+		struct nbft_hfi *raw_hfi = descriptor_at(raw_hfi_array, i,
+							 hfi_len);
+
+		if (read_hfi(ctx, nbft, raw_hfi,
 				&nbft->hfi_list[cnt]) == 0)
 			cnt++;
 	}
@@ -529,14 +747,17 @@ static void read_hfi_descriptors(struct libnvme_global_ctx *ctx,
 
 static void read_security_descriptors(struct libnvme_global_ctx *ctx,
 		struct libnbft_info *nbft, int num_sec,
-		struct nbft_security *raw_sec_array, int sec_len)
+		__u8 *raw_sec_array, size_t sec_len)
 {
 	int i, cnt;
 
 	nbft->security_list = calloc(num_sec + 1,
-		sizeof(struct libnbft_security));
+		sizeof(struct libnbft_security *));
 	for (i = 0, cnt = 0; i < num_sec; i++) {
-		if (read_security(ctx, nbft, &raw_sec_array[i],
+		struct nbft_security *raw_security =
+			descriptor_at(raw_sec_array, i, sec_len);
+
+		if (read_security(ctx, nbft, raw_security,
 				&nbft->security_list[cnt]) == 0)
 			cnt++;
 	}
@@ -544,14 +765,17 @@ static void read_security_descriptors(struct libnvme_global_ctx *ctx,
 
 static void read_discovery_descriptors(struct libnvme_global_ctx *ctx,
 		struct libnbft_info *nbft, int num_disc,
-		struct nbft_discovery *raw_disc_array, int disc_len)
+		__u8 *raw_disc_array, size_t disc_len)
 {
 	int i, cnt;
 
 	nbft->discovery_list =
-		calloc(num_disc + 1, sizeof(struct libnbft_discovery));
+		calloc(num_disc + 1, sizeof(struct libnbft_discovery *));
 	for (i = 0, cnt = 0; i < num_disc; i++) {
-		if (read_discovery(ctx, nbft, &raw_disc_array[i],
+		struct nbft_discovery *raw_discovery =
+			descriptor_at(raw_disc_array, i, disc_len);
+
+		if (read_discovery(ctx, nbft, raw_discovery,
 				&nbft->discovery_list[cnt]) == 0)
 			cnt++;
 	}
@@ -559,14 +783,17 @@ static void read_discovery_descriptors(struct libnvme_global_ctx *ctx,
 
 static void read_ssns_descriptors(struct libnvme_global_ctx *ctx,
 		struct libnbft_info *nbft, int num_ssns,
-		struct nbft_ssns *raw_ssns_array, int ssns_len)
+		__u8 *raw_ssns_array, size_t ssns_len)
 {
 	int i, cnt;
 
 	nbft->subsystem_ns_list =
-		 calloc(num_ssns + 1, sizeof(struct libnbft_subsystem_ns));
+		 calloc(num_ssns + 1, sizeof(struct libnbft_subsystem_ns *));
 	for (i = 0, cnt = 0; i < num_ssns; i++) {
-		if (read_ssns(ctx, nbft, &raw_ssns_array[i],
+		struct nbft_ssns *raw_ssns =
+			descriptor_at(raw_ssns_array, i, ssns_len);
+
+		if (read_ssns(ctx, nbft, raw_ssns,
 				&nbft->subsystem_ns_list[cnt]) == 0)
 			cnt++;
 	}
@@ -599,14 +826,18 @@ static int parse_raw_nbft(struct libnvme_global_ctx *ctx, struct libnbft_info *n
 
 	verify(ctx, strncmp(header->signature, NBFT_HEADER_SIG, 4) == 0,
 		"invalid signature");
+	verify(ctx, le32_to_cpu(header->length) >=
+		sizeof(struct nbft_header) + sizeof(struct nbft_control),
+		"length in header is too short");
 	verify(ctx, le32_to_cpu(header->length) <= raw_nbft_size,
 		"length in header exceeds table length");
 	verify(ctx, header->major_revision == 1,
 		"unsupported major revision");
-	verify(ctx, header->minor_revision == 0,
+	verify(ctx, header->minor_revision <= 1,
 		"unsupported minor revision");
-	verify(ctx, le32_to_cpu(header->heap_length) +
-		le32_to_cpu(header->heap_offset) <= le32_to_cpu(header->length),
+	verify(ctx, range_valid(le32_to_cpu(header->heap_offset),
+		le32_to_cpu(header->heap_length),
+		le32_to_cpu(header->length)),
 		"heap exceeds table length");
 
 	/*
@@ -615,16 +846,16 @@ static int parse_raw_nbft(struct libnvme_global_ctx *ctx, struct libnbft_info *n
 	control =
 		(struct nbft_control *)(raw_nbft + sizeof(struct nbft_header));
 
-	if ((control->flags & NBFT_CONTROL_VALID) == 0)
-		return 0;
+	verify(ctx, control->flags & NBFT_CONTROL_VALID,
+	       "control descriptor valid flag not set");
 	verify(ctx, control->structure_id == NBFT_DESC_CONTROL,
 	       "invalid ID in control structure");
 
 	/*
 	 * host
 	 */
-	verify(ctx, le32_to_cpu(control->hdesc.offset) +
-		sizeof(struct nbft_host) <= le32_to_cpu(header->length) &&
+	verify(ctx, range_valid(le32_to_cpu(control->hdesc.offset),
+		sizeof(struct nbft_host), le32_to_cpu(header->length)) &&
 		le32_to_cpu(control->hdesc.offset) >= sizeof(struct nbft_host),
 		"host descriptor offset/length is invalid");
 	host = (struct nbft_host *)(raw_nbft +
@@ -637,23 +868,27 @@ static int parse_raw_nbft(struct libnvme_global_ctx *ctx, struct libnbft_info *n
 	nbft->host.id = (unsigned char *) &(host->host_id);
 	if (get_heap_obj(ctx, host, host_nqn_obj, 1, &nbft->host.nqn) != 0)
 		return -EINVAL;
-	nbft->host.host_id_configured =
-		host->flags & NBFT_HOST_HOSTID_CONFIGURED;
-	nbft->host.host_nqn_configured =
-		host->flags & NBFT_HOST_HOSTNQN_CONFIGURED;
+	/*
+	 * Boot Specification 1.4 section 3.1 requires an SMBIOS-derived
+	 * UUID-format NQN's UUID to already be lower case; firmware that
+	 * gets this wrong is normalized here, at the point the value
+	 * enters libnvme, so every later comparison stays a plain
+	 * strcmp() -- see shr_nqn_normalize().
+	 */
+	shr_nqn_normalize(nbft->host.nqn);
+	nbft->host.flags = host->flags;
 
 	/*
 	 * HFI
 	 */
 	if (control->num_hfi > 0) {
-		struct nbft_hfi *raw_hfi_array;
+		__u8 *raw_hfi_array;
 
-		verify(ctx, le32_to_cpu(control->hfio) +
-			sizeof(struct nbft_hfi) * control->num_hfi <=
-				le32_to_cpu(header->length),
+		verify(ctx, descriptor_list_valid(header, control->hfio,
+			control->hfil, control->num_hfi,
+			sizeof(struct nbft_hfi)),
 		       "invalid hfi descriptor list offset");
-		raw_hfi_array = (struct nbft_hfi *)(raw_nbft +
-			le32_to_cpu(control->hfio));
+		raw_hfi_array = raw_nbft + le32_to_cpu(control->hfio);
 		read_hfi_descriptors(ctx, nbft, control->num_hfi, raw_hfi_array,
 				     le16_to_cpu(control->hfil));
 	}
@@ -662,14 +897,13 @@ static int parse_raw_nbft(struct libnvme_global_ctx *ctx, struct libnbft_info *n
 	 * security
 	 */
 	if (control->num_sec > 0) {
-		struct nbft_security *raw_security_array;
+		__u8 *raw_security_array;
 
-		verify(ctx, le32_to_cpu(control->seco) +
-			le16_to_cpu(control->secl) * control->num_sec <=
-				le32_to_cpu(header->length),
-		       "invalid security profile desciptor list offset");
-		raw_security_array = (struct nbft_security *)(raw_nbft +
-				     le32_to_cpu(control->seco));
+		verify(ctx, descriptor_list_valid(header, control->seco,
+			control->secl, control->num_sec,
+			sizeof(struct nbft_security)),
+		       "invalid security profile descriptor list offset");
+		raw_security_array = raw_nbft + le32_to_cpu(control->seco);
 		read_security_descriptors(ctx, nbft, control->num_sec,
 					  raw_security_array,
 					  le16_to_cpu(control->secl));
@@ -679,14 +913,13 @@ static int parse_raw_nbft(struct libnvme_global_ctx *ctx, struct libnbft_info *n
 	 * discovery
 	 */
 	if (control->num_disc > 0) {
-		struct nbft_discovery *raw_discovery_array;
+		__u8 *raw_discovery_array;
 
-		verify(ctx, le32_to_cpu(control->disco) +
-			le16_to_cpu(control->discl) * control->num_disc <=
-				le32_to_cpu(header->length),
+		verify(ctx, descriptor_list_valid(header, control->disco,
+			control->discl, control->num_disc,
+			sizeof(struct nbft_discovery)),
 		       "invalid discovery profile descriptor list offset");
-		raw_discovery_array = (struct nbft_discovery *)(raw_nbft +
-			le32_to_cpu(control->disco));
+		raw_discovery_array = raw_nbft + le32_to_cpu(control->disco);
 		read_discovery_descriptors(ctx, nbft, control->num_disc,
 			raw_discovery_array, le16_to_cpu(control->discl));
 	}
@@ -695,14 +928,13 @@ static int parse_raw_nbft(struct libnvme_global_ctx *ctx, struct libnbft_info *n
 	 * subsystem namespace
 	 */
 	if (control->num_ssns > 0) {
-		struct nbft_ssns *raw_ssns_array;
+		__u8 *raw_ssns_array;
 
-		verify(ctx, le32_to_cpu(control->ssnso) +
-			le16_to_cpu(control->ssnsl) * control->num_ssns <=
-				le32_to_cpu(header->length),
+		verify(ctx, descriptor_list_valid(header, control->ssnso,
+			control->ssnsl, control->num_ssns,
+			sizeof(struct nbft_ssns)),
 		       "invalid subsystem namespace descriptor list offset");
-		raw_ssns_array = (struct nbft_ssns *)(raw_nbft +
-			le32_to_cpu(control->ssnso));
+		raw_ssns_array = raw_nbft + le32_to_cpu(control->ssnso);
 		read_ssns_descriptors(ctx, nbft, control->num_ssns,
 			raw_ssns_array, le16_to_cpu(control->ssnsl));
 	}
@@ -710,7 +942,8 @@ static int parse_raw_nbft(struct libnvme_global_ctx *ctx, struct libnbft_info *n
 	return 0;
 }
 
-__public void libnvme_free_nbft(struct libnvme_global_ctx *ctx, struct libnbft_info *nbft)
+__shr_public void libnvmf_free_nbft(
+		struct libnvme_global_ctx *ctx, struct libnbft_info *nbft)
 {
 	struct libnbft_hfi **hfi;
 	struct libnbft_security **sec;
@@ -736,7 +969,8 @@ __public void libnvme_free_nbft(struct libnvme_global_ctx *ctx, struct libnbft_i
 	free(nbft);
 }
 
-__public int libnvme_read_nbft(struct libnvme_global_ctx *ctx, struct libnbft_info **nbft,
+__shr_public int libnvmf_read_nbft(
+		struct libnvme_global_ctx *ctx, struct libnbft_info **nbft,
 		const char *filename)
 {
 	__u8 *raw_nbft = NULL;
@@ -763,8 +997,21 @@ __public int libnvme_read_nbft(struct libnvme_global_ctx *ctx, struct libnbft_in
 	}
 
 	raw_nbft_size = ftell(raw_nbft_fp);
+	if (raw_nbft_size == (size_t)-1L) {
+		libnvme_msg(ctx, LIBNVME_LOG_ERR,
+			"Failed to get file size for %s: %s\n",
+			filename, libnvme_strerror(errno));
+		fclose(raw_nbft_fp);
+		return -EINVAL;
+	}
+	errno = 0;
 	rewind(raw_nbft_fp);
-
+	if (errno) {
+		libnvme_msg(ctx, LIBNVME_LOG_ERR, "Failed to seek in %s: %s\n",
+			filename, libnvme_strerror(errno));
+		fclose(raw_nbft_fp);
+		return -EINVAL;
+	}
 	raw_nbft = malloc(raw_nbft_size);
 	if (!raw_nbft) {
 		libnvme_msg(ctx, LIBNVME_LOG_ERR,
@@ -800,7 +1047,8 @@ __public int libnvme_read_nbft(struct libnvme_global_ctx *ctx, struct libnbft_in
 
 	if (parse_raw_nbft(ctx, *nbft)) {
 		libnvme_msg(ctx, LIBNVME_LOG_ERR, "Failed to parse %s\n", filename);
-		libnvme_free_nbft(ctx, *nbft);
+		libnvmf_free_nbft(ctx, *nbft);
+		*nbft = NULL;
 		return -EINVAL;
 	}
 	return 0;

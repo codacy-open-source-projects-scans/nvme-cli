@@ -2,12 +2,12 @@
 .\"     Title: nvme-list-subsys
 .\"    Author: [FIXME: author] [see http://www.docbook.org/tdg5/en/html/author]
 .\" Generator: DocBook XSL Stylesheets vsnapshot <http://docbook.sf.net/>
-.\"      Date: 04/17/2026
+.\"      Date: 09/18/2026
 .\"    Manual: NVMe Manual
 .\"    Source: NVMe
 .\"  Language: English
 .\"
-.TH "NVME\-LIST\-SUBSYS" "1" "04/17/2026" "NVMe" "NVMe Manual"
+.TH "NVME\-LIST\-SUBSYS" "1" "09/18/2026" "NVMe" "NVMe Manual"
 .\" -----------------------------------------------------------------
 .\" * Define some portability stuff
 .\" -----------------------------------------------------------------
@@ -32,8 +32,7 @@ nvme-list-subsys \- List all NVMe subsystems
 .SH "SYNOPSIS"
 .sp
 .nf
-\fInvme list\-subsys\fR <device>
-                        [<global\-options>]
+\fInvme\fR [<global\-options>] \fIlist\-subsys\fR <device>
 .fi
 .SH "DESCRIPTION"
 .sp
@@ -84,6 +83,8 @@ Set the timeout for the command in milliseconds\&.
 .RS 4
 Increase the level of detail in the output\&. May be specified multiple times to further increase verbosity\&.
 .RE
+.sp
+These options can also be set as machine\-wide defaults in nvme\-cli\&.conf(5)\&. A command\-line flag always overrides the file\&.
 .SH "EXAMPLES"
 .sp
 .if n \{\
@@ -120,12 +121,22 @@ nvme\-subsys1 \- NQN=nvmf\-test2
         {
           "Name" : "nvme0",
           "Transport" : "rdma",
-          "Address" : "traddr=1\&.1\&.1\&.3,trsvcid=4420,host_traddr=1\&.1\&.1\&.1"
+          "Address" : "traddr=1\&.1\&.1\&.3,trsvcid=4420,host_traddr=1\&.1\&.1\&.1",
+          "AddressDetails" : {
+            "traddr" : "1\&.1\&.1\&.3",
+            "host_traddr" : "1\&.1\&.1\&.1",
+            "trsvcid" : "4420"
+          }
         },
         {
           "Name" : "nvme1",
           "Transport" : "rdma",
-          "Address" : "traddr=1\&.1\&.1\&.3,trsvcid=4420,host_traddr=1\&.1\&.1\&.2"
+          "Address" : "traddr=1\&.1\&.1\&.3,trsvcid=4420,host_traddr=1\&.1\&.1\&.2",
+          "AddressDetails" : {
+            "traddr" : "1\&.1\&.1\&.3",
+            "host_traddr" : "1\&.1\&.1\&.2",
+            "trsvcid" : "4420"
+          }
         }
       ]
     },
@@ -138,12 +149,22 @@ nvme\-subsys1 \- NQN=nvmf\-test2
         {
           "Name" : "nvme2",
           "Transport" : "rdma",
-          "Address" : "traddr=1\&.1\&.1\&.3,trsvcid=4420,host_traddr=1\&.1\&.1\&.2"
+          "Address" : "traddr=1\&.1\&.1\&.3,trsvcid=4420,host_traddr=1\&.1\&.1\&.2",
+          "AddressDetails" : {
+            "traddr" : "1\&.1\&.1\&.3",
+            "host_traddr" : "1\&.1\&.1\&.2",
+            "trsvcid" : "4420"
+          }
         },
         {
           "Name" : "nvme3",
           "Transport" : "rdma",
-          "Address" : "traddr=1\&.1\&.1\&.3,trsvcid=4420,host_traddr=1\&.1\&.1\&.1"
+          "Address" : "traddr=1\&.1\&.1\&.3,trsvcid=4420,host_traddr=1\&.1\&.1\&.1",
+          "AddressDetails" : {
+            "traddr" : "1\&.1\&.1\&.3",
+            "host_traddr" : "1\&.1\&.1\&.1",
+            "trsvcid" : "4420"
+          }
         }
       ]
     }

@@ -749,10 +749,11 @@ nvme-fdp-set-events(1) Manual Page
 <h2 id="_synopsis">SYNOPSIS</h2>
 <div class="sectionbody">
 <div class="verseblock">
-<pre class="content"><em>nvme fdp set-events</em> &lt;device&gt; [--namespace-id=&lt;NUM&gt; | -n &lt;NUM&gt;]
-                        [--placement-handle=&lt;NUM&gt; | -p &lt;NUM&gt;] [--enable | -e]
-                        [--event-types=&lt;NUM,&gt; | -t &lt;NUM,&gt;]
-                        [&lt;global-options&gt;]</pre>
+<pre class="content"><em>nvme</em> [&lt;global-options&gt;] <em>fdp set-events</em> &lt;device&gt;
+                        [--namespace-id=&lt;NUM&gt; | -n &lt;NUM&gt;]
+                        [--placement-handle=&lt;NUM&gt; | -p &lt;NUM&gt;]
+                        [--enable | -e]
+                        [--event-types=&lt;NUM,&gt; | -t &lt;NUM,&gt;]</pre>
 <div class="attribution">
 </div></div>
 </div>
@@ -868,6 +869,8 @@ and are available to this subcommand:</p></div>
 </p>
 </dd>
 </dl></div>
+<div class="paragraph"><p>These options can also be set as machine-wide defaults in
+nvme-cli.conf(5). A command-line flag always overrides the file.</p></div>
 </div>
 </div>
 <div class="sect1">
@@ -881,7 +884,7 @@ and are available to this subcommand:</p></div>
 <div id="footer">
 <div id="footer-text">
 Last updated
- 2026-04-17 09:46:00 CEST
+ 2026-09-18 12:15:54 CEST
 </div>
 </div>
 </body>

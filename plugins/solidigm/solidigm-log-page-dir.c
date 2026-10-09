@@ -9,13 +9,17 @@
 #include <stdio.h>
 #include <unistd.h>
 
-#include "common.h"
-#include "nvme-cmds.h"
-#include "nvme-print.h"
+#include <libnvme.h>
 
+#include <ccan/endian/endian.h>
+#include <shared/compiler-attributes-util.h>
+
+#include "cleanup.h"
+#include "global-ctx.h"
+#include "nvme-print.h"
+#include "plugin.h"
 #include "plugins/ocp/ocp-nvme.h"
 #include "plugins/ocp/ocp-utils.h"
-
 #include "solidigm-log-page-dir.h"
 #include "solidigm-util.h"
 
@@ -95,6 +99,9 @@ static struct lid_dir *get_solidigm_lids(struct nvme_supported_log_pages *suppor
 	solidigm_dir.lid[0xC3].str = "OCP Latency Monitor";
 	solidigm_dir.lid[0xC4].str = "Endurance Manager Statistics";
 	solidigm_dir.lid[0xC5].str = "Temperature Statistics";
+	solidigm_dir.lid[0xC6].str = "OCP Hardware Component";
+	solidigm_dir.lid[0xC7].str = "OCP TCG Configuration";
+	solidigm_dir.lid[0xC9].str = "OCP Telemetry String Log";
 	solidigm_dir.lid[0xCA].str = "SMART Attributes";
 	solidigm_dir.lid[0xCB].str = "VU NVMe IO Queue Metrics Log Page";
 	solidigm_dir.lid[0xD5].str = solidigm_dir.lid[0xC5].str;
@@ -197,14 +204,17 @@ int solidigm_get_log_page_directory_log(int argc, char **argv, struct command *a
 	struct lid_dir *lid_dirs[SOLIDIGM_MAX_UUID + 1] = { 0 };
 	struct nvme_id_uuid_list uuid_list = { 0 };
 	struct nvme_supported_log_pages supported = { 0 };
+	struct libnvme_passthru_cmd cmd;
 
 	err = get_supported_log_pages_log(hdl, NO_UUID_INDEX, &supported);
 
 	if (!err) {
 		lid_dirs[NO_UUID_INDEX] = get_standard_lids(&supported);
 
+		nvme_init_identify_uuid_list(&cmd, &uuid_list);
+
 		// Assume VU logs are the Solidigm log pages if UUID not supported.
-		if (!nvme_identify_uuid_list(hdl, &uuid_list)) {
+		if (!libnvme_exec_admin_passthru(hdl, &cmd)) {
 			struct lid_dir *solidigm_lid_dir = get_solidigm_lids(&supported);
 
 			// Transfer supported Solidigm lids to lid directory at UUID index 0
@@ -239,7 +249,7 @@ int solidigm_get_log_page_directory_log(int argc, char **argv, struct command *a
 
 		err = validate_output_format(nvme_args.output_format, &print_flag);
 		if (err) {
-			nvme_show_error("Error: Invalid output format specified: %s.\n",
+			nvme_show_error("Error: Invalid output format specified: %s.",
 					nvme_args.output_format);
 			return err;
 		}

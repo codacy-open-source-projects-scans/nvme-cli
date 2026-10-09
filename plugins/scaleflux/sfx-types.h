@@ -2,6 +2,8 @@
 
 #include <inttypes.h>
 
+#include <shared/compiler-attributes-util.h>
+
 #define FMT_RED     "\x1b[31m"
 #define FMT_GREEN   "\x1b[32m"
 #define FMT_YELLOW  "\x1b[33m"

@@ -1,39 +1,37 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-#include <fcntl.h>
+#include <asm/byteorder.h>
+#include <dirent.h>
 #include <errno.h>
+#include <fcntl.h>
+#include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
-#include <linux/fs.h>
-#include <inttypes.h>
-#include <asm/byteorder.h>
 #include <sys/sysinfo.h>
-#include <sys/stat.h>
 #include <sys/types.h>
-#include <sys/ioctl.h>
-#include <dirent.h>
 #include <time.h>
+#include <unistd.h>
 
 #include <libnvme.h>
 
-#include "common.h"
+#include <ccan/array_size/array_size.h>
+#include <ccan/endian/endian.h>
+#include <shared/compiler-attributes-util.h>
+#include <shared/int-util.h>
+#include <shared/progress-util.h>
+#include <shared/temp-util.h>
+#include <shared/time-util.h>
+#include <shared/uint128-util.h>
+
+#include "global-ctx.h"
 #include "nvme-cmds.h"
 #include "nvme-print.h"
-#include "nvme.h"
 #include "plugin.h"
-#include "util/cleanup.h"
-#include "util/types.h"
-
-#define CREATE_CMD
-#include "sfx-nvme.h"
 #include "sfx-types.h"
+#include "src/cleanup.h"
 
 #define SFX_PAGE_SHIFT						12
 #define SECTOR_SHIFT						9
-
-#define SFX_GET_FREESPACE			_IOWR('N', 0x240, struct sfx_freespace_ctx)
-#define NVME_IOCTL_CLR_CARD			_IO('N', 0x47)
 
 //See IDEMA LBA1-03
 #define IDEMA_CAP(exp_GB)			(((__u64)exp_GB - 50ULL) * 1953504ULL + 97696368ULL)
@@ -50,7 +48,6 @@
 
 int nvme_query_cap(struct libnvme_transport_handle *hdl, __u32 nsid, __u32 data_len, void *data)
 {
-	int rc = 0;
 	struct libnvme_passthru_cmd cmd = {
 		.opcode		= nvme_admin_query_cap_info,
 		.nsid		= nsid,
@@ -58,8 +55,7 @@ int nvme_query_cap(struct libnvme_transport_handle *hdl, __u32 nsid, __u32 data_
 		.data_len	= data_len,
 	};
 
-	rc = ioctl(libnvme_transport_handle_get_fd(hdl), SFX_GET_FREESPACE, data);
-	return rc ? libnvme_submit_admin_passthru(hdl, &cmd) : 0;
+	return libnvme_exec_admin_passthru(hdl, &cmd);
 }
 
 int nvme_change_cap(struct libnvme_transport_handle *hdl, __u32 nsid, __u64 capacity)
@@ -71,7 +67,7 @@ int nvme_change_cap(struct libnvme_transport_handle *hdl, __u32 nsid, __u64 capa
 		.cdw11	= (capacity >> 32),
 	};
 
-	return libnvme_submit_admin_passthru(hdl, &cmd);
+	return libnvme_exec_admin_passthru(hdl, &cmd);
 }
 
 int nvme_sfx_set_features(struct libnvme_transport_handle *hdl, __u32 nsid, __u32 fid, __u32 value)
@@ -83,7 +79,7 @@ int nvme_sfx_set_features(struct libnvme_transport_handle *hdl, __u32 nsid, __u3
 		.cdw11	= value,
 	};
 
-	return libnvme_submit_admin_passthru(hdl, &cmd);
+	return libnvme_exec_admin_passthru(hdl, &cmd);
 }
 
 int nvme_sfx_get_features(struct libnvme_transport_handle *hdl, __u32 nsid, __u32 fid, __u32 *result)
@@ -95,7 +91,7 @@ int nvme_sfx_get_features(struct libnvme_transport_handle *hdl, __u32 nsid, __u3
 		.cdw10	= fid,
 	};
 
-	err = libnvme_submit_admin_passthru(hdl, &cmd);
+	err = libnvme_exec_admin_passthru(hdl, &cmd);
 	if (!err && result)
 		*result = cmd.result;
 
@@ -338,6 +334,7 @@ static int get_additional_smart_log(int argc, char **argv, struct command *acmd,
 #endif /* CONFIG_JSONC */
 	__cleanup_nvme_global_ctx struct libnvme_global_ctx *ctx = NULL;
 	__cleanup_nvme_transport_handle struct libnvme_transport_handle *hdl = NULL;
+	struct libnvme_passthru_cmd cmd;
 	nvme_print_flags_t flags;
 	struct config {
 		__u32 namespace_id;
@@ -365,8 +362,9 @@ static int get_additional_smart_log(int argc, char **argv, struct command *acmd,
 		return err;
 	}
 
-	err = nvme_get_nsid_log(hdl, cfg.namespace_id, false, 0xca,
-				(void *)&smart_log, sizeof(smart_log));
+	nvme_init_get_log(&cmd, cfg.namespace_id, 0xca, NVME_CSI_NVM,
+			  (void *)&smart_log, sizeof(smart_log));
+	err = libnvme_get_log(hdl, &cmd, false, NVME_LOG_PAGE_PDU_SIZE);
 	if (!err) {
 		if (flags & JSON || cfg.json)
 			show_sfx_smart_log_jsn(&smart_log, cfg.namespace_id,
@@ -542,7 +540,7 @@ static int get_lat_stats_log(int argc, char **argv, struct command *acmd, struct
 			else
 				d_raw((unsigned char *)&stats.myrtle, sizeof(struct sfx_lat_stats_myrtle));
 		} else {
-			printf("ScaleFlux IO %s Command Latency Statistics Invalid Version Maj %d Min %d\n",
+			nvme_show_error("ScaleFlux IO %s Command Latency Statistics Invalid Version Maj %d Min %d",
 				    cfg.write ? "Write" : "Read", stats.ver.maj, stats.ver.min);
 		}
 	} else if (err > 0) {
@@ -565,7 +563,7 @@ int sfx_nvme_get_log(struct libnvme_transport_handle *hdl, __u32 nsid, __u8 log_
 	cmd.cdw10 = log_id | (numdl << 16);
 	cmd.cdw11 = numdu;
 
-	return libnvme_submit_admin_passthru(hdl, &cmd);
+	return libnvme_exec_admin_passthru(hdl, &cmd);
 }
 
 /**
@@ -579,8 +577,8 @@ int sfx_nvme_get_log(struct libnvme_transport_handle *hdl, __u32 nsid, __u8 log_
  */
 static int get_bb_table(struct libnvme_transport_handle *hdl, __u32 nsid, unsigned char *buf, __u64 size)
 {
-	if (libnvme_transport_handle_get_fd(hdl) < 0 || !buf || size != 256*4096*sizeof(unsigned char)) {
-		fprintf(stderr, "Invalid Param \r\n");
+	if (!buf || size != 256*4096*sizeof(unsigned char)) {
+		nvme_show_error("Invalid Param");
 		return -EINVAL;
 	}
 
@@ -667,18 +665,16 @@ static int sfx_get_bad_block(int argc, char **argv, struct command *acmd, struct
 
 	data_buf = malloc(buf_size);
 	if (!data_buf) {
-		fprintf(stderr, "malloc fail, errno %d\r\n", errno);
+		nvme_show_error("malloc fail, errno %d", errno);
 		return -1;
 	}
 
 	err = get_bb_table(hdl, NVME_NSID_ALL, data_buf, buf_size);
-	if (err < 0) {
-		perror("get-bad-block");
-	} else if (err) {
-		nvme_show_status(err);
+	if (err) {
+		nvme_show_err(err, "get-bad-block");
 	} else {
 		bd_table_show(data_buf, buf_size);
-		printf("ScaleFlux get bad block table: success\n");
+		nvme_show_verbose_result("ScaleFlux get bad block table: success");
 	}
 
 	free(data_buf);
@@ -720,10 +716,9 @@ static int query_cap_info(int argc, char **argv, struct command *acmd, struct pl
 	if (err)
 		return err;
 
-	if (nvme_query_cap(hdl, NVME_NSID_ALL, sizeof(sfctx), &sfctx)) {
-		perror("sfx-query-cap");
-		err = -1;
-	}
+	err = nvme_query_cap(hdl, NVME_NSID_ALL, sizeof(sfctx), &sfctx);
+	if (err)
+		nvme_show_err(err, "sfx-query-cap");
 
 	if (!err) {
 		if (!cfg.raw_binary)
@@ -753,18 +748,18 @@ static int change_sanity_check(struct libnvme_transport_handle *hdl, __u64 trg_i
 			    (SFX_PAGE_SHIFT - SECTOR_SHIFT);
 	if (trg_in_4k < provisioned_cap_4k ||
 	    trg_in_4k > ((__u64)provisioned_cap_4k * 4)) {
-		fprintf(stderr,
-			"WARNING: Only support 1.0~4.0 x provisioned capacity!\n");
+		nvme_show_error(
+			"WARNING: Only support 1.0~4.0 x provisioned capacity!");
 		if (trg_in_4k < provisioned_cap_4k)
-			fprintf(stderr,
-				"WARNING: The target capacity is less than 1.0 x provisioned capacity!\n");
+			nvme_show_error(
+				"WARNING: The target capacity is less than 1.0 x provisioned capacity!");
 		else
-			fprintf(stderr,
-				"WARNING: The target capacity is larger than 4.0 x provisioned capacity!\n");
+			nvme_show_error(
+				"WARNING: The target capacity is larger than 4.0 x provisioned capacity!");
 		return -1;
 	}
 	if (trg_in_4k > ((__u64)provisioned_cap_4k*4)) {
-		fprintf(stderr, "WARNING: the target capacity is too large\n");
+		nvme_show_error("WARNING: the target capacity is too large");
 		return -1;
 	}
 
@@ -775,12 +770,12 @@ static int change_sanity_check(struct libnvme_transport_handle *hdl, __u64 trg_i
 	extend = (cur_in_4k <= trg_in_4k);
 	if (extend) {
 		if (sysinfo(&s_info) < 0) {
-			printf("change-cap query mem info fail\n");
+			nvme_show_error("change-cap query mem info fail");
 			return -1;
 		}
 		mem_need = (trg_in_4k - cur_in_4k) * 8;
 		if (s_info.freeram <= 10 || mem_need > s_info.freeram) {
-			fprintf(stderr,
+			nvme_show_error(
 			    "WARNING: Free memory is not enough! Please drop cache or extend more memory and retry\n"
 			    "WARNING: Memory needed is %"PRIu64", free memory is %"PRIu64"\n",
 			    (uint64_t)mem_need, (uint64_t)s_info.freeram);
@@ -803,16 +798,16 @@ static int sfx_confirm_change(const char *str)
 {
 	unsigned char confirm;
 
-	fprintf(stderr, "WARNING: %s.\n"
-			"Use the force [--force] option to suppress this warning.\n", str);
+	nvme_show_error("WARNING: %s."
+			"Use the force [--force] option to suppress this warning.", str);
 
-	fprintf(stderr, "Confirm Y/y, Others cancel:\n");
+	nvme_show_error("Confirm Y/y, Others cancel:");
 	confirm = (unsigned char)fgetc(stdin);
 	if (confirm != 'y' && confirm != 'Y') {
-		fprintf(stderr, "Canceled.\n");
+		nvme_show_error("Canceled.");
 		return 0;
 	}
-	fprintf(stderr, "Sending operation ...\n");
+	nvme_show_error("Sending operation ...");
 	return 1;
 }
 
@@ -858,7 +853,7 @@ static int change_cap(int argc, char **argv, struct command *acmd, struct plugin
 		cfg.capacity_in_gb, (uint64_t)cfg.cap_in_byte, (uint64_t)cap_in_4k);
 
 	if (change_sanity_check(hdl, cap_in_4k, &shrink)) {
-		printf("ScaleFlux change-capacity: fail\n");
+		nvme_show_error("ScaleFlux change-capacity: fail");
 		return err;
 	}
 
@@ -867,48 +862,13 @@ static int change_cap(int argc, char **argv, struct command *acmd, struct plugin
 	}
 
 	err = nvme_change_cap(hdl, NVME_NSID_ALL, cap_in_4k);
-	if (err < 0) {
-		perror("sfx-change-cap");
-	} else if (err) {
-		nvme_show_status(err);
+	if (err) {
+		nvme_show_err(err, "sfx-change-cap");
 	} else {
-		printf("ScaleFlux change-capacity: success\n");
-		ioctl(libnvme_transport_handle_get_fd(hdl), BLKRRPART);
+		nvme_show_verbose_result("ScaleFlux change-capacity: success");
+		libnvme_rescan_ns(hdl);
 	}
 	return err;
-}
-
-static int sfx_verify_chr(struct libnvme_transport_handle *hdl)
-{
-	static struct stat nvme_stat;
-	int err = fstat(libnvme_transport_handle_get_fd(hdl), &nvme_stat);
-
-	if (err < 0) {
-		perror("fstat");
-		return errno;
-	}
-	if (!S_ISCHR(nvme_stat.st_mode)) {
-		fprintf(stderr,
-			"Error: requesting clean card on non-controller handle\n");
-		return -ENOTBLK;
-	}
-	return 0;
-}
-
-static int sfx_clean_card(struct libnvme_transport_handle *hdl)
-{
-	int ret;
-
-	ret = sfx_verify_chr(hdl);
-	if (ret)
-		return ret;
-	ret = ioctl(libnvme_transport_handle_get_fd(hdl), NVME_IOCTL_CLR_CARD);
-	if (ret)
-		perror("Ioctl Fail.");
-	else
-		printf("ScaleFlux clean card success\n");
-
-	return ret;
 }
 
 char *sfx_feature_to_string(int feature)
@@ -954,7 +914,7 @@ static int sfx_set_feature(int argc, char **argv, struct command *acmd, struct p
 	NVME_ARGS(opts,
 		OPT_UINT("namespace-id",		'n',	&cfg.namespace_id,		namespace_id),
 		OPT_UINT("feature-id",			'f',	&cfg.feature_id,		feature_id),
-		OPT_UINT("value",			'v',	&cfg.value,			value),
+		OPT_UINT("value",			'V',	&cfg.value,			value),
 		OPT_FLAG("force",			's',	&cfg.force,			force));
 
 	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
@@ -962,29 +922,24 @@ static int sfx_set_feature(int argc, char **argv, struct command *acmd, struct p
 		return err;
 
 	if (!cfg.feature_id) {
-		fprintf(stderr, "feature-id required param\n");
+		nvme_show_error("feature-id required param");
 			return -EINVAL;
 	}
 
 	if (cfg.feature_id == SFX_FEAT_CLR_CARD) {
-		/*Warning for clean card*/
-		if (!cfg.force && !sfx_confirm_change("Going to clean device's data, confirm umount fs and try again")) {
-					return 0;
-		} else {
-			return sfx_clean_card(hdl);
-		}
-
+		nvme_show_error("clean card is not supported");
+		return -EOPNOTSUPP;
 	}
 
 	if (cfg.feature_id == SFX_FEAT_ATOMIC && cfg.value) {
 		if (cfg.namespace_id != NVME_NSID_ALL) {
-			err = nvme_identify_ns(hdl, cfg.namespace_id, &ns);
+			struct libnvme_passthru_cmd cmd;
+
+			nvme_init_identify_ns(&cmd, cfg.namespace_id, &ns);
+			err = libnvme_exec_admin_passthru(hdl, &cmd);
 			if (err) {
-				if (err < 0)
-					perror("identify-namespace");
-				else
-					nvme_show_status(err);
-							return err;
+				nvme_show_err(err, "identify-namespace");
+						return err;
 			}
 			/*
 			 * atomic only support with sector-size = 4k now
@@ -996,7 +951,7 @@ static int sfx_set_feature(int argc, char **argv, struct command *acmd, struct p
 		}
 	} else if (cfg.feature_id == SFX_FEAT_UP_P_CAP) {
 		if (cfg.value <= 0) {
-			fprintf(stderr, "Invalid Param\n");
+			nvme_show_error("Invalid Param");
 					return -EINVAL;
 		}
 
@@ -1011,7 +966,7 @@ static int sfx_set_feature(int argc, char **argv, struct command *acmd, struct p
 				    cfg.value);
 
 	if (err < 0) {
-		perror("ScaleFlux-set-feature");
+		nvme_show_err(err, "ScaleFlux-set-feature");
 			return errno;
 	} else if (!err) {
 		printf("ScaleFlux set-feature:%#02x (%s), value:%d\n", cfg.feature_id,
@@ -1052,14 +1007,14 @@ static int sfx_get_feature(int argc, char **argv, struct command *acmd, struct p
 		return err;
 
 	if (!cfg.feature_id) {
-		fprintf(stderr, "feature-id required param\n");
+		nvme_show_error("feature-id required param");
 			return -EINVAL;
 	}
 
 	err = nvme_sfx_get_features(hdl, cfg.namespace_id,
 				    cfg.feature_id, &result);
 	if (err < 0) {
-		perror("ScaleFlux-get-feature");
+		nvme_show_err(err, "ScaleFlux-get-feature");
 			return errno;
 	} else if (!err) {
 		printf("ScaleFlux get-feature:%02x (%s), value:%d\n", cfg.feature_id,
@@ -1130,7 +1085,7 @@ static int nvme_parse_evtlog(void *pevent_log_info, __u32 log_len, char *output)
 
 	fd = fopen(output, "w+");
 	if (!fd) {
-		fprintf(stderr, "Failed to open %s file to write\n", output);
+		nvme_show_error("Failed to open %s file to write", output);
 		err = ENOENT;
 		goto ret;
 	}
@@ -1149,7 +1104,7 @@ static int nvme_parse_evtlog(void *pevent_log_info, __u32 log_len, char *output)
 			str_pos = strlen(str_buffer);
 
 			fw_time = ((__u64)info->time_stamp[2] << 32) + ((__u64)info->time_stamp[1] << 16) + (__u64)info->time_stamp[0];
-			convert_ts(fw_time, str_buffer + str_pos);
+			shr_format_ts(fw_time, str_buffer + str_pos);
 			str_pos = strlen(str_buffer);
 
 			strcpy(str_buffer + str_pos, "]    event-log:\n");
@@ -1162,6 +1117,10 @@ static int nvme_parse_evtlog(void *pevent_log_info, __u32 log_len, char *output)
 
 			code_level = (info->code & 0x100) >> 8;
 			code_type  = (info->code % 0x100);
+			if (code_level == sfx_evtlog_level_warning && code_type >= ARRAY_SIZE(sfx_evtlog_warning))
+				code_type = 0;
+			if (code_level == sfx_evtlog_level_error && code_type >= ARRAY_SIZE(sfx_evtlog_error))
+				code_type = 0;
 			if (code_level == sfx_evtlog_level_warning) {
 				snprintf(str_buffer + str_pos, 128,
 					 "  > error_str:          [WARNING][%s]\n\n",
@@ -1179,7 +1138,7 @@ static int nvme_parse_evtlog(void *pevent_log_info, __u32 log_len, char *output)
 			str_pos = strlen(str_buffer);
 
 			if (fwrite(str_buffer, 1, str_pos, fd) != str_pos) {
-				fprintf(stderr, "Failed to write parse result to output file\n");
+				nvme_show_error("Failed to write parse result to output file");
 				goto close_fd;
 			}
 		}
@@ -1187,11 +1146,11 @@ static int nvme_parse_evtlog(void *pevent_log_info, __u32 log_len, char *output)
 		offset++;
 		length--;
 
-		if (!(offset % (log_len / 100)) || (offset == log_len))
-			util_spinner("Parse", (float) (offset) / (float) (log_len));
+		if ((log_len >= 100 && !(offset % (log_len / 100))) || (offset == log_len))
+			shr_spinner("Parse", (float) (offset) / (float) (log_len), stdout);
 	}
 
-	printf("\nParse-evtlog: Success\n");
+	nvme_show_verbose_result("Parse-evtlog: Success");
 
 close_fd:
 	fclose(fd);
@@ -1202,7 +1161,7 @@ ret:
 static int nvme_dump_evtlog(struct libnvme_transport_handle *hdl, __u32 namespace_id, __u32 storage_medium,
 			    char *file, bool parse, char *output)
 {
-	__cleanup_huge struct nvme_mem_huge mh = { 0, };
+	__cleanup_huge struct libnvme_mem_huge mh = { 0, };
 	struct nvme_persistent_event_log *pevent;
 	void *pevent_log_info;
 	__u8  lsp_base, lsp;
@@ -1225,7 +1184,7 @@ static int nvme_dump_evtlog(struct libnvme_transport_handle *hdl, __u32 namespac
 		single_len = 32 * 1024;
 	}
 
-	pevent = calloc(sizeof(*pevent), sizeof(__u8));
+	pevent = calloc(1, sizeof(*pevent));
 	if (!pevent) {
 		err = -ENOMEM;
 		goto ret;
@@ -1241,8 +1200,8 @@ static int nvme_dump_evtlog(struct libnvme_transport_handle *hdl, __u32 namespac
 				       NVME_LOG_CDW10_LSP_MASK);
 	err = libnvme_get_log(hdl, &cmd, false, NVME_LOG_PAGE_PDU_SIZE);
 	if (err) {
-		fprintf(stderr, "Unable to get evtlog lsp=0x%x, ret = 0x%x\n",
-		        lsp, err);
+		nvme_show_error("Unable to get evtlog lsp=0x%x, ret = 0x%x",
+				lsp, err);
 		goto free_pevent;
 	}
 
@@ -1254,7 +1213,7 @@ static int nvme_dump_evtlog(struct libnvme_transport_handle *hdl, __u32 namespac
 				       NVME_LOG_CDW10_LSP_MASK);
 	err = libnvme_get_log(hdl, &cmd, false, NVME_LOG_PAGE_PDU_SIZE);
 	if (err) {
-		fprintf(stderr, "Unable to get evtlog lsp=0x%x, ret = 0x%x\n",
+		nvme_show_error("Unable to get evtlog lsp=0x%x, ret = 0x%x",
 			lsp, err);
 		goto free_pevent;
 	}
@@ -1263,7 +1222,7 @@ static int nvme_dump_evtlog(struct libnvme_transport_handle *hdl, __u32 namespac
 	if (log_len % 4)
 		log_len = (log_len / 4 + 1) * 4;
 
-	pevent_log_info = nvme_alloc_huge(single_len, &mh);
+	pevent_log_info = libnvme_alloc_huge(single_len, &mh);
 	if (!pevent_log_info) {
 		err = -ENOMEM;
 		goto free_pevent;
@@ -1271,7 +1230,7 @@ static int nvme_dump_evtlog(struct libnvme_transport_handle *hdl, __u32 namespac
 
 	fd = fopen(file, "wb+");
 	if (!fd) {
-		fprintf(stderr, "Failed to open %s file to write\n", file);
+		nvme_show_error("Failed to open %s file to write", file);
 		err = ENOENT;
 		goto free_pevent;
 	}
@@ -1291,34 +1250,34 @@ static int nvme_dump_evtlog(struct libnvme_transport_handle *hdl, __u32 namespac
 				  NVME_LOG_LID_PERSISTENT_EVENT,
 				  NVME_CSI_NVM, log, len);
 		cmd.cdw10 |= NVME_FIELD_ENCODE(lsp,
-					       NVME_LOG_CDW10_LSP_SHIFT,
-		 			       NVME_LOG_CDW10_LSP_MASK);
+							NVME_LOG_CDW10_LSP_SHIFT,
+							NVME_LOG_CDW10_LSP_MASK);
 		nvme_init_get_log_lpo(&cmd, lpo);
 		err = libnvme_get_log(hdl, &cmd, false, NVME_LOG_PAGE_PDU_SIZE);
 		if (err) {
-			fprintf(stderr,
+			nvme_show_error(
 				"Unable to get evtlog offset=0x%x len 0x%x ret = 0x%x\n",
 				offset, len, err);
 			goto close_fd;
 		}
 
 		if (fwrite(log, 1, len, fd) != len) {
-			fprintf(stderr, "Failed to write evtlog to file\n");
+			nvme_show_error("Failed to write evtlog to file");
 			goto close_fd;
 		}
 
 		offset  += len;
 		length  -= len;
-		util_spinner("Parse", (float) (offset) / (float) (log_len));
+		shr_spinner("Parse", (float) (offset) / (float) (log_len), stdout);
 	}
 
-	printf("\nDump-evtlog: Success\n");
+	nvme_show_verbose_result("Dump-evtlog: Success");
 
 	if (parse) {
-		nvme_free_huge(&mh);
-		pevent_log_info = nvme_alloc_huge(log_len, &mh);
+		libnvme_free_huge(&mh);
+		pevent_log_info = libnvme_alloc_huge(log_len, &mh);
 		if (!pevent_log_info) {
-			fprintf(stderr, "Failed to alloc enough memory 0x%x to parse evtlog\n", log_len);
+			nvme_show_error("Failed to alloc enough memory 0x%x to parse evtlog", log_len);
 			err = -ENOMEM;
 			goto close_fd;
 		}
@@ -1326,12 +1285,12 @@ static int nvme_dump_evtlog(struct libnvme_transport_handle *hdl, __u32 namespac
 		fclose(fd);
 		fd = fopen(file, "rb");
 		if (!fd) {
-			fprintf(stderr, "Failed to open %s file to read\n", file);
+			nvme_show_error("Failed to open %s file to read", file);
 			err = ENOENT;
 			goto free_pevent;
 		}
 		if (fread(pevent_log_info, 1, log_len, fd) != log_len) {
-			fprintf(stderr, "Failed to read evtlog to buffer\n");
+			nvme_show_error("Failed to read evtlog to buffer");
 			goto close_fd;
 		}
 
@@ -1379,23 +1338,37 @@ static int sfx_dump_evtlog(int argc, char **argv, struct command *acmd, struct p
 		OPT_UINT("namespace_id",	    'n',	&cfg.namespace_id,	namespace_id),
 		OPT_UINT("storage_medium",	    's',	&cfg.storage_medium,    storage_medium),
 		OPT_FLAG("parse",	            'p',	&cfg.parse,             parse),
-		OPT_FILE("output",                  'o',        &cfg.output,            output));
+		OPT_FILE("output",                  'O',        &cfg.output,            output));
 
 	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err)
 		return err;
 
 	if (!cfg.file) {
-		fprintf(stderr, "file required param\n");
+		nvme_show_error("file required param");
 		return -EINVAL;
 	}
 
 	if (cfg.parse && !cfg.output) {
-		fprintf(stderr, "output file required if evtlog need be parsed\n");
+		nvme_show_error("output file required if evtlog need be parsed");
 		return -EINVAL;
 	}
 
 	err = nvme_dump_evtlog(hdl, cfg.namespace_id, cfg.storage_medium, cfg.file, cfg.parse, cfg.output);
+
+	return err;
+}
+
+static int filter_namespace(const struct dirent *d)
+{
+	int i, n;
+
+	if (d->d_name[0] == '.')
+		return 0;
+
+	if (strstr(d->d_name, "nvme"))
+		if (sscanf(d->d_name, "nvme%dn%d", &i, &n) == 2)
+			return 1;
 
 	return 0;
 }
@@ -1403,7 +1376,7 @@ static int sfx_dump_evtlog(int argc, char **argv, struct command *acmd, struct p
 static int nvme_expand_cap(struct libnvme_transport_handle *hdl, __u32 namespace_id, __u64 namespace_size,
 			   __u64 namespace_cap, __u32 lbaf, __u32 units)
 {
-	struct dirent **devices;
+	struct dirent **devices = NULL;
 	char dev_name[32] = "";
 	int i   = 0;
 	int num = 0;
@@ -1420,17 +1393,18 @@ static int nvme_expand_cap(struct libnvme_transport_handle *hdl, __u32 namespace
 	if (libnvme_transport_handle_is_ctrl(hdl))
 		snprintf(dev_name, 32, "%sn%u", libnvme_transport_handle_get_name(hdl), namespace_id);
 	else
-		strcpy(dev_name, libnvme_transport_handle_get_name(hdl));
+		snprintf(dev_name, sizeof(dev_name), "%s",
+			 libnvme_transport_handle_get_name(hdl));
 
-	num = scandir("/dev", &devices, libnvme_filter_namespace, alphasort);
-	if (num <= 0) {
+	num = scandir("/dev", &devices, filter_namespace, alphasort);
+	if (num < 0) {
 		err = num;
 		goto ret;
 	}
 
-	if (strcmp(dev_name, devices[num-1]->d_name)) {
-		fprintf(stderr, "Expand namespace not the last one\n");
-		err = EINVAL;
+	if (!num || strcmp(dev_name, devices[num-1]->d_name)) {
+		nvme_show_error("Expand namespace not the last one");
+		err = -EINVAL;
 		goto free_devices;
 	}
 
@@ -1453,9 +1427,9 @@ static int nvme_expand_cap(struct libnvme_transport_handle *hdl, __u32 namespace
 		.cdw10       = 0x0e,
 	};
 
-	err = libnvme_submit_admin_passthru(hdl, &cmd);
+	err = libnvme_exec_admin_passthru(hdl, &cmd);
 	if (err) {
-		fprintf(stderr, "Create ns failed\n");
+		nvme_show_error("Create ns failed");
 		nvme_show_status(err);
 		goto free_devices;
 	}
@@ -1508,7 +1482,7 @@ static int sfx_expand_cap(int argc, char **argv, struct command *acmd, struct pl
 
 	if (cfg.namespace_id == NVME_NSID_ALL) {
 		if (libnvme_transport_handle_is_ctrl(hdl)) {
-			fprintf(stderr, "namespace_id or namespace device required\n");
+			nvme_show_error("namespace_id or namespace device required");
 			return -EINVAL;
 		} else {
 			cfg.namespace_id = atoi(&libnvme_transport_handle_get_name(hdl)[strlen(libnvme_transport_handle_get_name(hdl)) - 1]);
@@ -1516,12 +1490,12 @@ static int sfx_expand_cap(int argc, char **argv, struct command *acmd, struct pl
 	}
 
 	if (!cfg.namespace_size) {
-		fprintf(stderr, "namespace_size required param\n");
+		nvme_show_error("namespace_size required param");
 		return -EINVAL;
 	}
 
 	if (!cfg.namespace_cap) {
-		fprintf(stderr, "namespace_cap required param\n");
+		nvme_show_error("namespace_cap required param");
 		return -EINVAL;
 	}
 
@@ -1529,7 +1503,7 @@ static int sfx_expand_cap(int argc, char **argv, struct command *acmd, struct pl
 	if (err)
 		return err;
 
-	printf("%s: Success, create nsid:%d\n", acmd->name, cfg.namespace_id);
+	nvme_show_verbose_result("%s: Success, create nsid:%d", acmd->name, cfg.namespace_id);
 
 	return 0;
 }
@@ -1541,13 +1515,18 @@ static int sfx_status(int argc, char **argv, struct command *acmd, struct plugin
 	__cleanup_nvme_global_ctx struct libnvme_global_ctx *ctx = NULL;
 	__cleanup_nvme_transport_handle struct libnvme_transport_handle *hdl = NULL;
 	struct nvme_id_ctrl id_ctrl = { 0 };
+	struct libnvme_passthru_cmd cmd;
 	struct extended_health_info_myrtle sfx_smart = { 0 };
 	struct nvme_smart_log smart_log = { 0 };
 	struct nvme_additional_smart_log additional_smart_log = { 0 };
 	struct sfx_freespace_ctx sfx_freespace = { 0 };
+	struct nvme_id_ns id_ns = { 0 };
+	__u8 lbaf_index;
+	__u32 nsid;
 	unsigned int pcie_correctable, pcie_fatal, pcie_nonfatal;
-	unsigned long long capacity;
+	unsigned long long capacity = 0;
 	bool capacity_valid = false;
+	bool pcie_cor_valid, pcie_fatal_valid, pcie_nonfatal_valid;
 	int err, fd, len, sector_size;
 	char pci_vid[7], pci_did[7], pci_ssvid[7], link_speed[20], link_width[5], link_string[40];
 	char path[512], numa_node[5], vendor[10], form_factor[15], temperature[10], io_speed[15];
@@ -1578,14 +1557,16 @@ static int sfx_status(int argc, char **argv, struct command *acmd, struct plugin
 	}
 
 	//Calculate formatted capacity, not concerned with errors, we may have a char device
-	memset(&path, 0, 512);
-	snprintf(path, 512, "/dev/%s", libnvme_transport_handle_get_name(hdl));
-	fd = open(path, O_RDONLY | O_NONBLOCK);
-	if (fd >= 0) {
-		err = ioctl(fd, BLKSSZGET, &sector_size);
-		if (!err)
-			err = ioctl(fd, BLKGETSIZE64, &capacity);
-		capacity_valid = (!err);
+	if (libnvme_transport_handle_is_ns(hdl) &&
+	    !libnvme_get_nsid(hdl, &nsid)) {
+		nvme_init_identify_ns(&cmd, nsid, &id_ns);
+		if (!libnvme_exec_admin_passthru(hdl, &cmd)) {
+			nvme_id_ns_flbas_to_lbaf_inuse(id_ns.flbas,
+						       &lbaf_index);
+			sector_size = 1 << id_ns.lbaf[lbaf_index].ds;
+			capacity = le64_to_cpu(id_ns.nsze) * sector_size;
+			capacity_valid = true;
+		}
 	}
 
 	if (capacity_valid && sector_size == 512)
@@ -1606,13 +1587,13 @@ static int sfx_status(int argc, char **argv, struct command *acmd, struct plugin
 	snprintf(path, 512, "/sys/class/nvme/%s/device/vendor", chr_dev);
 	fd = open(path, O_RDONLY);
 	if (fd < 0) {
-		perror("Could not open PCIe VID in /sys/");
+		nvme_show_perror("Could not open PCIe VID in /sys/");
 		return -errno;
 	}
 	memset(&pci_vid, 0, 7);
 	len = read(fd, pci_vid, 6);
 	if (len < 1) {
-		perror("Could not read PCIe VID in /sys/");
+		nvme_show_perror("Could not read PCIe VID in /sys/");
 		close(fd);
 		return -errno;
 	}
@@ -1621,13 +1602,13 @@ static int sfx_status(int argc, char **argv, struct command *acmd, struct plugin
 	snprintf(path, 512, "/sys/class/nvme/%s/device/device", chr_dev);
 	fd = open(path, O_RDONLY);
 	if (fd < 0) {
-		perror("Could not open PCIe DID in /sys/");
+		nvme_show_perror("Could not open PCIe DID in /sys/");
 		return -errno;
 	}
 	memset(&pci_did, 0, 7);
 	len = read(fd, pci_did, 6);
 	if (len < 1) {
-		perror("Could not read PCIe DID in /sys/");
+		nvme_show_perror("Could not read PCIe DID in /sys/");
 		close(fd);
 		return -errno;
 	}
@@ -1638,20 +1619,20 @@ static int sfx_status(int argc, char **argv, struct command *acmd, struct plugin
 	else if (strncmp("0x1dfd", pci_vid, 6) == 0)
 		strncpy(vendor, "DIGISTOR", 10);
 	else {
-		fprintf(stderr, "Please use on a ScaleFlux device\n");
+		nvme_show_error("Please use on a ScaleFlux device");
 		return -1;
 	}
 
 	snprintf(path, 512, "/sys/class/nvme/%s/device/subsystem_vendor", chr_dev);
 	fd = open(path, O_RDONLY);
 	if (fd < 0) {
-		perror("Could not open PCIe Subsystem Vendor ID in /sys/");
+		nvme_show_perror("Could not open PCIe Subsystem Vendor ID in /sys/");
 		return -errno;
 	}
 	memset(&pci_ssvid, 0, 7);
 	len = read(fd, pci_ssvid, 6);
 	if (len < 1) {
-		perror("could not read PCIe Subsystem Vendor ID in /sys/");
+		nvme_show_perror("could not read PCIe Subsystem Vendor ID in /sys/");
 		close(fd);
 		return -errno;
 	}
@@ -1660,13 +1641,13 @@ static int sfx_status(int argc, char **argv, struct command *acmd, struct plugin
 	snprintf(path, 512, "/sys/class/nvme/%s/device/current_link_speed", chr_dev);
 	fd = open(path, O_RDONLY);
 	if (fd < 0) {
-		perror("Could not open link speed in /sys/");
+		nvme_show_perror("Could not open link speed in /sys/");
 		return -errno;
 	}
 	memset(&link_speed, 0, 20);
 	len = read(fd, link_speed, 20);
 	if (len < 1) {
-		perror("Could not read link speed in /sys/");
+		nvme_show_perror("Could not read link speed in /sys/");
 		close(fd);
 		return -errno;
 	}
@@ -1680,13 +1661,13 @@ static int sfx_status(int argc, char **argv, struct command *acmd, struct plugin
 	snprintf(path, 512, "/sys/class/nvme/%s/device/current_link_width", chr_dev);
 	fd = open(path, O_RDONLY);
 	if (fd < 0) {
-		perror("Could not open link width in /sys/");
+		nvme_show_perror("Could not open link width in /sys/");
 		return -errno;
 	}
 	memset(&link_width, 0, 5);
 	len = read(fd, link_width, 5);
 	if (len < 1) {
-		perror("Could not read link width in /sys/");
+		nvme_show_perror("Could not read link width in /sys/");
 		close(fd);
 		return -errno;
 	}
@@ -1702,13 +1683,13 @@ static int sfx_status(int argc, char **argv, struct command *acmd, struct plugin
 	snprintf(path, 512, "/sys/class/nvme/%s/device/numa_node", chr_dev);
 	fd = open(path, O_RDONLY);
 	if (fd < 0) {
-		perror("Could not open NUMA node in /sys/");
+		nvme_show_perror("Could not open NUMA node in /sys/");
 		return -errno;
 	}
 	memset(&numa_node, 0, 5);
 	len = read(fd, numa_node, 5);
 	if (len < 1) {
-		perror("Could not read NUMA node in /sys/");
+		nvme_show_perror("Could not read NUMA node in /sys/");
 		close(fd);
 		return -errno;
 	}
@@ -1721,71 +1702,87 @@ static int sfx_status(int argc, char **argv, struct command *acmd, struct plugin
 
 	//Populate PCIe AER errors from /sys/
 	snprintf(path, 512, "/sys/class/nvme/%s/device/aer_dev_correctable", chr_dev);
+	pcie_cor_valid = true;
 	fd = open(path, O_RDONLY);
 	if (fd < 0) {
-		perror("Could not open PCIe AER Correctable errors in /sys/");
-		return -errno;
+		nvme_show_perror("Could not open PCIe AER Correctable errors in /sys/");
+		pcie_cor_valid = false;
 	}
-	len = read(fd, path, 512);
-	if (len < 1) {
-		perror("Could not read PCIe AER Correctable errors in /sys/");
+
+	if (pcie_cor_valid) {
+		len = read(fd, path, 512);
+		if (len < 1) {
+			nvme_show_perror("Could not read PCIe AER Correctable errors in /sys/");
+			pcie_cor_valid = false;
+		}
 		close(fd);
-		return -errno;
 	}
-	close(fd);
-	len = sscanf(path, "%*s %*d %*s %*d %*s %*d %*s %*d %*s %*d %*s %*d %*s %*d %*s %*d TOTAL_ERR_COR %d", &pcie_correctable);
-	len = 1;
-	if (len < 1 || len == EOF) {
-		perror("Could not parse PCIe AER Correctable errors in /sys/");
-		return -1;
+	if (pcie_cor_valid) {
+		len = sscanf(path, "%*s %*d %*s %*d %*s %*d %*s %*d %*s %*d %*s %*d %*s %*d %*s %*d TOTAL_ERR_COR %d", &pcie_correctable);
+		if (len < 1 || len == EOF) {
+			nvme_show_perror("Could not parse PCIe AER Correctable errors in /sys/");
+			pcie_cor_valid = false;
+		}
 	}
 
 	snprintf(path, 512, "/sys/class/nvme/%s/device/aer_dev_nonfatal", chr_dev);
+	pcie_nonfatal_valid = true;
 	fd = open(path, O_RDONLY);
 	if (fd < 0) {
-		perror("Could not open PCIe AER Non-Fatal errors in /sys/");
-		return -errno;
+		nvme_show_perror("Could not open PCIe AER Non-Fatal errors in /sys/");
+		pcie_nonfatal_valid = false;
 	}
 
-	len = read(fd, path, 512);
-	if (len < 1) {
-		perror("Could not read PCIe AER Non-Fatal errors in /sys/");
-		return -errno;
+	if (pcie_nonfatal_valid) {
+		len = read(fd, path, 512);
+		if (len < 1) {
+			nvme_show_perror("Could not read PCIe AER Non-Fatal errors in /sys/");
+			pcie_nonfatal_valid = false;
+		}
+		close(fd);
 	}
-	close(fd);
-	len = sscanf(path, "%*s %*d %*s %*d %*s %*d %*s %*d %*s %*d %*s %*d %*s %*d %*s %*d %*s %*d %*s %*d %*s %*d %*s %*d %*s %*d %*s %*d %*s %*d %*s %*d %*s %*d %*s %*d TOTAL_ERR_NONFATAL %d", &pcie_nonfatal);
-	if (len < 1) {
-		perror("Could not parse PCIe AER Non-Fatal errors in /sys/");
-		return -1;
+	if (pcie_nonfatal_valid) {
+		len = sscanf(path, "%*s %*d %*s %*d %*s %*d %*s %*d %*s %*d %*s %*d %*s %*d %*s %*d %*s %*d %*s %*d %*s %*d %*s %*d %*s %*d %*s %*d %*s %*d %*s %*d %*s %*d %*s %*d TOTAL_ERR_NONFATAL %d", &pcie_nonfatal);
+		if (len < 1) {
+			nvme_show_perror("Could not parse PCIe AER Non-Fatal errors in /sys/");
+			pcie_nonfatal_valid = false;
+		}
 	}
-
 	snprintf(path, 512, "/sys/class/nvme/%s/device/aer_dev_fatal", chr_dev);
+	pcie_fatal_valid = true;
 	fd = open(path, O_RDONLY);
 	if (fd < 0) {
-		perror("Could not open PCIe AER Fatal errors in /sys/");
-		return -errno;
+		nvme_show_perror("Could not open PCIe AER Fatal errors in /sys/");
+		pcie_fatal_valid = false;
 	}
 
-	len = read(fd, path, 512);
-	if (len < 1) {
-		perror("Could not read PCIe AER Fatal errors in /sys/");
+	if (pcie_fatal_valid) {
+		len = read(fd, path, 512);
+		if (len < 1) {
+			nvme_show_perror("Could not read PCIe AER Fatal errors in /sys/");
+			pcie_fatal_valid = false;
+		}
 		close(fd);
-		return -errno;
 	}
-	close(fd);
-	len = sscanf(path, "%*s %*d %*s %*d %*s %*d %*s %*d %*s %*d %*s %*d %*s %*d %*s %*d %*s %*d %*s %*d %*s %*d %*s %*d %*s %*d %*s %*d %*s %*d %*s %*d %*s %*d %*s %*d TOTAL_ERR_FATAL %d", &pcie_fatal);
-	if (len < 1) {
-		perror("Could not parse PCIe AER Fatal errors in /sys/");
-		close(fd);
-		return -1;
+	if (pcie_fatal_valid) {
+		len = sscanf(path, "%*s %*d %*s %*d %*s %*d %*s %*d %*s %*d %*s %*d %*s %*d %*s %*d %*s %*d %*s %*d %*s %*d %*s %*d %*s %*d %*s %*d %*s %*d %*s %*d %*s %*d %*s %*d TOTAL_ERR_FATAL %d", &pcie_fatal);
+		if (len < 1) {
+			nvme_show_perror("Could not parse PCIe AER Fatal errors in /sys/");
+			close(fd);
+			pcie_fatal_valid = false;
+		}
 	}
 
-	snprintf(pcie_status, 9, "%s", (pcie_fatal != 0 || pcie_nonfatal != 0 || pcie_correctable != 0) ? "Warning":"Good");
+	if (pcie_cor_valid && pcie_nonfatal_valid && pcie_fatal_valid)
+		snprintf(pcie_status, 9, "%s", (pcie_fatal != 0 || pcie_nonfatal != 0 || pcie_correctable != 0) ? "Warning":"Good");
+	else
+		snprintf(pcie_status, 9, "%s", "Unknown");
 
 	//Populate id-ctrl
-	err = nvme_identify_ctrl(hdl, &id_ctrl);
+	nvme_init_identify_ctrl(&cmd, &id_ctrl);
+	err = libnvme_exec_admin_passthru(hdl, &cmd);
 	if (err) {
-		fprintf(stderr, "Unable to read nvme_identify_ctrl() error code:%x\n", err);
+		nvme_show_error("Unable to read nvme_identify_ctrl() error code:%x", err);
 		return err;
 	}
 	//Re-format specific fields so they can be safely treated as strings later
@@ -1798,15 +1795,12 @@ static int sfx_status(int argc, char **argv, struct command *acmd, struct plugin
 
 	//Populate SMART log (0x02)
 	err = nvme_get_log_smart(hdl, NVME_NSID_ALL, &smart_log);
-	if (err < 0) {
-		perror("Could not read SMART log (0x02)");
-		return -errno;
-	} else if (err > 0) {
-		nvme_show_status(err);
+	if (err) {
+		nvme_show_err(err, "Could not read SMART log (0x02)");
 		return err;
 	}
 
-	snprintf(temperature, 10, "%li", kelvin_to_celsius(smart_log.temperature[1]<<8 | smart_log.temperature[0]));
+	snprintf(temperature, 10, "%li", shr_kelvin_to_celsius(smart_log.temperature[1]<<8 | smart_log.temperature[0]));
 
 	//Populate SFX Extended Health log (0xC2) or if PCIe DID ==0x20 (Quince) use 0xD2
 	if (strncmp("0x0020", pci_did, 6) == 0)
@@ -1815,11 +1809,8 @@ static int sfx_status(int argc, char **argv, struct command *acmd, struct plugin
 	else
 		err = nvme_get_log_simple(hdl, SFX_LOG_EXTENDED_HEALTH, (void *)&sfx_smart,
 								  sizeof(sfx_smart));
-	if (err < 0) {
-		perror("Could not read ScaleFlux SMART log");
-		return -errno;
-	} else if (err > 0) {
-		nvme_show_status(err);
+	if (err) {
+		nvme_show_err(err, "Could not read ScaleFlux SMART log");
 		return err;
 	}
 
@@ -1841,13 +1832,11 @@ static int sfx_status(int argc, char **argv, struct command *acmd, struct plugin
 	}
 
 	//Populate Additional SMART log (0xCA)
-	err = nvme_get_nsid_log(hdl, NVME_NSID_ALL, false, 0xca, (void *)&additional_smart_log,
-							sizeof(struct nvme_additional_smart_log));
-	if (err < 0) {
-		perror("Could not read ScaleFlux SMART log");
-		return -errno;
-	} else if (err > 0) {
-		nvme_show_status(err);
+	nvme_init_get_log(&cmd, NVME_NSID_ALL, 0xca, NVME_CSI_NVM, (void *)&additional_smart_log,
+			  sizeof(struct nvme_additional_smart_log));
+	err = libnvme_get_log(hdl, &cmd, false, NVME_LOG_PAGE_PDU_SIZE);
+	if (err) {
+		nvme_show_err(err, "Could not read ScaleFlux SMART log");
 		return err;
 	}
 
@@ -1856,11 +1845,8 @@ static int sfx_status(int argc, char **argv, struct command *acmd, struct plugin
 
 	//Get SFX freespace information
 	err = nvme_query_cap(hdl, NVME_NSID_ALL, sizeof(sfx_freespace), &sfx_freespace);
-	if (err < 0) {
-		perror("Could not query freespace information (0xD6)");
-		return -errno;
-	} else if (err > 0) {
-		nvme_show_status(err);
+	if (err) {
+		nvme_show_err(err, "Could not query freespace information (0xD6)");
 		return err;
 	}
 
@@ -1893,11 +1879,8 @@ static int sfx_status(int argc, char **argv, struct command *acmd, struct plugin
 
 	//Get status of atomic write feature
 	err =  nvme_get_features(hdl, 0, 0x0A, 0, 0, 0, NULL, 0, &get_feat_result);
-	if (err < 0) {
-		perror("Could not get feature (0x0A)");
-		return -errno;
-	} else if (err > 0) {
-		nvme_show_status(err);
+	if (err) {
+		nvme_show_err(err, "Could not get feature (0x0A)");
 		return err;
 	}
 
@@ -1927,9 +1910,12 @@ static int sfx_status(int argc, char **argv, struct command *acmd, struct plugin
 		json_object_add_value_int(dev_stats, "Uncorrectable Error Count", sfx_smart.pcie_rx_uncorrect_errs);
 		json_object_add_value_string(link_stats, "PCIe Link Width", link_width);
 		json_object_add_value_string(link_stats, "PCIe Link Speed", link_speed);
-		json_object_add_value_int(link_stats, "PCIe Link Fatal Errors", pcie_fatal);
-		json_object_add_value_int(link_stats, "PCIe Link Non-Fatal Errors", pcie_nonfatal);
-		json_object_add_value_int(link_stats, "PCIe Link Correctable Errors", pcie_correctable);
+		if (pcie_fatal_valid)
+			json_object_add_value_int(link_stats, "PCIe Link Fatal Errors", pcie_fatal);
+		if (pcie_nonfatal_valid)
+			json_object_add_value_int(link_stats, "PCIe Link Non-Fatal Errors", pcie_nonfatal);
+		if (pcie_cor_valid)
+			json_object_add_value_int(link_stats, "PCIe Link Correctable Errors", pcie_correctable);
 		json_object_add_value_string(link_stats, "PCIe Device Status", pcie_status);
 		json_object_add_value_object(dev_stats, "PCIe Link Status",	link_stats);
 		if (sfx_smart.friendly_changecap_support) {
@@ -2031,4 +2017,90 @@ static int sfx_status(int argc, char **argv, struct command *acmd, struct plugin
 	}
 
 	return 0;
+}
+
+static struct command get_additional_smart_log_cmd = {
+	.name = "smart-log-add",
+	.help = "Retrieve ScaleFlux SMART Log, show it",
+	.fn = get_additional_smart_log,
+};
+
+static struct command get_lat_stats_log_cmd = {
+	.name = "lat-stats",
+	.help = "Retrieve ScaleFlux IO Latency Statistics log, show it",
+	.fn = get_lat_stats_log,
+};
+
+static struct command sfx_get_bad_block_cmd = {
+	.name = "get-bad-block",
+	.help = "Retrieve bad block table of block device, show it",
+	.fn = sfx_get_bad_block,
+};
+
+static struct command query_cap_info_cmd = {
+	.name = "query-cap",
+	.help = "Query current capacity info",
+	.fn = query_cap_info,
+};
+
+static struct command change_cap_cmd = {
+	.name = "change-cap",
+	.help = "Dynamic change capacity",
+	.fn = change_cap,
+};
+
+static struct command sfx_set_feature_cmd = {
+	.name = "set-feature",
+	.help = "Set a feature",
+	.fn = sfx_set_feature,
+};
+
+static struct command sfx_get_feature_cmd = {
+	.name = "get-feature",
+	.help = "Get a feature",
+	.fn = sfx_get_feature,
+};
+
+static struct command sfx_dump_evtlog_cmd = {
+	.name = "dump-evtlog",
+	.help = "dump evtlog into file and parse warning & error log",
+	.fn = sfx_dump_evtlog,
+};
+
+static struct command sfx_expand_cap_cmd = {
+	.name = "expand-cap",
+	.help = "expand the last namespace capacity lossless",
+	.fn = sfx_expand_cap,
+};
+
+static struct command sfx_status_cmd = {
+	.name = "status",
+	.help = "Retrieve the ScaleFlux status output, show it",
+	.fn = sfx_status,
+};
+
+static struct command *commands[] = {
+	&get_additional_smart_log_cmd,
+	&get_lat_stats_log_cmd,
+	&sfx_get_bad_block_cmd,
+	&query_cap_info_cmd,
+	&change_cap_cmd,
+	&sfx_set_feature_cmd,
+	&sfx_get_feature_cmd,
+	&sfx_dump_evtlog_cmd,
+	&sfx_expand_cap_cmd,
+	&sfx_status_cmd,
+	NULL,
+};
+
+static struct plugin plugin = {
+	.name = "sfx",
+	.desc = "ScaleFlux vendor specific extensions",
+	.version = NVME_VERSION,
+};
+
+static void __shr_constructor register_plugin(void)
+{
+	plugin_add_group(&plugin, NULL, commands);
+	register_extension(&plugin);
 }

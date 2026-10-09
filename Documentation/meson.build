@@ -1,23 +1,25 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
+#
+# This file is part of nvme-cli.
+# Copyright (c) 2026 SUSE Software Solutions
+#
+# Authors: Daniel Wagner <dwagner@suse.de>
 
-adoc_sources = [
+adoc_sources_man1 = [
     'nvme',
     'nvme-admin-passthru',
-    'nvme-ana-log',
-    'nvme-attach-ns',
-    'nvme-boot-part-log',
     'nvme-capacity-mgmt',
-    'nvme-changed-ns-list-log',
-    'nvme-cmdset-ind-id-ns',
     'nvme-compare',
+    'nvme-config-convert',
+    'nvme-config-create',
+    'nvme-config-show',
+    'nvme-config-status',
+    'nvme-config-validate',
     'nvme-connect',
     'nvme-connect-all',
     'nvme-copy',
-    'nvme-create-ns',
     'nvme-dapustor-smart-log-add',
-    'nvme-delete-ns',
     'nvme-dera-stat',
-    'nvme-detach-ns',
     'nvme-device-self-test',
     'nvme-dim',
     'nvme-dir-receive',
@@ -26,10 +28,12 @@ adoc_sources = [
     'nvme-disconnect-all',
     'nvme-discover',
     'nvme-dsm',
-    'nvme-effects-log',
-    'nvme-endurance-event-agg-log',
-    'nvme-endurance-log',
-    'nvme-error-log',
+    'nvme-exclusion-add',
+    'nvme-exclusion-create',
+    'nvme-exclusion-delete',
+    'nvme-exclusion-edit',
+    'nvme-exclusion-list',
+    'nvme-exclusion-remove',
     'nvme-fdp-configs',
     'nvme-fdp-events',
     'nvme-fdp-feature',
@@ -38,26 +42,52 @@ adoc_sources = [
     'nvme-fdp-status',
     'nvme-fdp-update',
     'nvme-fdp-usage',
-    'nvme-fid-support-effects-log',
+    'nvme-feat-arbitration',
+    'nvme-feat-async-event-conf',
+    'nvme-feat-err-recovery',
+    'nvme-feat-hctm',
+    'nvme-feat-host-behavior-support',
+    'nvme-feat-int-coalesce',
+    'nvme-feat-int-vector-config',
+    'nvme-feat-keep-alive-timer',
+    'nvme-feat-lba-range-type',
+    'nvme-feat-num-queues',
+    'nvme-feat-perfc',
+    'nvme-feat-power-limit',
+    'nvme-feat-power-meas',
+    'nvme-feat-power-mgmt',
+    'nvme-feat-power-thresh',
+    'nvme-feat-temp-thresh',
+    'nvme-feat-timestamp',
+    'nvme-feat-volatile-wc',
+    'nvme-feat-write-atom-normal',
     'nvme-flush',
     'nvme-format',
     'nvme-fw-commit',
     'nvme-fw-download',
-    'nvme-fw-log',
     'nvme-gen-hostnqn',
     'nvme-get-feature',
     'nvme-get-lba-status',
     'nvme-get-log',
-    'nvme-get-ns-id',
     'nvme-get-property',
     'nvme-help',
     'nvme-huawei-id-ctrl',
     'nvme-huawei-list',
     'nvme-id-ctrl',
+    'nvme-id-ctrl-list',
     'nvme-id-domain',
+    'nvme-id-endgrp-list',
     'nvme-id-iocs',
     'nvme-id-ns',
+    'nvme-id-ns-descs',
+    'nvme-id-ns-ind',
+    'nvme-id-ns-list',
+    'nvme-id-nvm-ctrl',
+    'nvme-id-nvm-ns',
+    'nvme-id-nvm-ns-lba-format',
     'nvme-id-nvmset',
+    'nvme-id-primary-ctrl-caps',
+    'nvme-id-secondary-ctrl-list',
     'nvme-inspur-nvme-vendor-log',
     'nvme-intel-id-ctrl',
     'nvme-intel-internal-log',
@@ -68,14 +98,48 @@ adoc_sources = [
     'nvme-io-mgmt-recv',
     'nvme-io-mgmt-send',
     'nvme-io-passthru',
-    'nvme-lba-status-log',
+    'nvme-keys-check-kxchap-secret',
+    'nvme-keys-check-tls-psk',
+    'nvme-keys-export',
+    'nvme-keys-gen-kxchap-secret',
+    'nvme-keys-gen-tls-psk',
+    'nvme-keys-import',
+    'nvme-keys-insert-tls-psk',
+    'nvme-keys-revoke',
     'nvme-list',
-    'nvme-list-ctrl',
-    'nvme-list-endgrp',
-    'nvme-list-ns',
     'nvme-list-subsys',
     'nvme-lockdown',
-    'nvme-mi-cmd-support-effects-log',
+    'nvme-log-ana',
+    'nvme-log-ave-discovery',
+    'nvme-log-boot-part',
+    'nvme-log-changed-alloc-ns-list',
+    'nvme-log-changed-ns-list',
+    'nvme-log-dispersed-ns-participating-nss',
+    'nvme-log-effects',
+    'nvme-log-endurance',
+    'nvme-log-endurance-event-agg',
+    'nvme-log-error',
+    'nvme-log-fid-support-effects',
+    'nvme-log-fw',
+    'nvme-log-host-discovery',
+    'nvme-log-lba-status',
+    'nvme-log-media-unit-stat',
+    'nvme-log-mgmt-addr-list',
+    'nvme-log-mi-cmd-support-effects',
+    'nvme-log-persistent-event',
+    'nvme-log-phy-rx-eom',
+    'nvme-log-pred-lat-event-agg',
+    'nvme-log-predictable-lat',
+    'nvme-log-reachability-associations',
+    'nvme-log-reachability-groups',
+    'nvme-log-resv-notif',
+    'nvme-log-rotational-media-info',
+    'nvme-log-sanitize',
+    'nvme-log-self-test',
+    'nvme-log-smart',
+    'nvme-log-supported-cap-config',
+    'nvme-log-telemetry',
+    'nvme-mangoboost-id-ctrl',
     'nvme-micron-clear-pcie-errors',
     'nvme-micron-id-ctrl',
     'nvme-micron-internal-log',
@@ -87,9 +151,12 @@ adoc_sources = [
     'nvme-micron-temperature-stats',
     'nvme-netapp-ontapdevices',
     'nvme-netapp-smdevices',
-    'nvme-ns-descs',
+    'nvme-ns-attach',
+    'nvme-ns-create',
+    'nvme-ns-delete',
+    'nvme-ns-detach',
+    'nvme-ns-get-id',
     'nvme-ns-rescan',
-    'nvme-nvm-id-ctrl',
     'nvme-nvme-mi-recv',
     'nvme-nvme-mi-send',
     'nvme-ocp-clear-fw-activate-history',
@@ -97,32 +164,46 @@ adoc_sources = [
     'nvme-ocp-device-capability-log',
     'nvme-ocp-eol-plp-failure-mode',
     'nvme-ocp-error-recovery-log',
+    'nvme-ocp-get-clear-pcie-correctable-errors',
     'nvme-ocp-get-dssd-async-event-config',
     'nvme-ocp-get-dssd-power-state-feature',
+    'nvme-ocp-get-error-injection',
+    'nvme-ocp-get-idle-wakeup-time',
+    'nvme-ocp-get-latency-monitor',
     'nvme-ocp-get-plp-health-check-interval',
+    'nvme-ocp-get-telemetry-profile',
+    'nvme-ocp-hardware-component-log',
+    'nvme-ocp-internal-log',
     'nvme-ocp-latency-monitor-log',
+    'nvme-ocp-persistent-event-log',
     'nvme-ocp-set-dssd-async-event-config',
     'nvme-ocp-set-dssd-power-state-feature',
+    'nvme-ocp-set-error-injection',
     'nvme-ocp-set-plp-health-check-interval',
     'nvme-ocp-set-telemetry-profile',
     'nvme-ocp-smart-add-log',
+    'nvme-ocp-tcg-configuration-log',
     'nvme-ocp-telemetry-string-log',
     'nvme-ocp-unsupported-reqs-log',
-    'nvme-ocp-internal-log',
-    'nvme-persistent-event-log',
-    'nvme-pred-lat-event-agg-log',
-    'nvme-predictable-lat-log',
-    'nvme-primary-ctrl-caps',
     'nvme-read',
+    'nvme-registry-delete',
+    'nvme-registry-list',
+    'nvme-registry-retrieve',
+    'nvme-registry-update',
     'nvme-reset',
     'nvme-resv-acquire',
-    'nvme-resv-notif-log',
     'nvme-resv-register',
     'nvme-resv-release',
     'nvme-resv-report',
-    'nvme-rpmb',
+    'nvme-rpmb-info',
+    'nvme-rpmb-program-key',
+    'nvme-rpmb-read-config',
+    'nvme-rpmb-read-counter',
+    'nvme-rpmb-read-data',
+    'nvme-rpmb-write-config',
+    'nvme-rpmb-write-data',
+    'nvme-samsung-vs-internal-log',
     'nvme-sanitize',
-    'nvme-sanitize-log',
     'nvme-seagate-clear-fw-activate-history',
     'nvme-seagate-clear-pcie-correctable-errors',
     'nvme-seagate-cloud-SSD-plugin-version',
@@ -139,13 +220,17 @@ adoc_sources = [
     'nvme-seagate-vs-temperature-stats',
     'nvme-security-recv',
     'nvme-security-send',
-    'nvme-self-test-log',
+    'nvme-sed-discover',
+    'nvme-sed-initialize',
+    'nvme-sed-lock',
+    'nvme-sed-password',
+    'nvme-sed-revert',
+    'nvme-sed-unlock',
     'nvme-set-feature',
     'nvme-set-property',
     'nvme-show-hostnqn',
     'nvme-show-regs',
     'nvme-show-topology',
-    'nvme-smart-log',
     'nvme-sndk-capabilities',
     'nvme-sndk-clear-assert-dump',
     'nvme-sndk-clear-fw-activate-history',
@@ -154,8 +239,8 @@ adoc_sources = [
     'nvme-sndk-cloud-boot-SSD-version',
     'nvme-sndk-cu-smart-log',
     'nvme-sndk-drive-resize',
-    'nvme-sndk-get-drive-status',
     'nvme-sndk-get-dev-capabilities-log',
+    'nvme-sndk-get-drive-status',
     'nvme-sndk-get-error-recovery-log',
     'nvme-sndk-get-latency-monitor-log',
     'nvme-sndk-get-unsupported-reqs-log',
@@ -192,8 +277,6 @@ adoc_sources = [
     'nvme-solidigm-workload-tracker',
     'nvme-subsystem-reset',
     'nvme-supported-log-pages',
-    'nvme-telemetry-log',
-    'nvme-tls-key',
     'nvme-toshiba-clear-pcie-correctable-errors',
     'nvme-toshiba-vs-internal-log',
     'nvme-toshiba-vs-smart-add-log',
@@ -253,14 +336,82 @@ adoc_sources = [
     'nvme-zns-zone-append',
     'nvme-zns-zone-mgmt-recv',
     'nvme-zns-zone-mgmt-send',
-    'nvme-sed-discover',
-    'nvme-sed-initialize',
-    'nvme-sed-lock',
-    'nvme-sed-password',
-    'nvme-sed-revert',
-    'nvme-sed-unlock',
-    'nvme-mangoboost-id-ctrl',
 ]
+
+if want_deprecated_cmds
+    adoc_sources_man1 += [
+        'nvme-ana-log',
+        'nvme-attach-ns',
+        'nvme-ave-discovery-log',
+        'nvme-boot-part-log',
+        'nvme-changed-alloc-ns-list-log',
+        'nvme-changed-ns-list-log',
+        'nvme-check-dhchap-key',
+        'nvme-check-tls-key',
+        'nvme-cmdset-ind-id-ns',
+        'nvme-create-ns',
+        'nvme-delete-ns',
+        'nvme-detach-ns',
+        'nvme-dispersed-ns-participating-nss-log',
+        'nvme-effects-log',
+        'nvme-endurance-event-agg-log',
+        'nvme-endurance-log',
+        'nvme-error-log',
+        'nvme-fid-support-effects-log',
+        'nvme-fw-log',
+        'nvme-gen-dhchap-key',
+        'nvme-gen-tls-key',
+        'nvme-get-ns-id',
+        'nvme-host-discovery-log',
+        'nvme-lba-status-log',
+        'nvme-list-ctrl',
+        'nvme-list-endgrp',
+        'nvme-list-ns',
+        'nvme-list-secondary',
+        'nvme-media-unit-stat-log',
+        'nvme-mgmt-addr-list-log',
+        'nvme-mi-cmd-support-effects-log',
+        'nvme-ns-descs',
+        'nvme-nvm-id-ctrl',
+        'nvme-nvm-id-ns',
+        'nvme-nvm-id-ns-lba-format',
+        'nvme-persistent-event-log',
+        'nvme-phy-rx-eom-log',
+        'nvme-pred-lat-event-agg-log',
+        'nvme-predictable-lat-log',
+        'nvme-primary-ctrl-caps',
+        'nvme-reachability-associations-log',
+        'nvme-reachability-groups-log',
+        'nvme-resv-notif-log',
+        'nvme-rotational-media-info-log',
+        'nvme-sanitize-log',
+        'nvme-self-test-log',
+        'nvme-smart-log',
+        'nvme-supported-cap-config-log',
+        'nvme-telemetry-log',
+        'nvme-tls-key',
+    ]
+endif
+
+adoc_sources_man5 = [
+    'nvme-cli.conf',
+    'nvme-fabrics.conf',
+]
+
+adoc_sources_man8 = [
+]
+
+if want_discoverd
+    adoc_sources_man8 += [
+        'nvme-discoverd',
+    ]
+endif
+
+if want_keysd
+    adoc_sources_man8 += [
+        'nvme-keysd',
+    ]
+endif
 
 adoc_includes = [
     'cmd-plugins.txt',
@@ -270,8 +421,22 @@ adoc_includes = [
 ]
 
 if want_docs != 'false'
-    mandir = join_paths(prefixdir, get_option('mandir'), 'man1')
+    man1dir = join_paths(prefixdir, get_option('mandir'), 'man1')
+    man5dir = join_paths(prefixdir, get_option('mandir'), 'man5')
+    man8dir = join_paths(prefixdir, get_option('mandir'), 'man8')
     htmldir = join_paths(prefixdir, get_option('htmldir'), 'nvme')
+
+    man_sets = [
+        {'sources': adoc_sources_man1,
+         'section': '1',
+         'dir': man1dir},
+        {'sources': adoc_sources_man5,
+         'section': '5',
+         'dir': man5dir},
+        {'sources': adoc_sources_man8,
+         'section': '8',
+         'dir': man8dir},
+    ]
 
     asciidoctor = find_program('asciidoc', required: want_docs_build)
     if want_docs_build and asciidoctor.found()
@@ -282,50 +447,56 @@ if want_docs != 'false'
 
         # man pages
         if want_docs == 'all' or want_docs == 'man'
-            xmlto = find_program('xmlto', required: false)
+            xmlto = find_program('xmlto', required: true)
             if xmlto.found()
-                foreach adoc : adoc_sources
-                    input = adoc + '.txt'
-                    subst = configure_file(
-                        input: adoc + '.txt',
-                        output: adoc + '.msubst',
-                        configuration: substs
-                    )
-                    xml = custom_target(
-                        adoc.underscorify() + '_xml',
-                        input: subst,
-                        output: '@BASENAME@.xml',
-                        command: [
-                            asciidoctor,
-                            '-f', files('asciidoc.conf'),
-                            '-b', 'docbook',
-                            '-d', 'manpage',
-                            '-o', '@OUTPUT@',
-                            '@INPUT@',
-                        ],
-                    )
-                    doc_tgts += custom_target(
-                        adoc.underscorify() + '_man',
-                        input: xml,
-                        output: '@BASENAME@.1',
-                        command: [
-                            xmlto,
-                            '-m', files('manpage-normal.xsl'),
-                            '-o', '@OUTDIR@',
-                            '--skip-validation',
-                            'man',
-                            '@INPUT@',
-                        ],
-                        install: true,
-                        install_dir: mandir,
-                    )
+                foreach man_set : man_sets
+                    section = man_set['section']
+                    foreach adoc : man_set['sources']
+                        input = adoc + '.txt'
+                        subst = configure_file(
+                            input: adoc + '.txt',
+                            output: adoc + '.m' + section + 'subst',
+                            configuration: substs
+                        )
+                        xml = custom_target(
+                            adoc.underscorify() + '_xml' + section,
+                            input: subst,
+                            output: '@BASENAME@.xml',
+                            command: [
+                                asciidoctor,
+                                '-f', files('asciidoc.conf'),
+                                '-b', 'docbook',
+                                '-d', 'manpage',
+                                '-o', '@OUTPUT@',
+                                '@INPUT@',
+                            ],
+                        )
+                        doc_tgts += custom_target(
+                            adoc.underscorify() + '_man' + section,
+                            input: xml,
+                            output: '@BASENAME@.' + section,
+                            command: [
+                                xmlto,
+                                '-m', files('manpage-normal.xsl'),
+                                '-o', '@OUTDIR@',
+                                '--skip-validation',
+                                'man',
+                                '@INPUT@',
+                            ],
+                            install: true,
+                            install_dir: man_set['dir'],
+                            install_tag: 'man',
+                        )
+                    endforeach
                 endforeach
             endif
         endif
 
         # html
         if want_docs == 'all' or want_docs == 'html'
-            foreach adoc : adoc_sources
+          foreach adoc : ( adoc_sources_man1 +
+                           adoc_sources_man5 +
+                           adoc_sources_man8 )
                 input = adoc + '.txt'
                 subst = configure_file(
                     input: adoc + '.txt',
@@ -345,20 +516,24 @@ if want_docs != 'false'
                         '@INPUT@'],
                     install: true,
                     install_dir: htmldir,
+                    install_tag: 'doc',
                 )
             endforeach
         endif
     else
         # asciidoctor not found, install pre compiled documetationx
-        foreach adoc : adoc_sources
-            if want_docs == 'all' or want_docs == 'man'
-                man = files(adoc + '.1')
-                install_data(man, install_dir: mandir)
-            endif
-            if want_docs == 'all' or want_docs == 'html'
-                html = files(adoc + '.html')
-                install_data(html, install_dir: htmldir)
-            endif
+        foreach man_set : man_sets
+            section = man_set['section']
+            foreach adoc : man_set['sources']
+                if want_docs == 'all' or want_docs == 'man'
+                    man = files(adoc + '.' + section)
+                    install_data(man, install_dir: man_set['dir'], install_tag: 'man')
+                endif
+                if want_docs == 'all' or want_docs == 'html'
+                    html = files(adoc + '.html')
+                    install_data(html, install_dir: htmldir, install_tag: 'doc')
+                endif
+            endforeach
         endforeach
     endif
 endif

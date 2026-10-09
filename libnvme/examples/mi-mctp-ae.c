@@ -55,7 +55,7 @@ static void print_event_info(struct libnvme_mi_event *event)
 	}
 }
 
-enum libnvme_mi_aem_handler_next_action aem_handler(libnvme_mi_ep_t ep, size_t num_events, void *userdata)
+enum libnvme_mi_aem_handler_next_action aem_handler(struct libnvme_mi_ep *ep, size_t num_events, void *userdata)
 {
 	struct app_userdata *data = (struct app_userdata *) userdata;
 
@@ -80,7 +80,7 @@ enum libnvme_mi_aem_handler_next_action aem_handler(libnvme_mi_ep_t ep, size_t n
 int main(int argc, char **argv)
 {
 	struct libnvme_global_ctx *ctx;
-	libnvme_mi_ep_t ep;
+	struct libnvme_mi_ep *ep;
 	uint8_t eid = 0;
 	int rc = 0, net = 0;
 	struct libnvme_mi_aem_config aem_config = {0};
@@ -101,6 +101,9 @@ int main(int argc, char **argv)
 		for (int i = 0; i < event_count; i++) {
 			int event = atoi(argv[1+i]);
 
+			if (event < 0 || event >= (int)ARRAY_SIZE(aem_config.enabled_map.enabled))
+				errx(EXIT_FAILURE, "Invalid AE #: %d (must be 0-255)", event);
+
 			aem_config.enabled_map.enabled[event] = true;
 		}
 	} else {
@@ -110,7 +113,7 @@ int main(int argc, char **argv)
 		return EXIT_FAILURE;
 	}
 
-	ctx = libnvme_create_global_ctx(stderr, LIBNVME_DEFAULT_LOGLEVEL);
+	ctx = libnvme_create_global_ctx();
 	if (!ctx)
 		err(EXIT_FAILURE, "can't create NVMe root");
 

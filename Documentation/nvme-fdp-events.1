@@ -2,12 +2,12 @@
 .\"     Title: nvme-fdp-events
 .\"    Author: [FIXME: author] [see http://www.docbook.org/tdg5/en/html/author]
 .\" Generator: DocBook XSL Stylesheets vsnapshot <http://docbook.sf.net/>
-.\"      Date: 04/17/2026
+.\"      Date: 09/18/2026
 .\"    Manual: NVMe Manual
 .\"    Source: NVMe
 .\"  Language: English
 .\"
-.TH "NVME\-FDP\-EVENTS" "1" "04/17/2026" "NVMe" "NVMe Manual"
+.TH "NVME\-FDP\-EVENTS" "1" "09/18/2026" "NVMe" "NVMe Manual"
 .\" -----------------------------------------------------------------
 .\" * Define some portability stuff
 .\" -----------------------------------------------------------------
@@ -32,9 +32,10 @@ nvme-fdp-events \- Get Flexible Data Placement Events
 .SH "SYNOPSIS"
 .sp
 .nf
-\fInvme fdp events\fR <device> [\-\-endgrp\-id=<NUM> | \-e <NUM>] [\-\-host\-events | \-E]
+\fInvme\fR [<global\-options>] \fIfdp events\fR <device>
+                        [\-\-endgrp\-id=<NUM> | \-e <NUM>]
+                        [\-\-host\-events | \-E]
                         [\-\-raw\-binary | \-b]
-                        [<global\-options>]
 .fi
 .SH "DESCRIPTION"
 .sp
@@ -100,6 +101,8 @@ Set the timeout for the command in milliseconds\&.
 .RS 4
 Increase the level of detail in the output\&. May be specified multiple times to further increase verbosity\&.
 .RE
+.sp
+These options can also be set as machine\-wide defaults in nvme\-cli\&.conf(5)\&. A command\-line flag always overrides the file\&.
 .SH "NVME"
 .sp
 Part of nvme\-cli

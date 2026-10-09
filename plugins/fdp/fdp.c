@@ -1,23 +1,25 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-#include <fcntl.h>
 #include <errno.h>
+#include <fcntl.h>
+#include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <unistd.h>
-#include <inttypes.h>
-#include <linux/fs.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 #include <libnvme.h>
 
-#include "common.h"
+#include <ccan/array_size/array_size.h>
+#include <ccan/endian/endian.h>
+#include <shared/compiler-attributes-util.h>
+#include <shared/parse-util.h>
+
+#include "cleanup.h"
+#include "global-ctx.h"
 #include "nvme-cmds.h"
 #include "nvme-print.h"
-#include "nvme.h"
-
-#define CREATE_CMD
-#include "fdp.h"
+#include "plugin.h"
 
 static int fdp_configs(int argc, char **argv, struct command *acmd,
 		       struct plugin *plugin)
@@ -31,6 +33,7 @@ static int fdp_configs(int argc, char **argv, struct command *acmd,
 	__cleanup_nvme_transport_handle struct libnvme_transport_handle *hdl = NULL;
 	__cleanup_free void *log = NULL;
 	struct nvme_fdp_config_log hdr;
+	struct libnvme_passthru_cmd cmd;
 	nvme_print_flags_t flags;
 	int err;
 
@@ -65,12 +68,12 @@ static int fdp_configs(int argc, char **argv, struct command *acmd,
 		flags |= VERBOSE;
 
 	if (!cfg.egid) {
-		fprintf(stderr, "endurance group identifier required\n");
+		nvme_show_error("endurance group identifier required");
 		return -EINVAL;
 	}
 
-	err = nvme_get_log_fdp_configurations(hdl, cfg.egid, 0,
-					      &hdr, sizeof(hdr));
+	nvme_init_get_log_fdp_configurations(&cmd, cfg.egid, 0, &hdr, sizeof(hdr));
+	err = libnvme_get_log(hdl, &cmd, false, sizeof(hdr));
 	if (err) {
 		nvme_show_status(errno);
 		return err;
@@ -80,7 +83,8 @@ static int fdp_configs(int argc, char **argv, struct command *acmd,
 	if (!log)
 		return -ENOMEM;
 
-	err = nvme_get_log_fdp_configurations(hdl, cfg.egid, 0, log, hdr.size);
+	nvme_init_get_log_fdp_configurations(&cmd, cfg.egid, 0, log, hdr.size);
+	err = libnvme_get_log(hdl, &cmd, false, hdr.size);
 	if (err) {
 		nvme_show_status(errno);
 		return err;
@@ -101,6 +105,7 @@ static int fdp_usage(int argc, char **argv, struct command *acmd, struct plugin 
 	__cleanup_nvme_transport_handle struct libnvme_transport_handle *hdl = NULL;
 	__cleanup_free void *log = NULL;
 	struct nvme_fdp_ruhu_log hdr;
+	struct libnvme_passthru_cmd cmd;
 	nvme_print_flags_t flags;
 	size_t len;
 	int err;
@@ -131,8 +136,8 @@ static int fdp_usage(int argc, char **argv, struct command *acmd, struct plugin 
 	if (cfg.raw_binary)
 		flags = BINARY;
 
-	err = nvme_get_log_reclaim_unit_handle_usage(hdl, cfg.egid,
-						     0, &hdr, sizeof(hdr));
+	nvme_init_get_log_reclaim_unit_handle_usage(&cmd, cfg.egid, 0, &hdr, sizeof(hdr));
+	err = libnvme_get_log(hdl, &cmd, false, sizeof(hdr));
 	if (err) {
 		nvme_show_status(err);
 		return err;
@@ -143,8 +148,8 @@ static int fdp_usage(int argc, char **argv, struct command *acmd, struct plugin 
 	if (!log)
 		return -ENOMEM;
 
-	err = nvme_get_log_reclaim_unit_handle_usage(hdl, cfg.egid,
-						     0, log, len);
+	nvme_init_get_log_reclaim_unit_handle_usage(&cmd, cfg.egid, 0, log, len);
+	err = libnvme_get_log(hdl, &cmd, false, len);
 	if (err) {
 		nvme_show_status(err);
 		return err;
@@ -164,6 +169,7 @@ static int fdp_stats(int argc, char **argv, struct command *acmd, struct plugin 
 	__cleanup_nvme_global_ctx struct libnvme_global_ctx *ctx = NULL;
 	__cleanup_nvme_transport_handle struct libnvme_transport_handle *hdl = NULL;
 	struct nvme_fdp_stats_log stats;
+	struct libnvme_passthru_cmd cmd;
 	nvme_print_flags_t flags;
 	int err;
 
@@ -195,13 +201,14 @@ static int fdp_stats(int argc, char **argv, struct command *acmd, struct plugin 
 		flags = BINARY;
 
 	if (!cfg.egid) {
-		fprintf(stderr, "endurance group identifier required\n");
+		nvme_show_error("endurance group identifier required");
 		return -EINVAL;
 	}
 
 	memset(&stats, 0x0, sizeof(stats));
 
-	err = nvme_get_log_fdp_stats(hdl, cfg.egid, 0, &stats, sizeof(stats));
+	nvme_init_get_log_fdp_stats(&cmd, cfg.egid, 0, &stats, sizeof(stats));
+	err = libnvme_get_log(hdl, &cmd, false, sizeof(stats));
 	if (err) {
 		nvme_show_status(err);
 		return err;
@@ -222,6 +229,7 @@ static int fdp_events(int argc, char **argv, struct command *acmd, struct plugin
 	__cleanup_nvme_global_ctx struct libnvme_global_ctx *ctx = NULL;
 	__cleanup_nvme_transport_handle struct libnvme_transport_handle *hdl = NULL;
 	struct nvme_fdp_events_log events;
+	struct libnvme_passthru_cmd cmd;
 	nvme_print_flags_t flags;
 	int err;
 
@@ -254,14 +262,15 @@ static int fdp_events(int argc, char **argv, struct command *acmd, struct plugin
 		flags = BINARY;
 
 	if (!cfg.egid) {
-		fprintf(stderr, "endurance group identifier required\n");
+		nvme_show_error("endurance group identifier required");
 		return -EINVAL;
 	}
 
 	memset(&events, 0x0, sizeof(events));
 
-	err = nvme_get_log_fdp_events(hdl, cfg.egid,
+	nvme_init_get_log_fdp_events(&cmd, cfg.egid,
 			cfg.host_events, 0, &events, sizeof(events));
+	err = libnvme_get_log(hdl, &cmd, false, sizeof(events));
 	if (err) {
 		nvme_show_status(err);
 		return err;
@@ -314,14 +323,14 @@ static int fdp_status(int argc, char **argv, struct command *acmd, struct plugin
 	if (!cfg.nsid) {
 		err = libnvme_get_nsid(hdl, &cfg.nsid);
 		if (err < 0) {
-			perror("get-namespace-id");
+			nvme_show_err(err, "get-namespace-id");
 			return err;
 		}
 	}
 
 	nvme_init_fdp_reclaim_unit_handle_status(&cmd, cfg.nsid, &hdr,
 		sizeof(hdr));
-	err = libnvme_submit_io_passthru(hdl, &cmd);
+	err = libnvme_exec_io_passthru(hdl, &cmd);
 	if (err) {
 		nvme_show_status(err);
 		return err;
@@ -334,7 +343,7 @@ static int fdp_status(int argc, char **argv, struct command *acmd, struct plugin
 		return -ENOMEM;
 
 	nvme_init_fdp_reclaim_unit_handle_status(&cmd, cfg.nsid, buf, len);
-	err = libnvme_submit_io_passthru(hdl, &cmd);
+	err = libnvme_exec_io_passthru(hdl, &cmd);
 	if (err) {
 		nvme_show_status(err);
 		return err;
@@ -376,19 +385,19 @@ static int fdp_update(int argc, char **argv, struct command *acmd, struct plugin
 	if (err)
 		return err;
 
-	npids = argconfig_parse_comma_sep_array_short(cfg.pids, pids, ARRAY_SIZE(pids));
+	npids = shr_parse_csv_ushort(cfg.pids, pids, ARRAY_SIZE(pids));
 	if (npids < 0) {
-		perror("could not parse pids");
+		nvme_show_error("could not parse pids");
 		return -EINVAL;
 	} else if (npids == 0) {
-		fprintf(stderr, "no placement identifiers set\n");
+		nvme_show_error("no placement identifiers set");
 		return -EINVAL;
 	}
 
 	if (!cfg.nsid) {
 		err = libnvme_get_nsid(hdl, &cfg.nsid);
 		if (err < 0) {
-			perror("get-namespace-id");
+			nvme_show_err(err, "get-namespace-id");
 			return err;
 		}
 	}
@@ -397,13 +406,13 @@ static int fdp_update(int argc, char **argv, struct command *acmd, struct plugin
 		buf[i] = cpu_to_le16(pids[i]);
 
 	nvme_init_fdp_reclaim_unit_handle_status(&cmd, cfg.nsid, buf, npids);
-	err = libnvme_submit_io_passthru(hdl, &cmd);
+	err = libnvme_exec_io_passthru(hdl, &cmd);
 	if (err) {
 		nvme_show_status(err);
 		return err;
 	}
 
-	printf("update: Success\n");
+	nvme_show_verbose_result("update: Success");
 
 	return 0;
 }
@@ -448,15 +457,15 @@ static int fdp_set_events(int argc, char **argv, struct command *acmd, struct pl
 	if (err)
 		return err;
 
-	nev = argconfig_parse_comma_sep_array_short(cfg.event_types, evts, ARRAY_SIZE(evts));
+	nev = shr_parse_csv_ushort(cfg.event_types, evts, ARRAY_SIZE(evts));
 	if (nev < 0) {
-		perror("could not parse event types");
+		nvme_show_error("could not parse event types");
 		return -EINVAL;
 	} else if (nev == 0) {
-		fprintf(stderr, "no event types set\n");
+		nvme_show_error("no event types set");
 		return -EINVAL;
 	} else if (nev > 255) {
-		fprintf(stderr, "too many event types (max 255)\n");
+		nvme_show_error("too many event types (max 255)");
 		return -EINVAL;
 	}
 
@@ -464,7 +473,7 @@ static int fdp_set_events(int argc, char **argv, struct command *acmd, struct pl
 		err = libnvme_get_nsid(hdl, &cfg.nsid);
 		if (err < 0) {
 			if (errno != ENOTTY) {
-				fprintf(stderr, "get-namespace-id: %s\n", libnvme_strerror(errno));
+				nvme_show_error("get-namespace-id: %s", libnvme_strerror(errno));
 				return err;
 			}
 
@@ -483,7 +492,7 @@ static int fdp_set_events(int argc, char **argv, struct command *acmd, struct pl
 		return err;;
 	}
 
-	printf("set-events: Success\n");
+	nvme_show_verbose_result("set-events: Success");
 
 	return 0;
 }
@@ -556,4 +565,78 @@ static int fdp_feature(int argc, char **argv, struct command *acmd, struct plugi
 	nvme_show_result("Success %s Endurance Group: %d, FDP configuration index: %d",
 	       (cfg.disable) ? "disabling" : "enabling", cfg.endgid, cfg.fdpcidx);
 	return err;
+}
+
+static struct command fdp_configs_cmd = {
+	.name = "configs",
+	.help = "List configurations",
+	.fn = fdp_configs,
+};
+
+static struct command fdp_usage_cmd = {
+	.name = "usage",
+	.help = "Show reclaim unit handle usage",
+	.fn = fdp_usage,
+};
+
+static struct command fdp_stats_cmd = {
+	.name = "stats",
+	.help = "Show statistics",
+	.fn = fdp_stats,
+};
+
+static struct command fdp_events_cmd = {
+	.name = "events",
+	.help = "List events affecting reclaim units and media usage",
+	.fn = fdp_events,
+};
+
+static struct command fdp_status_cmd = {
+	.name = "status",
+	.help = "Show reclaim unit handle status",
+	.fn = fdp_status,
+};
+
+static struct command fdp_update_cmd = {
+	.name = "update",
+	.help = "Update a reclaim unit handle",
+	.fn = fdp_update,
+};
+
+static struct command fdp_set_events_cmd = {
+	.name = "set-events",
+	.help = "Enable or disable events",
+	.fn = fdp_set_events,
+};
+
+static struct command fdp_feature_cmd = {
+	.name = "feature",
+	.help = "Show, enable or disable FDP configuration",
+	.fn = fdp_feature,
+};
+
+static struct command *commands[] = {
+	&fdp_configs_cmd,
+	&fdp_usage_cmd,
+	&fdp_stats_cmd,
+	&fdp_events_cmd,
+	&fdp_status_cmd,
+	&fdp_update_cmd,
+	&fdp_set_events_cmd,
+	&fdp_feature_cmd,
+	NULL,
+};
+
+static struct plugin plugin = {
+	.name = "fdp",
+	.desc = "Manage Flexible Data Placement enabled devices",
+	.version = NVME_VERSION,
+	.core = true,
+	.group = "I/O Commands",
+};
+
+static void __shr_constructor register_plugin(void)
+{
+	plugin_add_group(&plugin, NULL, commands);
+	register_extension(&plugin);
 }

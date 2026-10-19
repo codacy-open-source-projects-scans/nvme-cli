@@ -46,21 +46,30 @@ Tests in this module verify:
   * Event String and VU Event String lookups match on (class,
     identifier), not identifier alone, for every class, and come from the
     VU table from class 80h up.
+  * An Event ID the spec defines for classes 01h-0Dh is named with the
+    spec's name when the Event String Table has no entry for it
+    (TELSLG-14); a string log entry wins, and reserved, obsolete and
+    vendor unique IDs, VU Event Identifiers and classes 80h up stay
+    unnamed.
+  * A string log table or ASCII string that does not lie within the
+    string log leaves the event unnamed rather than being read.
   * An event of any class that runs past the end of its FIFO being
     rejected, and one that ends exactly at the end being decoded.
   * FIFO layout: FIFO naming and numbering, the data area each FIFO is
-    decoded in, the end-of-list entry, FIFO bounds, and a bad FIFO
+    decoded in, the end-of-list entry, FIFO bounds, including a log cut
+    short and a Data Area 2 ending before Data Area 1, and a bad FIFO
     aborting the whole decode.
 
 Known defects are covered by expectedFailure tests asserting the correct
-behavior: Statistic Snapshot events are left out of the JSON report, a
-snapshot of a statistic with no data is left out of the text report and
-runs into the next event, and a log the decoder rejects still exits 0.
+behavior: a snapshot of a statistic with no data is left out of the text
+report and runs into the next event, and a log the decoder rejects still
+exits 0.
 
 Runs nowhere but Linux: libmock_nvme.so is an LD_PRELOAD shim.
 
 Usage: python3 ocp_internal_log_event_fifo_mock_test.py <nvme-binary> <mock-lib>
 """
+import struct
 import unittest
 
 from tests.cli.ocp.ocp_mock_test import (MODES, STR_DA_EVENT_FIFO_INFO,
@@ -90,7 +99,12 @@ def one_fifo(*events, da=1, **kwargs):
                                  **kwargs)
 
 
-def common(cls, event_id, size_dw, string=''):
+def common(cls, event_id, size_dw, string=None):
+    """@string defaults to the spec's name for the Event ID, which the
+    decoder falls back to when the string log has none."""
+    if string is None:
+        string = (layout.SPEC_EVENT_NAMES.get((cls, event_id), '')
+                  if cls < layout.CLASS_VU_FIRST else '')
     return {
         'Debug Event Class type': f'0x{cls:x}',
         'Event Identifier': f'0x{event_id:x}',
@@ -99,7 +113,7 @@ def common(cls, event_id, size_dw, string=''):
     }
 
 
-def virtual_fifo(fifo_id, event_id=0, size_dw=1, event_string='',
+def virtual_fifo(fifo_id, event_id=0, size_dw=1, event_string=None,
                  vfifo_string='', phys_string=''):
     physical, virtual = layout.split_virtual_fifo_id(fifo_id)
     return {
@@ -155,7 +169,7 @@ def vu_fields(vu_id, data, string=''):
     }
 
 
-def smbus(event_id, event_data, data_string='', size_dw=1, event_string='',
+def smbus(event_id, event_data, data_string='', size_dw=1, event_string=None,
           vu=None):
     return {
         **common(layout.CLASS_SMBUS_I2C_I3C, event_id, size_dw, event_string),
@@ -167,7 +181,7 @@ def smbus(event_id, event_data, data_string='', size_dw=1, event_string='',
 
 def mctp(event_id, event_data, data_string='', protocol=0,
          protocol_string=MCTP_PROTOCOLS[0], header=None, size_dw=2,
-         event_string='', vu=None):
+         event_string=None, vu=None):
     """@header is the expected MCTP Transport Header, or None when the
     Transport Header Valid flag is clear and no header is printed."""
     fields = {
@@ -734,6 +748,117 @@ class TestEventClassDecode(EventFifoTestBase):
              'Class Specific Data': '0000000000000000'},
         ])
 
+    @staticmethod
+    def _smallest_event(cls, event_id, event_string=None):
+        """The smallest event of @cls carrying @event_id, and its decode
+        with Event String @event_string."""
+        if cls == layout.CLASS_VIRTUAL_FIFO:
+            fifo_id = layout.virtual_fifo_id(1, 0)
+            return (layout.virtual_fifo_event(fifo_id, event_id),
+                    virtual_fifo(fifo_id, event_id=event_id,
+                                 event_string=event_string,
+                                 phys_string=PHYS_NAMES[1]))
+        if cls == layout.CLASS_SMBUS_I2C_I3C:
+            nack = event_id == layout.SMBUS_NACK_ERROR
+            return (layout.smbus_event(event_id, 0),
+                    smbus(event_id, 0, SMBUS_NACK_DATA[0] if nack else '',
+                          event_string=event_string))
+        if cls == layout.CLASS_MCTP:
+            return (layout.mctp_event(event_id, 0),
+                    mctp(event_id, 0, MCTP_EVENT_DATA.get(event_id, [''])[0],
+                         event_string=event_string))
+        size = layout.CLASS_SPECIFIC_SIZE.get(cls, 0)
+        data = bytes(range(0x10, 0x10 + size))
+        expected = common(cls, event_id, size // 4, event_string)
+        if size:
+            expected['Class Specific Data'] = layout.hex_upper(data)
+        return layout.event(cls, event_id, data), expected
+
+    def _assert_smallest_events(self, names, log=None):
+        """One smallest event per (class, Event ID) of @names, each
+        decoding with its Event String from @names."""
+        pairs = [self._smallest_event(cls, event_id, name)
+                 for (cls, event_id), name in names.items()]
+        self.assert_events(one_fifo(*(event for event, _ in pairs)),
+                           log or strings(),
+                           [expected for _, expected in pairs])
+
+    def test_spec_defined_event_ids_are_named_without_the_string_log(self):
+        """TELSLG-14 lets the string log leave out the Event IDs the spec
+        defines, so with no Event String Table entry every one of them is
+        named from the spec."""
+        self._assert_smallest_events(dict(sorted(
+            layout.SPEC_EVENT_NAMES.items())))
+
+    def test_spec_names_follow_the_spec_wording(self):
+        """One name per class, spelled as in OCP 2.7 Section 4.9.15.2."""
+        self._assert_smallest_events({
+            (layout.CLASS_TIMESTAMP, 0x0001):
+                'Firmware initiated Timestamp Snapshot',
+            (layout.CLASS_PCIE, 0x0007): 'Link Speed and Width Negotiated',
+            (layout.CLASS_NVME, 0x0010):
+                'Error Reporting AEN was sent (see EREC-5)',
+            (layout.CLASS_RESET, 0x0002): 'PERST#',
+            (layout.CLASS_BOOT_SEQUENCE, 0x0000):
+                'Main Firmware Boot Complete',
+            (layout.CLASS_FIRMWARE_ASSERT, 0x0006): 'Assert in Other Code',
+            (layout.CLASS_TEMPERATURE, 0x0000):
+                'Composite Temperature decreases to (WCTEMP - 2)',
+            (layout.CLASS_MEDIA, 0x0005): 'Plane Failure Event',
+            (layout.CLASS_MEDIA_WEAR, 0x0000): 'Media Wear',
+            (layout.CLASS_VIRTUAL_FIFO, 0x0001): 'Virtual FIFO End',
+            (layout.CLASS_SMBUS_I2C_I3C, 0x0003): 'NACK error',
+            (layout.CLASS_MCTP, 0x0000): 'Dropped Packet',
+        })
+
+    def test_string_log_names_take_precedence_over_spec_names(self):
+        """An Event String Table entry names a spec-defined Event ID; the
+        spec's name only fills in for the IDs the table leaves out."""
+        custom = {(layout.CLASS_PCIE, 0x0000): 'CUSTOM LINK UP',
+                  (layout.CLASS_SMBUS_I2C_I3C, 0x0003): 'CUSTOM NACK'}
+        self._assert_smallest_events(
+            {**custom, (layout.CLASS_PCIE, 0x0001): 'Link Down'},
+            strings(event_strings=custom))
+
+    def test_reserved_and_vendor_unique_event_ids_stay_unnamed(self):
+        """Reserved, obsolete and vendor unique Event IDs of the spec's
+        classes have no name to fall back to, nor does any Event ID of a
+        reserved or vendor unique class."""
+        self._assert_smallest_events({
+            (layout.CLASS_TIMESTAMP, 0x0002): '',
+            (layout.CLASS_PCIE, 0x0008): '',
+            (layout.CLASS_NVME, 0x0004): '',
+            (layout.CLASS_NVME, 0x0011): '',
+            (layout.CLASS_RESET, 0x7FFF): '',
+            (layout.CLASS_MEDIA, 0x8000): '',
+            (layout.CLASS_MEDIA_WEAR, 0x0001): '',
+            (layout.CLASS_VIRTUAL_FIFO, 0x0002): '',
+            (layout.CLASS_SMBUS_I2C_I3C, 0x0004): '',
+            (layout.CLASS_MCTP, 0xFFFF): '',
+        })
+        self.assert_events(
+            one_fifo(layout.event(0x0E, 0x0000), layout.event(0x80, 0x0000)),
+            strings(), [
+                {**common(0x0E, 0x0000, 0), 'Class Specific Data': ''},
+                {**common(0x80, 0x0000, 0), 'VU Data': ''},
+            ])
+
+    def test_vu_identifiers_get_no_spec_names(self):
+        """A VU Event Identifier or a VU Virtual FIFO Identifier of 0000h
+        is vendor defined, even where Event ID 0000h of the same class has
+        a spec name."""
+        fifo_id = layout.virtual_fifo_id(0, 0)
+        telemetry = one_fifo(
+            layout.event(layout.CLASS_RESET, 0x0000,
+                         layout.vu_part(0x0000, bytes.fromhex('1122'))),
+            layout.virtual_fifo_event(fifo_id, 0x0000))
+        self.assert_events(telemetry, strings(), [
+            {**common(layout.CLASS_RESET, 0x0000, 1,
+                      'PCIe Conventional Hot Reset'),
+             **vu_fields(0x0000, bytes.fromhex('1122'))},
+            virtual_fifo(fifo_id, event_string='Virtual FIFO Start'),
+        ])
+
     def _snapshot_fifo(self):
         stat = layout.statistic(0x22, b'12345678', behavior=2, nsid=3,
                                 ns_valid=True)
@@ -766,10 +891,8 @@ class TestEventClassDecode(EventFifoTestBase):
         events = self.fifo_events(self._snapshot_fifo(), strings())
         self.assertEqual(events[-1], PCIE_EXPECTED)
 
-    @unittest.expectedFailure
     def test_statistic_snapshot_in_json(self):
-        """Defect: the JSON printer builds the snapshot's object but never
-        adds it to the FIFO's event array."""
+        """The snapshot reports its class and the statistic it carries."""
         events = self.fifo_events(self._snapshot_fifo(), strings())
         self.assertEqual(events, [self._SNAPSHOT_EXPECTED, PCIE_EXPECTED])
 
@@ -1060,6 +1183,21 @@ class TestEventFifoLayout(EventFifoTestBase):
             da1_blocks=blocks, da2_blocks=1)
         self.assert_rejected(telemetry, strings(), INVALID_BOUNDS_MSG)
 
+    def test_fifo_past_the_end_of_the_log_is_rejected(self):
+        """A log cut short inside a FIFO does not hold the FIFO its OCP
+        header declares."""
+        telemetry = one_fifo(PCIE_EVENT, PCIE_EVENT)
+        cut = layout.DA1_START + layout.DA1_HEADER_SIZE + layout.DWORD
+        self.assert_rejected(telemetry[:cut], strings(), INVALID_BOUNDS_MSG)
+
+    def test_data_area_2_ending_before_data_area_1_is_empty(self):
+        """A Data Area 2 last block below Data Area 1's leaves Data Area 2
+        with nothing in it, so a FIFO placed there is out of bounds."""
+        telemetry = one_fifo(PCIE_EVENT, da=2,
+                             overlay={layout.HDR_DALB2: struct.pack('<H', 0)})
+        self.assert_rejected(telemetry, strings(), INVALID_BOUNDS_MSG,
+                             args=('-a', '2'))
+
     def test_zero_size_fifo_is_rejected(self):
         """A FIFO assigned to a data area has to hold something."""
         telemetry = layout.pack_telemetry(fifos={1: layout.Fifo(1)})
@@ -1093,6 +1231,98 @@ class TestDecodeFailureExitStatus(EventFifoTestBase):
         """Defect: parse_ocp_telemetry_log() returns 0 whatever the
         printer reported."""
         self._assert_fails(layout.pack_telemetry(fifos={1: layout.Fifo(1)}))
+
+
+# Far enough past any fixture that reading there faults rather than
+# landing in some other heap allocation.
+FAR_DW = 1 << 28
+# Scaled to bytes, this wraps to 16: a size that looks small once
+# multiplied out but cannot be held by the log.
+WRAPPING_DW = (1 << 62) + 4
+
+
+class TestStringLogBounds(EventFifoTestBase):
+    """String log table starts, sizes and ASCII offsets are checked
+    against the string log file, so a bad one leaves the event unnamed
+    instead of reading past the file."""
+
+    FIFO_ID = layout.virtual_fifo_id(3, 0x12)
+
+    def _log(self, overlay=None):
+        return strings(
+            event_strings={(layout.CLASS_VIRTUAL_FIFO, 0x21): 'VFIFO EVT'},
+            vu_event_strings={(layout.CLASS_VIRTUAL_FIFO, self.FIFO_ID):
+                              'VF3.18'},
+            overlay=overlay)
+
+    def _assert_names(self, overlay, event_string='VFIFO EVT',
+                      vfifo_string='VF3.18'):
+        telemetry = one_fifo(layout.virtual_fifo_event(self.FIFO_ID, 0x21))
+        self.assert_events(telemetry, self._log(overlay), [
+            virtual_fifo(self.FIFO_ID, event_id=0x21,
+                         event_string=event_string,
+                         vfifo_string=vfifo_string,
+                         phys_string='PHYS FIFO 03'),
+        ])
+
+    def _header(self, field):
+        """The value the header field at @field holds in the unpatched
+        string log."""
+        return struct.unpack_from('<Q', self._log(), field)[0]
+
+    def test_unpatched_log_names_every_event(self):
+        self._assert_names(None)
+
+    def test_event_table_out_of_bounds(self):
+        for overlay in ({layout.STR_ESTS: struct.pack('<Q', FAR_DW)},
+                        {layout.STR_ESTSZ: struct.pack('<Q', WRAPPING_DW)}):
+            with self.subTest(overlay=overlay):
+                self._assert_names(overlay, event_string='')
+
+    def test_vu_event_table_out_of_bounds(self):
+        for overlay in ({layout.STR_VU_ESTS: struct.pack('<Q', FAR_DW)},
+                        {layout.STR_VU_ESTSZ: struct.pack('<Q', WRAPPING_DW)}):
+            with self.subTest(overlay=overlay):
+                self._assert_names(overlay, vfifo_string='')
+
+    def test_ascii_table_out_of_bounds(self):
+        for overlay in ({layout.STR_ASCTS: struct.pack('<Q', FAR_DW)},
+                        {layout.STR_ASCTSZ: struct.pack('<Q', WRAPPING_DW)}):
+            with self.subTest(overlay=overlay):
+                self._assert_names(overlay, event_string='', vfifo_string='')
+
+    def test_ascii_offset_past_the_ascii_table(self):
+        """Only the entry with the bad offset loses its name."""
+        ests = self._header(layout.STR_ESTS)
+        entry_offset = ests * layout.DWORD + 4
+        self._assert_names({entry_offset: struct.pack('<Q', FAR_DW)},
+                           event_string='')
+
+    def test_ascii_string_running_past_the_ascii_table(self):
+        """'VF3.18' is the last string in the ASCII table, so a longer
+        length runs off the end of the table and the file."""
+        vu_ests = self._header(layout.STR_VU_ESTS)
+        length_offset = vu_ests * layout.DWORD + 3
+        self._assert_names({length_offset: bytes([200])}, vfifo_string='')
+
+    def test_unusable_entry_leaves_a_spec_event_id_its_spec_name(self):
+        """An entry skipped for a bad ASCII offset names nothing, so a
+        spec-defined Event ID still gets its spec name."""
+        event_strings = {(layout.CLASS_PCIE, 0x0000): 'CUSTOM LINK UP'}
+        ests = struct.unpack_from('<Q', strings(event_strings=event_strings),
+                                  layout.STR_ESTS)[0]
+        log = strings(event_strings=event_strings,
+                      overlay={ests * layout.DWORD + 4:
+                               struct.pack('<Q', FAR_DW)})
+        self.assertNotIn((layout.CLASS_PCIE, 0x0000),
+                         layout.string_tables(log).events)
+        size = layout.CLASS_SPECIFIC_SIZE[layout.CLASS_PCIE]
+        data = bytes(range(0x10, 0x10 + size))
+        self.assert_events(
+            one_fifo(layout.event(layout.CLASS_PCIE, 0x0000, data)), log, [
+                {**common(layout.CLASS_PCIE, 0x0000, size // 4, 'Link Up'),
+                 'Class Specific Data': layout.hex_upper(data)},
+            ])
 
 
 if __name__ == '__main__':

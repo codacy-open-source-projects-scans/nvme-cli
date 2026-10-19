@@ -264,11 +264,7 @@ static int get_hwcomp_log(struct libnvme_transport_handle *hdl, __u32 id, bool l
 		.desc = NULL,
 	};
 
-	ret = validate_output_format(nvme_args.output_format, &fmt);
-	if (ret < 0) {
-		nvme_show_error("error: ocp: invalid output format");
-		return ret;
-	}
+	fmt = nvme_args.output_flags;
 
 	ret = get_hwcomp_log_data(hdl, &log);
 	if (ret) {
@@ -314,8 +310,11 @@ int ocp_hwcomp_log(int argc, char **argv, struct command *acmd, struct plugin *p
 		VAL_END()
 	};
 
-	NVME_ARGS(opts, OPT_LONG("comp-id", 'i', &cfg.id, id_desc, id),
-		  OPT_FLAG("list", 'l', &cfg.list, list_desc));
+	OPT_ARGS(opts) = {
+		OPT_LONG("comp-id", 'i', &cfg.id,   id_desc, id),
+		OPT_FLAG("list",    'l', &cfg.list, list_desc),
+		OPT_END()
+	};
 
 	ret = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (ret)

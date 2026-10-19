@@ -190,6 +190,9 @@ __shr_public int libnvme_reset_ctrl(struct libnvme_transport_handle *hdl)
 	if (!libnvme_transport_handle_is_ctrl(hdl))
 		return -EINVAL;
 
+	if (__libnvme_dry_run(hdl, "controller reset"))
+		return 0;
+
 	entry = libnvme_ctrl_map_lookup(hdl->ctx,
 					libnvme_transport_handle_get_name(hdl));
 	if (!entry)
@@ -212,6 +215,9 @@ __shr_public int libnvme_rescan_ns(struct libnvme_transport_handle *hdl)
 	 * but we can cause the system to invalidate its cached partition table
 	 * and re-enumerate the device.
 	 */
+	if (__libnvme_dry_run(hdl, "namespace rescan"))
+		return 0;
+
 	if (!DeviceIoControl(hdl->fd, IOCTL_DISK_UPDATE_PROPERTIES,
 			NULL, 0, NULL, 0, NULL, NULL)) {
 		errno = get_errno_from_error(GetLastError());
@@ -262,6 +268,29 @@ __shr_public int libnvme_reread_partitions(struct libnvme_transport_handle *hdl)
 		return -errno;
 	}
 	return 0;
+}
+
+__shr_public int libnvme_read_regs(
+		__shr_unused struct libnvme_transport_handle *hdl,
+		__shr_unused __u32 offset, __shr_unused void *buf,
+		__shr_unused __u32 len)
+{
+	return -ENOTSUP;
+}
+
+__shr_public int libnvme_write_reg32(
+		__shr_unused struct libnvme_transport_handle *hdl,
+		__shr_unused __u32 offset, __shr_unused __u32 value)
+{
+	return -ENOTSUP;
+}
+
+__shr_public int libnvme_write_reg64(
+		__shr_unused struct libnvme_transport_handle *hdl,
+		__shr_unused __u32 offset, __shr_unused __u64 value,
+		__shr_unused bool mmio32)
+{
+	return -ENOTSUP;
 }
 
 /*
@@ -2457,8 +2486,11 @@ __shr_public int libnvme_exec_io_passthru(
 
 	cmd->result = 0;
 
-	if (hdl->type == LIBNVME_TRANSPORT_HANDLE_TYPE_LOOPBACK)
+	if (hdl->type == LIBNVME_TRANSPORT_HANDLE_TYPE_LOOPBACK) {
+		if (hdl->ctx->dry_run)
+			return __libnvme_exec_dry_run(hdl, cmd);
 		return __libnvme_loopback_io_passthru(hdl, cmd);
+	}
 
 	switch (cmd->opcode) {
 	case nvme_cmd_flush:
@@ -2501,8 +2533,11 @@ __shr_public int libnvme_exec_admin_passthru(
 	if (!hdl || !cmd)
 		return -EINVAL;
 
-	if (hdl->type == LIBNVME_TRANSPORT_HANDLE_TYPE_LOOPBACK)
+	if (hdl->type == LIBNVME_TRANSPORT_HANDLE_TYPE_LOOPBACK) {
+		if (hdl->ctx->dry_run)
+			return __libnvme_exec_dry_run(hdl, cmd);
 		return __libnvme_loopback_admin_passthru(hdl, cmd);
+	}
 
 	if (hdl->type != LIBNVME_TRANSPORT_HANDLE_TYPE_DIRECT)
 		return -ENOTSUP;

@@ -44,7 +44,7 @@ static bool is_ns_mgmt_support(struct libnvme_transport_handle *hdl)
 	if (err)
 		return false;
 
-	return le16_to_cpu(ctrl->oacs) & NVME_CTRL_OACS_NS_MGMT;
+	return le16_to_cpu(ctrl->oacs) & NVME_CTRL_OACS_NMS;
 }
 
 static void ns_mgmt_show_status(struct libnvme_transport_handle *hdl, int err, char *cmd, __u32 nsid)
@@ -76,7 +76,6 @@ static int delete_ns(int argc, char **argv, struct command *acmd, struct plugin 
 	__cleanup_nvme_transport_handle struct libnvme_transport_handle *hdl = NULL;
 	__cleanup_nvme_global_ctx struct libnvme_global_ctx *ctx = NULL;
 	struct libnvme_passthru_cmd cmd;
-	nvme_print_flags_t flags;
 	int err;
 
 	struct config {
@@ -89,19 +88,16 @@ static int delete_ns(int argc, char **argv, struct command *acmd, struct plugin 
 		.namespace_id	= 0,
 	};
 
-	NVME_ARGS(opts,
-		  OPT_FLAG("ish",          'I', &cfg.ish,          ish),
-		  OPT_UINT("namespace-id", 'n', &cfg.namespace_id, namespace_id));
+	OPT_ARGS(opts) = {
+		OPT_FLAG("ish",          'I', &cfg.ish,          ish),
+		OPT_UINT("namespace-id", 'n', &cfg.namespace_id, namespace_id,
+			 nvme_nsid_values),
+		OPT_END()
+	};
 
 	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err)
 		return err;
-
-	err = validate_output_format(nvme_args.output_format, &flags);
-	if (err < 0) {
-		nvme_show_error("Invalid output format");
-		return err;
-	}
 
 	if (!cfg.namespace_id) {
 		err = libnvme_get_nsid(hdl, &cfg.namespace_id);
@@ -132,7 +128,6 @@ static int nvme_attach_ns(int argc, char **argv, int attach, const char *desc, s
 	__cleanup_libnvme_free struct nvme_ctrl_list *cntlist = NULL;
 	__u16 list[NVME_ID_CTRL_LIST_MAX];
 	struct libnvme_passthru_cmd cmd;
-	nvme_print_flags_t flags;
 	int err, num;
 
 	const char *namespace_id = "namespace to attach";
@@ -150,20 +145,17 @@ static int nvme_attach_ns(int argc, char **argv, int attach, const char *desc, s
 		.cntlist	= "",
 	};
 
-	NVME_ARGS(opts,
-		  OPT_FLAG("ish",          'I', &cfg.ish,     ish),
-		  OPT_UINT("namespace-id", 'n', &cfg.nsid,    namespace_id),
-		  OPT_LIST("controllers",  'c', &cfg.cntlist, cont));
+	OPT_ARGS(opts) = {
+		OPT_FLAG("ish",          'I', &cfg.ish,     ish),
+		OPT_UINT("namespace-id", 'n', &cfg.nsid, namespace_id,
+			 nvme_nsid_values),
+		OPT_LIST("controllers",  'c', &cfg.cntlist, cont),
+		OPT_END()
+	};
 
 	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err)
 		return err;
-
-	err = validate_output_format(nvme_args.output_format, &flags);
-	if (err < 0) {
-		nvme_show_error("Invalid output format");
-		return err;
-	}
 
 	if (libnvme_transport_handle_is_ns(hdl)) {
 		nvme_show_error("%s: a namespace device opened (dev: %s, nsid: %d)", acmd->name,
@@ -186,7 +178,7 @@ static int nvme_attach_ns(int argc, char **argv, int attach, const char *desc, s
 	if (!cntlist)
 		return -ENOMEM;
 
-	if (argconfig_parse_seen(opts, "controllers")) {
+	if (argconfig_given(opts, &cfg.cntlist)) {
 		nvme_init_ctrl_list(cntlist, num, list);
 	} else {
 		struct nvme_id_ctrl ctrl = { 0 };
@@ -251,7 +243,7 @@ static int parse_lba_num_si(struct libnvme_transport_handle *hdl, const char *op
 	unsigned int remainder;
 	char *endptr;
 	int err = -EINVAL;
-	int lbas;
+	unsigned int data_size, lbas;
 
 	if (!val)
 		return 0;
@@ -302,7 +294,12 @@ static int parse_lba_num_si(struct libnvme_transport_handle *hdl, const char *op
 	}
 
 	nvme_id_ns_flbas_to_lbaf_inuse(flbas, &lbaf);
-	lbas = (1 << ns->lbaf[lbaf].ds) + le16_to_cpu(ns->lbaf[lbaf].ms);
+	data_size = nvme_lbaf_data_size(ns->lbaf[lbaf].ds);
+	if (!data_size) {
+		nvme_show_error("invalid LBA format %u", lbaf);
+		return -EINVAL;
+	}
+	lbas = data_size + le16_to_cpu(ns->lbaf[lbaf].ms);
 
 	err = shr_suffix_si_parse(val, &endptr, (uint64_t *)num);
 	if (err) {
@@ -361,7 +358,6 @@ static int create_ns(int argc, char **argv, struct command *acmd, struct plugin 
 	__u64 align_ncap = align_nsze;
 	struct libnvme_passthru_cmd cmd;
 	uint16_t phndl[128] = { 0, };
-	nvme_print_flags_t flags;
 	uint16_t num_phandle;
 	int err = 0, i;
 	__u32 nsid;
@@ -412,37 +408,33 @@ static int create_ns(int argc, char **argv, struct command *acmd, struct plugin 
 		.phndls		= "",
 	};
 
-	NVME_ARGS(opts,
-		  OPT_FLAG("ish",          'I', &cfg.ish,      ish),
-		  OPT_SUFFIX("nsze",       's', &cfg.nsze,     nsze),
-		  OPT_SUFFIX("ncap",       'c', &cfg.ncap,     ncap),
-		  OPT_BYTE("flbas",        'f', &cfg.flbas,    flbas),
-		  OPT_BYTE("dps",          'd', &cfg.dps,      dps),
-		  OPT_BYTE("nmic",         'm', &cfg.nmic,     nmic),
-		  OPT_UINT("anagrp-id",    'a', &cfg.anagrpid, anagrpid),
-		  OPT_SHRT("nvmset-id",    'i', &cfg.nvmsetid, nvmsetid),
-		  OPT_SHRT("endg-id",      'e', &cfg.endgid,   endgid),
-		  OPT_SUFFIX("block-size", 'b', &cfg.bs,       bs),
-		  OPT_BYTE("csi",          'y', &cfg.csi,      csi),
-		  OPT_SUFFIX("lbstm",      'l', &cfg.lbstm,    lbstm),
-		  OPT_SHRT("nphndls",      'n', &cfg.nphndls,  nphndls),
-		  OPT_STR("nsze-si",       'S', &cfg.nsze_si,  nsze_si),
-		  OPT_STR("ncap-si",       'C', &cfg.ncap_si,  ncap_si),
-		  OPT_FLAG("azr",          'z', &cfg.azr,      azr),
-		  OPT_UINT("rar",          'r', &cfg.rar,      rar),
-		  OPT_UINT("ror",          'O', &cfg.ror,      ror),
-		  OPT_UINT("rnumzrwa",     'u', &cfg.rnumzrwa, rnumzrwa),
-		  OPT_LIST("phndls",       'p', &cfg.phndls,   phndls));
+	OPT_ARGS(opts) = {
+		OPT_FLAG("ish",          'I', &cfg.ish,      ish),
+		OPT_SUFFIX("nsze",       's', &cfg.nsze,     nsze),
+		OPT_SUFFIX("ncap",       'c', &cfg.ncap,     ncap),
+		OPT_BYTE("flbas",        'f', &cfg.flbas,    flbas),
+		OPT_BYTE("dps",          'd', &cfg.dps,      dps),
+		OPT_BYTE("nmic",         'm', &cfg.nmic,     nmic),
+		OPT_UINT("anagrp-id",    'a', &cfg.anagrpid, anagrpid),
+		OPT_SHRT("nvmset-id",    'i', &cfg.nvmsetid, nvmsetid),
+		OPT_SHRT("endg-id",      'e', &cfg.endgid,   endgid),
+		OPT_SUFFIX("block-size", 'b', &cfg.bs,       bs),
+		OPT_BYTE("csi",          'y', &cfg.csi,      csi),
+		OPT_SUFFIX("lbstm",      'l', &cfg.lbstm,    lbstm),
+		OPT_SHRT("nphndls",      'n', &cfg.nphndls,  nphndls),
+		OPT_STR("nsze-si",       'S', &cfg.nsze_si,  nsze_si),
+		OPT_STR("ncap-si",       'C', &cfg.ncap_si,  ncap_si),
+		OPT_FLAG("azr",          'z', &cfg.azr,      azr),
+		OPT_UINT("rar",          'r', &cfg.rar,      rar),
+		OPT_UINT("ror",          'O', &cfg.ror,      ror),
+		OPT_UINT("rnumzrwa",     'u', &cfg.rnumzrwa, rnumzrwa),
+		OPT_LIST("phndls",       'p', &cfg.phndls,   phndls),
+		OPT_END()
+	};
 
 	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err)
 		return err;
-
-	err = validate_output_format(nvme_args.output_format, &flags);
-	if (err < 0) {
-		nvme_show_error("Invalid output format");
-		return err;
-	}
 
 	if (cfg.flbas != 0xff && cfg.bs != 0x00) {
 		nvme_show_error(
@@ -469,8 +461,9 @@ static int create_ns(int argc, char **argv, struct command *acmd, struct plugin 
 			nvme_show_err(err, "identify-namespace");
 			return err;
 		}
-		for (i = 0; i <= ns->nlbaf; ++i) {
-			if ((1 << ns->lbaf[i].ds) == cfg.bs && ns->lbaf[i].ms == 0) {
+		for (i = 0; i < nvme_id_ns_nr_lbaf(ns); ++i) {
+			if (nvme_lbaf_data_size(ns->lbaf[i].ds) == cfg.bs &&
+			    ns->lbaf[i].ms == 0) {
 				cfg.flbas = i;
 				break;
 			}
@@ -600,19 +593,14 @@ static int get_ns_id(int argc, char **argv, struct command *acmd, struct plugin 
 	__cleanup_nvme_transport_handle struct libnvme_transport_handle *hdl = NULL;
 	unsigned int nsid;
 	int err;
-	nvme_print_flags_t flags;
 
-	NVME_ARGS(opts);
+	OPT_ARGS(opts) = {
+		OPT_END()
+	};
 
 	err = parse_and_open(&ctx, &hdl, argc, argv, desc, opts);
 	if (err)
 		return err;
-
-	err = validate_output_format(nvme_args.output_format, &flags);
-	if (err < 0) {
-		nvme_show_error("Invalid output format");
-		return err;
-	}
 
 	err = libnvme_get_nsid(hdl, &nsid);
 	if (err < 0) {

@@ -7,6 +7,8 @@
 
 #include <ccan/array_size/array_size.h>
 #include <ccan/endian/endian.h>
+#include <shared/hex-util.h>
+#include <shared/string-util.h>
 
 #include "nvme-print.h"
 #include "ocp-telemetry-decode.h"
@@ -124,6 +126,125 @@ struct statistic_entry statistic_identifiers_map[] = {
 	{ 0x6D, "Namespace ID Context Statistic Descriptor"},
 	{ 0x6E, "Controller ID Context Statistic Descriptor"},
 	{ 0x6F, "Queue ID Context Statistic Descriptor"}
+};
+
+/* OCP 2.7 Section 4.9.15.2 Event IDs; reserved and obsolete IDs are NULL. */
+static const char * const timestamp_event_id_str[] = {
+	[0x0000] = "Host issued a Timestamp Set Feature Command (Feature ID Eh)",
+	[0x0001] = "Firmware initiated Timestamp Snapshot",
+};
+
+static const char * const pcie_event_id_str[] = {
+	[0x0000] = "Link Up",
+	[0x0001] = "Link Down",
+	[0x0002] = "PCIe Error Detected",
+	[0x0003] = "PERST# Asserted",
+	[0x0004] = "PERST# De-asserted",
+	[0x0005] = "Refclk Stable",
+	[0x0006] = "Vmain Stable",
+	[0x0007] = "Link Speed and Width Negotiated",
+};
+
+static const char * const nvme_event_id_str[] = {
+	[0x0000] = "CC.EN transitions from 0b to 1b",
+	[0x0001] = "CC.EN transitions from 1b to 0b",
+	[0x0002] = "CSTS.RDY transitions from 0b to 1b",
+	[0x0003] = "CSTS.RDY transitions from 1b to 0b",
+	[0x0005] = "Create I/O Submission Queue Command or Create I/O Completion Queue Command Processed successfully",
+	[0x0006] = "In-band Admin Command Processed other than Create I/O Submission Queue Command or Create I/O Completion Queue Command Processed successfully",
+	[0x0007] = "An Admin command returned a non-zero Status Code",
+	[0x0008] = "An I/O Command Returned a Non-zero Status Code",
+	[0x0009] = "CSTS.CFS transitioned from 0b to 1b",
+	[0x000A] = "Admin Submission Queue Base Address Written (AQA) or Admin Completion Queue Based Address (ACQ) written",
+	[0x000B] = "Controller Configuration Register (CC) Changed except for the cases that are covered in 0000h and 0001h",
+	[0x000C] = "Controller Status Register (CSTS) Changed except for the cases that are covered in 0002h, 0003h, and 0009h",
+	[0x000D] = "Delete I/O Completion Queue Command or Delete I/O Submission Queue Command Processed",
+	[0x000E] = "Out-of-band Command Processed",
+	[0x000F] = "Out-of-band Asynchronous Event Message Transmitted",
+	[0x0010] = "Error Reporting AEN was sent (see EREC-5)",
+};
+
+static const char * const reset_event_id_str[] = {
+	[0x0000] = "PCIe Conventional Hot Reset",
+	[0x0001] = "Main Power Cycle",
+	[0x0002] = "PERST#",
+	[0x0003] = "PCIe Function Level Reset",
+	[0x0004] = "NVM Subsystem Reset",
+};
+
+static const char * const boot_sequence_event_id_str[] = {
+	[0x0000] = "Main Firmware Boot Complete",
+	[0x0001] = "FTL Load from NVM Complete",
+	[0x0002] = "FTL Rebuild Started",
+	[0x0003] = "FTL Rebuild Complete",
+};
+
+static const char * const firmware_assert_event_id_str[] = {
+	[0x0000] = "Assert in NVMe Processing Code",
+	[0x0001] = "Assert in Media Code",
+	[0x0002] = "Assert in Security Code",
+	[0x0003] = "Assert in Background Services Code",
+	[0x0004] = "FTL Rebuild Failed",
+	[0x0005] = "FTL Data Mismatch",
+	[0x0006] = "Assert in Other Code",
+};
+
+static const char * const temperature_event_id_str[] = {
+	[0x0000] = "Composite Temperature decreases to (WCTEMP - 2)",
+	[0x0001] = "Composite Temperature increases to WCTEMP",
+	[0x0002] = "Composite Temperature increases to reach CCTEMP",
+};
+
+static const char * const media_event_id_str[] = {
+	[0x0000] = "XOR (or equivalent) Recovery Invoked",
+	[0x0001] = "Uncorrectable Media Error",
+	[0x0002] = "Block Marked Bad Due to Program Error",
+	[0x0003] = "Block Marked Bad Due to Erase Error",
+	[0x0004] = "Block Marked Bad Due to Read Error",
+	[0x0005] = "Plane Failure Event",
+};
+
+static const char * const media_wear_event_id_str[] = {
+	[0x0000] = "Media Wear",
+};
+
+static const char * const virtual_fifo_event_id_str[] = {
+	[0x0000] = "Virtual FIFO Start",
+	[0x0001] = "Virtual FIFO End",
+};
+
+static const char * const smbus_event_id_str[] = {
+	[0x0000] = "Timeout Errors",
+	[0x0001] = "PEC Errors",
+	[0x0002] = "Arbitration loss",
+	[0x0003] = "NACK error",
+};
+
+static const char * const mctp_event_id_str[] = {
+	[0x0000] = "Dropped Packet",
+	[0x0001] = "Dropped Message",
+	[0x0002] = "Discovery and addressing errors",
+	[0x0003] = "Error Status",
+};
+
+#define EVENT_IDS(t) { t, ARRAY_SIZE(t) }
+
+static const struct {
+	const char * const *str;
+	size_t count;
+} spec_event_id_str[] = {
+	[TIME_STAMP_CLASS_TYPE] = EVENT_IDS(timestamp_event_id_str),
+	[PCIE_CLASS_TYPE] = EVENT_IDS(pcie_event_id_str),
+	[NVME_CLASS_TYPE] = EVENT_IDS(nvme_event_id_str),
+	[RESET_CLASS_TYPE] = EVENT_IDS(reset_event_id_str),
+	[BOOT_SEQUENCE_CLASS_TYPE] = EVENT_IDS(boot_sequence_event_id_str),
+	[FIRMWARE_ASSERT_CLASS_TYPE] = EVENT_IDS(firmware_assert_event_id_str),
+	[TEMPERATURE_CLASS_TYPE] = EVENT_IDS(temperature_event_id_str),
+	[MEDIA_CLASS_TYPE] = EVENT_IDS(media_event_id_str),
+	[MEDIA_WEAR_CLASS_TYPE] = EVENT_IDS(media_wear_event_id_str),
+	[VIRTUAL_FIFO_EVENT_CLASS_TYPE] = EVENT_IDS(virtual_fifo_event_id_str),
+	[SMBUS_I2C_I3C_EVENT_CLASS_TYPE] = EVENT_IDS(smbus_event_id_str),
+	[MCTP_EVENT_CLASS_TYPE] = EVENT_IDS(mctp_event_id_str),
 };
 
 struct request_data host_log_page_header[] = {
@@ -317,7 +438,7 @@ void json_add_formatted_u32_str(struct json_object *pobject, const char *msg, un
 {
 	char data_str[70] = { 0 };
 
-	sprintf(data_str, "0x%x", pdata);
+	snprintf(data_str, sizeof(data_str), "0x%x", pdata);
 	json_object_add_value_string(pobject, msg, data_str);
 }
 
@@ -325,27 +446,36 @@ void json_add_formatted_var_size_str(struct json_object *pobject, const char *ms
 	unsigned int data_size)
 {
 	char *description_str = NULL;
-	char temp_buffer[3] = { 0 };
+	size_t size = data_size * 2 + 1;
 
-	/* Allocate 2 chars for each value in the data + 2 bytes for the null terminator */
-	description_str = (char *) calloc(1, data_size*2 + 2);
+	/* 2 chars for each value in the data and the null terminator */
+	description_str = (char *) calloc(1, size);
 	if (!description_str) {
 		nvme_show_error("Failed to allocate description buffer");
 		return;
 	}
 
-	for (size_t i = 0; i < data_size; ++i) {
-		sprintf(temp_buffer, "%02X", pdata[i]);
-		strcat(description_str, temp_buffer);
-	}
+	shr_bin_to_hex(description_str, size, pdata, data_size, SHR_HEX_UPPER);
 
 	json_object_add_value_string(pobject, msg, description_str);
 	free(description_str);
 }
 
+/*
+ * A log can hold fewer data areas than its header describes, so each data
+ * area is cut to the bytes actually read.
+ */
+static __u64 telemetry_da_size(__u64 start, __u64 end, size_t buf_len)
+{
+	if (end > buf_len)
+		end = buf_len;
+
+	return end > start ? end - start : 0;
+}
+
 int get_telemetry_das_offset_and_size(
 	struct nvme_ocp_telemetry_common_header *ptelemetry_common_header,
-	struct nvme_ocp_telemetry_offsets *ptelemetry_das_offset)
+	size_t buf_len, struct nvme_ocp_telemetry_offsets *ptelemetry_das_offset)
 {
 	if (NULL == ptelemetry_common_header || NULL == ptelemetry_das_offset) {
 		nvme_show_error("Invalid input arguments.");
@@ -361,28 +491,34 @@ int get_telemetry_das_offset_and_size(
 	else
 		return -1;
 
-	__u16 da1_last_block = le16_to_cpu(ptelemetry_common_header->da1_last_block);
-	__u16 da2_last_block = le16_to_cpu(ptelemetry_common_header->da2_last_block);
-	__u16 da3_last_block = le16_to_cpu(ptelemetry_common_header->da3_last_block);
-	__u32 da4_last_block = le32_to_cpu(ptelemetry_common_header->da4_last_block);
+	__u64 header_size = ptelemetry_das_offset->header_size;
+	__u64 da1_end = header_size + (__u64)le16_to_cpu(ptelemetry_common_header->da1_last_block) *
+		OCP_TELEMETRY_DATA_BLOCK_SIZE;
+	__u64 da2_end = header_size + (__u64)le16_to_cpu(ptelemetry_common_header->da2_last_block) *
+		OCP_TELEMETRY_DATA_BLOCK_SIZE;
+	__u64 da3_end = header_size + (__u64)le16_to_cpu(ptelemetry_common_header->da3_last_block) *
+		OCP_TELEMETRY_DATA_BLOCK_SIZE;
+	__u64 da4_end = header_size + (__u64)le32_to_cpu(ptelemetry_common_header->da4_last_block) *
+		OCP_TELEMETRY_DATA_BLOCK_SIZE;
 
-	ptelemetry_das_offset->da1_start_offset = ptelemetry_das_offset->header_size;
-	ptelemetry_das_offset->da1_size = da1_last_block * OCP_TELEMETRY_DATA_BLOCK_SIZE;
+	ptelemetry_das_offset->da1_start_offset = header_size;
+	ptelemetry_das_offset->da1_size =
+		telemetry_da_size(ptelemetry_das_offset->da1_start_offset, da1_end, buf_len);
 
 	ptelemetry_das_offset->da2_start_offset = ptelemetry_das_offset->da1_start_offset +
 		ptelemetry_das_offset->da1_size;
 	ptelemetry_das_offset->da2_size =
-		(da2_last_block - da1_last_block) * OCP_TELEMETRY_DATA_BLOCK_SIZE;
+		telemetry_da_size(ptelemetry_das_offset->da2_start_offset, da2_end, buf_len);
 
 	ptelemetry_das_offset->da3_start_offset = ptelemetry_das_offset->da2_start_offset +
 		ptelemetry_das_offset->da2_size;
 	ptelemetry_das_offset->da3_size =
-		(da3_last_block - da2_last_block) * OCP_TELEMETRY_DATA_BLOCK_SIZE;
+		telemetry_da_size(ptelemetry_das_offset->da3_start_offset, da3_end, buf_len);
 
 	ptelemetry_das_offset->da4_start_offset = ptelemetry_das_offset->da3_start_offset +
 		ptelemetry_das_offset->da3_size;
 	ptelemetry_das_offset->da4_size =
-		(da4_last_block - da3_last_block) * OCP_TELEMETRY_DATA_BLOCK_SIZE;
+		telemetry_da_size(ptelemetry_das_offset->da4_start_offset, da4_end, buf_len);
 
 	return 0;
 }
@@ -402,134 +538,133 @@ static size_t ocp_ascii_id_copy_len(__u8 ascii_id_length)
 	return copy_len;
 }
 
+static int ocp_copy_ascii_id(__le64 ascii_id_offset, __u8 ascii_id_length, char *description)
+{
+	struct nvme_ocp_telemetry_string_header *pocp_ts_header =
+		(struct nvme_ocp_telemetry_string_header *)pstring_buffer;
+	__u64 ascts = le64_to_cpu(pocp_ts_header->ascts);
+	__u64 asctsz = le64_to_cpu(pocp_ts_header->asctsz);
+	__u64 offset = le64_to_cpu(ascii_id_offset);
+	size_t copy_len = ocp_ascii_id_copy_len(ascii_id_length);
+
+	/* With the ASCII table inside the log, neither product can overflow. */
+	if (!ocp_c9_table_fits(ascts, asctsz, pstring_buffer_size) || offset > asctsz ||
+	    copy_len > (asctsz - offset) * SIZE_OF_DWORD)
+		return -1;
+
+	memcpy(description, pstring_buffer + (ascts + offset) * SIZE_OF_DWORD, copy_len);
+	description[copy_len] = '\0';
+
+	return 0;
+}
+
 int get_statistic_id_ascii_string(int identifier, char *description)
 {
+	struct nvme_ocp_telemetry_string_header *pocp_ts_header;
+	struct nvme_ocp_statistics_identifier_string_table *entry;
+	__u64 entries = 0, i;
+	__u8 *table;
+
 	if (!pstring_buffer || !description)
 		return -1;
 
-	struct nvme_ocp_telemetry_string_header *pocp_ts_header =
-		(struct nvme_ocp_telemetry_string_header *)pstring_buffer;
+	pocp_ts_header = (struct nvme_ocp_telemetry_string_header *)pstring_buffer;
+	table = ocp_string_table(pstring_buffer, pstring_buffer_size,
+				 le64_to_cpu(pocp_ts_header->sits),
+				 le64_to_cpu(pocp_ts_header->sitsz), sizeof(*entry), &entries);
 
-	//Calculating the sizes of the tables. Note: Data is present in the form of DWORDS,
-	//So multiplying with sizeof(DWORD)
-	unsigned long long sits_table_size = le64_to_cpu(pocp_ts_header->sitsz) * SIZE_OF_DWORD;
+	for (i = 0; table && i < entries; i++) {
+		entry = (struct nvme_ocp_statistics_identifier_string_table *)
+			(table + i * sizeof(*entry));
 
-	//Calculating number of entries present in all 3 tables
-	int sits_entries = (int)sits_table_size /
-		sizeof(struct nvme_ocp_statistics_identifier_string_table);
-
-	for (int sits_entry = 0; sits_entry < sits_entries; sits_entry++) {
-		struct nvme_ocp_statistics_identifier_string_table
-			*peach_statistic_entry =
-			(struct nvme_ocp_statistics_identifier_string_table *)
-			(pstring_buffer + (le64_to_cpu(pocp_ts_header->sits) * SIZE_OF_DWORD) +
-			(sits_entry *
-			sizeof(struct nvme_ocp_statistics_identifier_string_table)));
-
-		if (identifier ==
-		    (int)le16_to_cpu(peach_statistic_entry->vs_statistic_identifier)) {
-			char *pdescription = (char *)(pstring_buffer +
-				(le64_to_cpu(pocp_ts_header->ascts) * SIZE_OF_DWORD) +
-				(le64_to_cpu(peach_statistic_entry->ascii_id_offset) *
-				SIZE_OF_DWORD));
-			size_t copy_len = ocp_ascii_id_copy_len(
-				peach_statistic_entry->ascii_id_length);
-
-			memcpy(description, pdescription, copy_len);
-			description[copy_len] = '\0';
-
+		if (identifier == (int)le16_to_cpu(entry->vs_statistic_identifier) &&
+		    !ocp_copy_ascii_id(entry->ascii_id_offset, entry->ascii_id_length,
+				       description))
 			return 0;
-		}
 	}
 
 	// If ASCII string isn't found, see in our internal Map
 	// for 2.5 Spec defined strings
 	if (identifier <= 0x6F) {
-		strcpy(description, statistic_identifiers_map[identifier].description);
+		shr_strscpy(description,
+			    statistic_identifiers_map[identifier].description,
+			    OCP_TELEMETRY_DESCRIPTION_MAX);
 		return 0;
 	}
 
 	return -1;
 }
 
-int get_event_id_ascii_string(int identifier, int debug_event_class, char *description)
+/* Event and VU event string table entries share one layout. */
+static int ocp_event_ascii_string(__le64 start, __le64 size, int identifier,
+				  int debug_event_class, char *description)
 {
-	if (pstring_buffer == NULL)
-		return -1;
+	struct nvme_ocp_event_string_table *entry;
+	__u64 entries = 0, i;
+	__u8 *table;
 
-	struct nvme_ocp_telemetry_string_header *pocp_ts_header =
-		(struct nvme_ocp_telemetry_string_header *)pstring_buffer;
+	table = ocp_string_table(pstring_buffer, pstring_buffer_size, le64_to_cpu(start),
+				 le64_to_cpu(size), sizeof(*entry), &entries);
 
-	//Calculating the sizes of the tables. Note: Data is present in the form of DWORDS,
-	//So multiplying with sizeof(DWORD)
-	unsigned long long ests_table_size = le64_to_cpu(pocp_ts_header->estsz) * SIZE_OF_DWORD;
+	for (i = 0; table && i < entries; i++) {
+		entry = (struct nvme_ocp_event_string_table *)(table + i * sizeof(*entry));
 
-	//Calculating number of entries present in all 3 tables
-	int ests_entries = (int)ests_table_size / sizeof(struct nvme_ocp_event_string_table);
-
-	for (int ests_entry = 0; ests_entry < ests_entries; ests_entry++) {
-		struct nvme_ocp_event_string_table *peach_event_entry =
-			(struct nvme_ocp_event_string_table *)
-			(pstring_buffer + (le64_to_cpu(pocp_ts_header->ests) * SIZE_OF_DWORD) +
-			(ests_entry * sizeof(struct nvme_ocp_event_string_table)));
-
-		if (identifier == (int)le16_to_cpu(peach_event_entry->event_identifier) &&
-			debug_event_class == (int)peach_event_entry->debug_event_class) {
-			char *pdescription = (char *)(pstring_buffer +
-				(le64_to_cpu(pocp_ts_header->ascts) * SIZE_OF_DWORD) +
-				(le64_to_cpu(peach_event_entry->ascii_id_offset) * SIZE_OF_DWORD));
-			size_t copy_len = ocp_ascii_id_copy_len(
-				peach_event_entry->ascii_id_length);
-
-			memcpy(description, pdescription, copy_len);
-			description[copy_len] = '\0';
+		if (identifier == (int)le16_to_cpu(entry->event_identifier) &&
+		    debug_event_class == (int)entry->debug_event_class &&
+		    !ocp_copy_ascii_id(entry->ascii_id_offset, entry->ascii_id_length,
+				       description))
 			return 0;
-		}
 	}
 
 	return -1;
 }
 
-int get_vu_event_id_ascii_string(int identifier, int debug_event_class, char *description)
+static int ocp_spec_event_id_string(int identifier, int debug_event_class,
+				    char *description)
 {
-	if (pstring_buffer == NULL)
+	const char *str;
+
+	if (debug_event_class < 0 ||
+	    debug_event_class >= (int)ARRAY_SIZE(spec_event_id_str) ||
+	    identifier < 0 ||
+	    identifier >= (int)spec_event_id_str[debug_event_class].count)
 		return -1;
 
+	str = spec_event_id_str[debug_event_class].str[identifier];
+	if (!str)
+		return -1;
+
+	shr_strscpy(description, str, OCP_TELEMETRY_DESCRIPTION_MAX);
+	return 0;
+}
+
+int get_event_id_ascii_string(int identifier, int debug_event_class, char *description)
+{
 	struct nvme_ocp_telemetry_string_header *pocp_ts_header =
 		(struct nvme_ocp_telemetry_string_header *)pstring_buffer;
 
-	//Calculating the sizes of the tables. Note: Data is present in the form of DWORDS,
-	//So multiplying with sizeof(DWORD)
-	unsigned long long vuests_table_size =
-		le64_to_cpu(pocp_ts_header->vu_estsz) * SIZE_OF_DWORD;
+	if (!pstring_buffer)
+		return -1;
 
-	//Calculating number of entries present in all 3 tables
-	int vu_ests_entries = (int)vuests_table_size /
-		sizeof(struct nvme_ocp_vu_event_string_table);
+	if (!ocp_event_ascii_string(pocp_ts_header->ests, pocp_ts_header->estsz,
+				    identifier, debug_event_class, description))
+		return 0;
 
-	for (int vu_ests_entry = 0; vu_ests_entry < vu_ests_entries; vu_ests_entry++) {
-		struct nvme_ocp_vu_event_string_table *peach_vu_event_entry =
-			(struct nvme_ocp_vu_event_string_table *)
-			(pstring_buffer + (le64_to_cpu(pocp_ts_header->vu_ests) * SIZE_OF_DWORD) +
-			(vu_ests_entry * sizeof(struct nvme_ocp_vu_event_string_table)));
+	/* TELSLG-14: the String Log may omit Event IDs the spec defines. */
+	return ocp_spec_event_id_string(identifier, debug_event_class,
+					description);
+}
 
-		if (identifier == (int)le16_to_cpu(peach_vu_event_entry->vu_event_identifier) &&
-			debug_event_class ==
-				(int)peach_vu_event_entry->debug_event_class) {
-			char *pdescription = (char *)(pstring_buffer +
-				(le64_to_cpu(pocp_ts_header->ascts) * SIZE_OF_DWORD) +
-				(le64_to_cpu(peach_vu_event_entry->ascii_id_offset) *
-				SIZE_OF_DWORD));
-			size_t copy_len = ocp_ascii_id_copy_len(
-				peach_vu_event_entry->ascii_id_length);
+int get_vu_event_id_ascii_string(int identifier, int debug_event_class, char *description)
+{
+	struct nvme_ocp_telemetry_string_header *pocp_ts_header =
+		(struct nvme_ocp_telemetry_string_header *)pstring_buffer;
 
-			memcpy(description, pdescription, copy_len);
-			description[copy_len] = '\0';
-			return 0;
-		}
-	}
+	if (!pstring_buffer)
+		return -1;
 
-	return -1;
+	return ocp_event_ascii_string(pocp_ts_header->vu_ests, pocp_ts_header->vu_estsz,
+				      identifier, debug_event_class, description);
 }
 
 int parse_ocp_telemetry_string_log(int event_fifo_num, int identifier, int debug_event_class,
@@ -538,15 +673,17 @@ int parse_ocp_telemetry_string_log(int event_fifo_num, int identifier, int debug
 	if (pstring_buffer == NULL)
 		return -1;
 
+	if (event_fifo_num < 0 || event_fifo_num > MAX_NUM_FIFOS)
+		return -1;
+
 	if (event_fifo_num != 0) {
 		struct nvme_ocp_telemetry_string_header *pocp_ts_header =
 			(struct nvme_ocp_telemetry_string_header *)pstring_buffer;
 
-		if (*pocp_ts_header->fifo_ascii_string[event_fifo_num-1] != '\0')
-			memcpy(description, pocp_ts_header->fifo_ascii_string[event_fifo_num-1],
-			       16);
-		else
-			description[0] = '\0';
+		/* A name that fills all 16 bytes carries no terminator. */
+		memcpy(description, pocp_ts_header->fifo_ascii_string[event_fifo_num - 1],
+		       sizeof(pocp_ts_header->fifo_ascii_string[0]));
+		description[sizeof(pocp_ts_header->fifo_ascii_string[0])] = '\0';
 
 		return 0;
 	}
@@ -1174,22 +1311,19 @@ int parse_event_fifo(unsigned int fifo_num, unsigned char *pfifo_start,
 
 	int status = 0, ret = 0;
 	unsigned int event_fifo_number = fifo_num + 1;
-	char *description = (char *)malloc((40 + 1) * sizeof(char));
+	__cleanup_free char *description = calloc(1, 40 + 1);
 
 	if (!description) {
 		nvme_show_error("Failed to allocate description buffer");
 		return -1;
 	}
 
-	memset(description, 0, 40 + 1);
-
 	status =
 		parse_ocp_telemetry_string_log(event_fifo_number, 0, 0, EVENT_STRING, description);
 
 	if (status != 0) {
 		nvme_show_error("Failed to get C9 String. status: %d", status);
-		ret = -1;
-		goto free_desc;
+		return -1;
 	}
 
 	char event_fifo_name[100] = {0};
@@ -1197,14 +1331,15 @@ int parse_event_fifo(unsigned int fifo_num, unsigned char *pfifo_start,
 	snprintf(event_fifo_name, sizeof(event_fifo_name), "%s%d%s%s", "EVENT FIFO ",
 		 event_fifo_number, " - ", description);
 
-	struct json_object *pevent_fifo_array = NULL;
+	__cleanup_json_object struct json_object *pevent_fifo_array = NULL;
 
 	if (pevent_fifos_object != NULL)
 		pevent_fifo_array = json_create_array();
 	else {
 		char buffer[1024] = {0};
 
-		sprintf(buffer, "%s%s\n%s", STR_LINE, event_fifo_name, STR_LINE);
+		snprintf(buffer, sizeof(buffer), "%s%s\n%s", STR_LINE,
+			 event_fifo_name, STR_LINE);
 		if (fp)
 			fprintf(fp, "%s", buffer);
 		else
@@ -1249,8 +1384,7 @@ int parse_event_fifo(unsigned int fifo_num, unsigned char *pfifo_start,
 				offset_to_move, event_fifo_number,
 				pevent_descriptor->debug_event_class_type,
 				event_des_size, (unsigned long long)remaining);
-			ret = -1;
-			goto free_desc;
+			return -1;
 		}
 
 		/* Data sizes are in Dwords */
@@ -1271,8 +1405,7 @@ int parse_event_fifo(unsigned int fifo_num, unsigned char *pfifo_start,
 					    pevent_descriptor->event_id),
 				data_size,
 				(unsigned long long)(remaining - event_des_size));
-			ret = -1;
-			goto free_desc;
+			return -1;
 		}
 
 		if (!is_snapshot) {
@@ -1285,6 +1418,7 @@ int parse_event_fifo(unsigned int fifo_num, unsigned char *pfifo_start,
 				pevent_descriptor->debug_event_class_type, EVENT_STRING,
 				description_str);
 
+			__cleanup_json_object
 			struct json_object *pevent_descriptor_obj =
 				((pevent_fifos_object != NULL)?json_create_object():NULL);
 
@@ -1423,13 +1557,15 @@ int parse_event_fifo(unsigned int fifo_num, unsigned char *pfifo_start,
 					pevent_descriptor->debug_event_class_type,
 					event_id,
 					pevent_descriptor->event_data_size);
-				goto free_desc;
+				return ret;
 			}
 
-			if (pevent_descriptor_obj != NULL && pevent_fifo_array != NULL)
+			if (pevent_descriptor_obj != NULL &&
+			    pevent_fifo_array != NULL) {
 				json_array_add_value_object(pevent_fifo_array,
 					pevent_descriptor_obj);
-			else {
+				pevent_descriptor_obj = NULL;
+			} else {
 				if (fp)
 					fprintf(fp, STR_LINE2);
 				else
@@ -1440,6 +1576,7 @@ int parse_event_fifo(unsigned int fifo_num, unsigned char *pfifo_start,
 				pevent_descriptor->debug_event_class_type, EVENT_STRING,
 				description_str);
 
+			__cleanup_json_object
 			struct json_object *pevent_descriptor_obj =
 				((pevent_fifos_object != NULL) ? json_create_object() : NULL);
 
@@ -1466,9 +1603,6 @@ int parse_event_fifo(unsigned int fifo_num, unsigned char *pfifo_start,
 					(struct nvme_ocp_statistic_snapshot_evt_class_format *)
 					pevent_descriptor;
 
-			struct json_object *pstats_array =
-				((pevent_fifos_object != NULL) ? json_create_array() : NULL);
-
 			if (pStaticSnapshotEvent != NULL &&
 				pStaticSnapshotEvent->stat_data_size > 0) {
 				__u8 *pstatistic_entry;
@@ -1480,19 +1614,26 @@ int parse_event_fifo(unsigned int fifo_num, unsigned char *pfifo_start,
 				parse_statistic(
 					(struct nvme_ocp_telemetry_statistic_descriptor *)
 						pstatistic_entry,
-					pstats_array,
+					pevent_descriptor_obj,
 					fp);
+			}
+
+			if (pevent_descriptor_obj != NULL &&
+			    pevent_fifo_array != NULL) {
+				json_array_add_value_object(pevent_fifo_array,
+					pevent_descriptor_obj);
+				pevent_descriptor_obj = NULL;
 			}
 		}
 		offset_to_move += (data_size + event_des_size);
 	}
 
-	if (pevent_fifos_object != NULL && pevent_fifo_array != NULL)
+	if (pevent_fifos_object != NULL && pevent_fifo_array != NULL) {
 		json_object_add_value_array(pevent_fifos_object, event_fifo_name,
 			pevent_fifo_array);
+		pevent_fifo_array = NULL;
+	}
 
-free_desc:
-	free(description);
 	return ret;
 }
 
@@ -1521,7 +1662,7 @@ int parse_event_fifos(struct json_object *root, struct nvme_ocp_telemetry_offset
 	if (!telemetry_da1_header_present(poffsets))
 		return 0;
 
-	struct json_object *pevent_fifos_object = NULL;
+	__cleanup_json_object struct json_object *pevent_fifos_object = NULL;
 
 	if (root != NULL)
 		pevent_fifos_object = json_create_object();
@@ -1544,20 +1685,21 @@ int parse_event_fifos(struct json_object *root, struct nvme_ocp_telemetry_offset
 	//Parse all the FIFOs DA wise
 	for (int fifo_no = 0; fifo_no < MAX_NUM_FIFOS; fifo_no++) {
 		if (event_fifo[fifo_no].event_fifo_da == poffsets->data_area) {
-			__u64 fifo_offset =
-				(event_fifo[fifo_no].event_fifo_start  * SIZE_OF_DWORD);
-			__u64 fifo_size =
-				(event_fifo[fifo_no].event_fifo_size  * SIZE_OF_DWORD);
-			__u64 da_size = (poffsets->data_area == 1) ?
-				poffsets->da1_size : poffsets->da2_size;
+			__u64 start_dw = event_fifo[fifo_no].event_fifo_start;
+			__u64 size_dw = event_fifo[fifo_no].event_fifo_size;
+			__u64 da_dw = ((poffsets->data_area == 1) ?
+				poffsets->da1_size : poffsets->da2_size) / SIZE_OF_DWORD;
+			__u64 fifo_offset, fifo_size;
 			__u8 *pfifo_start = NULL;
 
-			if (!fifo_size || fifo_offset + fifo_size > da_size) {
+			if (!size_dw || start_dw > da_dw || size_dw > da_dw - start_dw) {
 				nvme_show_error(
 					"Invalid FIFO bounds for FIFO %d",
 					fifo_no);
 				return -1;
 			}
+			fifo_offset = start_dw * SIZE_OF_DWORD;
+			fifo_size = size_dw * SIZE_OF_DWORD;
 
 			if (event_fifo[fifo_no].event_fifo_da == 1)
 				pfifo_start = pda1_header_offset + fifo_offset;
@@ -1578,11 +1720,13 @@ int parse_event_fifos(struct json_object *root, struct nvme_ocp_telemetry_offset
 		}
 	}
 
-	if (pevent_fifos_object != NULL && root != NULL)
+	if (pevent_fifos_object != NULL && root != NULL) {
 		json_object_add_value_array(root,
 			poffsets->data_area == 1 ? STR_DA_1_EVENT_FIFO_INFO :
 						   STR_DA_2_EVENT_FIFO_INFO,
 			pevent_fifos_object);
+		pevent_fifos_object = NULL;
+	}
 
 	return 0;
 }
@@ -1755,8 +1899,14 @@ static void parse_context_statistic(__u16 id, __u8 *pdata, unsigned int data_siz
 			 true, where);
 }
 
+/*
+ * Prints a statistic as a new object of @pstats_array, into the existing
+ * object @pstat_obj, or as text.
+ */
 static void print_statistic(struct nvme_ocp_telemetry_statistic_descriptor *pstatistic_entry,
-			    struct json_object *pstats_array, FILE *fp, bool encapsulated)
+			    struct json_object *pstats_array,
+			    struct json_object *pstat_obj, FILE *fp,
+			    bool encapsulated)
 {
 	__u16 id = le16_to_cpu(pstatistic_entry->statistic_id);
 	__u16 data_dwords = le16_to_cpu(pstatistic_entry->statistic_data_size);
@@ -1770,6 +1920,8 @@ static void print_statistic(struct nvme_ocp_telemetry_statistic_descriptor *psta
 	parse_ocp_telemetry_string_log(0, id, 0, STATISTICS_IDENTIFIER_STRING, description_str);
 
 	stat_item_begin(&s, pstats_array, fp, encapsulated ? STAT_NESTED_INDENT : "");
+	if (pstat_obj)
+		s.obj = pstat_obj;
 	stat_add_hex(&s, STR_STATISTICS_IDENTIFIER, id, 0);
 	stat_add_str(&s, STR_STATISTICS_IDENTIFIER_STR, description_str);
 	stat_add_hex(&s, STR_STATISTICS_INFO_BEHAVIOUR_TYPE,
@@ -1806,7 +1958,8 @@ static void print_statistic(struct nvme_ocp_telemetry_statistic_descriptor *psta
 
 	stat_add_data(&s, STR_STATISTICS_SPECIFIC_DATA, pdata, data_size);
 out:
-	stat_item_end(&s, pstats_array);
+	if (!pstat_obj)
+		stat_item_end(&s, pstats_array);
 }
 
 /*
@@ -1848,7 +2001,8 @@ static void print_statistics(__u8 *pstats, unsigned int size, struct json_object
 					"Context Statistic Descriptor 0x%x does not nest",
 					offset, where, id);
 
-		print_statistic(pstatistic_entry, array, fp, encapsulated);
+		print_statistic(pstatistic_entry, array, NULL, fp,
+				encapsulated);
 
 		/*
 		 * A Context Statistic Descriptor's data size spans its context
@@ -1859,7 +2013,7 @@ static void print_statistics(__u8 *pstats, unsigned int size, struct json_object
 }
 
 int parse_statistic(struct nvme_ocp_telemetry_statistic_descriptor *pstatistic_entry,
-		    struct json_object *pstats_array, FILE *fp)
+		    struct json_object *pstat_obj, FILE *fp)
 {
 	if (pstatistic_entry == NULL) {
 		nvme_show_error("Statistics Input buffer was NULL");
@@ -1870,7 +2024,7 @@ int parse_statistic(struct nvme_ocp_telemetry_statistic_descriptor *pstatistic_e
 		/* End of statistics entries, return -1 to stop processing the buffer */
 		return -1;
 
-	print_statistic(pstatistic_entry, pstats_array, fp, false);
+	print_statistic(pstatistic_entry, NULL, pstat_obj, fp, false);
 	return 0;
 }
 
@@ -1888,40 +2042,40 @@ int parse_statistics(struct json_object *root, struct nvme_ocp_telemetry_offsets
 	__u8 *pda1_ocp_header_offset = ptelemetry_buffer + poffsets->header_size;//512
 	struct nvme_ocp_header_in_da1 *pda1_header =
 		(struct nvme_ocp_header_in_da1 *)pda1_ocp_header_offset;
-	__u32 statistics_size = 0;
-	__u32 stats_da_1_start_dw = 0, stats_da_1_size_dw = 0;
-	__u32 stats_da_2_start_dw = 0, stats_da_2_size_dw = 0;
-	__u8 *pstats_offset = NULL;
+	__u64 start_dw, size_dw, da_dw;
+	__u8 *pda_offset = NULL;
 	char where[16];
 
+	//Data is present in the form of DWORDS, So multiplying with sizeof(DWORD)
 	if (poffsets->data_area == 1) {
-		__u32 stats_da_1_start = le64_to_cpu(pda1_header->da1_statistic_start);
-		__u32 stats_da_1_size = le64_to_cpu(pda1_header->da1_statistic_size);
-
-		//Data is present in the form of DWORDS, So multiplying with sizeof(DWORD)
-		stats_da_1_start_dw = (stats_da_1_start * SIZE_OF_DWORD);
-		stats_da_1_size_dw = (stats_da_1_size * SIZE_OF_DWORD);
-
-		pstats_offset = pda1_ocp_header_offset + stats_da_1_start_dw;
-		statistics_size = stats_da_1_size_dw;
+		start_dw = le64_to_cpu(pda1_header->da1_statistic_start);
+		size_dw = le64_to_cpu(pda1_header->da1_statistic_size);
+		da_dw = poffsets->da1_size / SIZE_OF_DWORD;
+		pda_offset = pda1_ocp_header_offset;
 	} else if (poffsets->data_area == 2) {
-		__u32 stats_da_2_start = le64_to_cpu(pda1_header->da2_statistic_start);
-		__u32 stats_da_2_size = le64_to_cpu(pda1_header->da2_statistic_size);
-
-		stats_da_2_start_dw = (stats_da_2_start * SIZE_OF_DWORD);
-		stats_da_2_size_dw = (stats_da_2_size * SIZE_OF_DWORD);
-
-		pstats_offset = pda1_ocp_header_offset + poffsets->da1_size + stats_da_2_start_dw;
-		statistics_size = stats_da_2_size_dw;
+		start_dw = le64_to_cpu(pda1_header->da2_statistic_start);
+		size_dw = le64_to_cpu(pda1_header->da2_statistic_size);
+		da_dw = poffsets->da2_size / SIZE_OF_DWORD;
+		pda_offset = ptelemetry_buffer + poffsets->da2_start_offset;
 	} else {
 		nvme_show_error("Unsupported Data Area:[%d]", poffsets->data_area);
+		return -1;
+	}
+
+	/* With no statistics, the start is never used */
+	if (!size_dw) {
+		start_dw = 0;
+	} else if (start_dw > da_dw || size_dw > da_dw - start_dw) {
+		nvme_show_error("Invalid statistics bounds for Data Area %d",
+				poffsets->data_area);
 		return -1;
 	}
 
 	struct json_object *pstats_array = ((root != NULL) ? json_create_array() : NULL);
 
 	snprintf(where, sizeof(where), "Data Area %d", poffsets->data_area);
-	print_statistics(pstats_offset, statistics_size, pstats_array, fp, false, where);
+	print_statistics(pda_offset + start_dw * SIZE_OF_DWORD, size_dw * SIZE_OF_DWORD,
+			 pstats_array, fp, false, where);
 
 	if (root != NULL && pstats_array != NULL)
 		json_object_add_value_array(root,
@@ -1943,7 +2097,8 @@ int print_ocp_telemetry_normal(struct ocp_telemetry_parse_options *options)
 	}
 
 	if (options->output_file != NULL) {
-		sprintf(file_path, "%s.%s", options->output_file, "txt");
+		snprintf(file_path, sizeof(file_path), "%s.%s",
+			 options->output_file, "txt");
 		fp = fopen(file_path, "w");
 		if (!fp) {
 			nvme_show_error("Failed to open %s file.", file_path);
@@ -1984,7 +2139,8 @@ int print_ocp_telemetry_normal(struct ocp_telemetry_parse_options *options)
 	struct nvme_ocp_telemetry_common_header *ptelemetry_common_header =
 		(struct nvme_ocp_telemetry_common_header *) ptelemetry_buffer;
 
-	get_telemetry_das_offset_and_size(ptelemetry_common_header, &offsets);
+	get_telemetry_das_offset_and_size(ptelemetry_common_header, ptelemetry_buffer_size,
+					  &offsets);
 
 	__u8 *pda1_header_offset = ptelemetry_buffer +
 		offsets.da1_start_offset;//512
@@ -2106,7 +2262,8 @@ int print_ocp_telemetry_json(struct ocp_telemetry_parse_options *options)
 	struct nvme_ocp_telemetry_common_header *ptelemetry_common_header =
 		(struct nvme_ocp_telemetry_common_header *) ptelemetry_buffer;
 
-	get_telemetry_das_offset_and_size(ptelemetry_common_header, &offsets);
+	get_telemetry_das_offset_and_size(ptelemetry_common_header, ptelemetry_buffer_size,
+					  &offsets);
 
 	//"Telemetry Host-Initiated Data Block 1"
 	__u8 *pda1_header_offset = ptelemetry_buffer + offsets.da1_start_offset;//512
@@ -2183,7 +2340,8 @@ int print_ocp_telemetry_json(struct ocp_telemetry_parse_options *options)
 
 	if (options->output_file != NULL) {
 		const char *json_string = json_object_to_json_string(root);
-		sprintf(file_path, "%s.%s", options->output_file, "json");
+		snprintf(file_path, sizeof(file_path), "%s.%s",
+			 options->output_file, "json");
 		FILE *fp = fopen(file_path, "w");
 
 		if (fp) {

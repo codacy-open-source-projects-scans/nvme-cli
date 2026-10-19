@@ -58,6 +58,8 @@ want_fabrics = get_option('fabrics').require(host_system == 'linux',
 want_mi = get_option('mi').require(host_system == 'linux',
     error_message: 'mi requires Linux').allowed()
 want_sed = get_option('sed').allowed()
+want_privsep = get_option('privsep').require(host_system == 'linux',
+    error_message: 'privsep requires Linux').allowed()
 want_top = get_option('top').require(host_system == 'linux',
     error_message: 'top requires Linux').allowed()
 discoverd_opt = get_option('nvme-discoverd').require(want_fabrics,
@@ -129,6 +131,7 @@ prefixdir      = get_option('prefix')
 datadir        = prefixdir / get_option('datadir')
 mandir         = prefixdir / get_option('mandir')
 sbindir        = prefixdir / get_option('sbindir')
+libexecdir     = prefixdir / get_option('libexecdir')
 sysconfdir     = prefixdir / get_option('sysconfdir')
 udevrulesdir   = prefixdir / get_option('udevrulesdir')
 dracutrulesdir = prefixdir / get_option('dracutrulesdir')
@@ -175,6 +178,10 @@ conf.set('RUNDIR', '"@0@"'.format(rundir))
 conf.set('CONFIG_FABRICS', want_fabrics, description: 'Is fabrics enabled')
 conf.set('CONFIG_MI', want_mi, description: 'Is MI enabled')
 conf.set('CONFIG_SED', want_sed, description: 'Is SED enabled')
+conf.set('CONFIG_PRIVSEP', want_privsep,
+    description: 'Is the privilege separation helper enabled')
+conf.set('LIBNVME_PRIVSEP_HELPER',
+    '"@0@"'.format(libexecdir / 'nvme-privsep-helper'))
 conf.set('CONFIG_LOOPBACK', want_ioctl_tests,
     description: 'Is the ioctl loopback test transport enabled')
 conf.set('CONFIG_TOP', want_top, description: 'Is nvme top enabled')
@@ -441,6 +448,9 @@ keysd_opt = keysd_opt.require(
 keysd_opt = keysd_opt.require(openssl_dep.found() and keyutils_dep.found(),
     error_message: 'nvme-keysd requires OpenSSL and libkeyutils')
 want_keysd = keysd_opt.allowed()
+want_kmip = get_option('kmip').require(want_keysd,
+    error_message: 'kmip requires nvme-keysd').allowed()
+conf.set('CONFIG_KMIP', want_kmip, description: 'Is the KMIP key source enabled')
 conf.set('CONFIG_DISCOVERD', want_discoverd, description: 'Is nvme-discoverd enabled')
 conf.set('CONFIG_KEYSD', want_keysd, description: 'Is nvme-keysd enabled')
 
@@ -530,8 +540,8 @@ conf.set(
 )
 
 conf.set('NVME_HAVE_SENDFILE', cc.has_function('sendfile'))
-
-conf.set('NVME_HAVE_MMAP', cc.has_function('mmap'))
+conf.set('NVME_HAVE_CLOSE_RANGE', cc.has_function('close_range',
+    prefix: '#include <unistd.h>', args: '-D_GNU_SOURCE'))
 
 conf.set10(
     'NVME_HAVE_REALLOCARRAY',
@@ -646,6 +656,14 @@ if host_system == 'windows'
     )
 endif
 
+# Coverage for the libFuzzer builds of the fuzz targets in tests/fuzz
+if get_option('fuzzing')
+    if cc.get_id() != 'clang'
+        error('-Dfuzzing=true needs clang')
+    endif
+    add_project_arguments('-fsanitize=fuzzer-no-link', language : 'c')
+endif
+
 substs = configuration_data()
 substs.set('VERSION', meson.project_version())
 substs.set('NVMECLI_LICENSE', meson.project_license()[0])
@@ -663,6 +681,11 @@ substs.set('SYSTEMCTL', get_option('systemctl'))
 # mDNS uses systemd-resolved, so nvme-discoverd must start after it.
 substs.set('DISCOVERD_AFTER_RESOLVED',
            want_mdns ? 'After=systemd-resolved.service' : '')
+# nvme-keysd calls nvme-keysd-kmip through its socket.
+substs.set('KEYSD_WANTS_KMIP',
+           want_kmip ? 'Wants=nvme-keysd-kmip.socket' : '')
+substs.set('KEYSD_AFTER_KMIP',
+           want_kmip ? 'After=nvme-keysd-kmip.socket' : '')
 substs.set('PREFIX', prefixdir)
 substs.set('URL', 'https://github.com/linux-nvme/nvme-cli/')
 substs.set('LIBNVME_API_NAME', libnvme_api_name)
@@ -715,7 +738,7 @@ if want_nvme
 
     nvme_exe = executable(
         'nvme',
-        sources,
+        sources + ['src/main.c'],
         include_directories: 'src',
         dependencies: link_deps,
         link_args: link_args_list,
@@ -916,6 +939,7 @@ path_dict = {
     'prefixdir':        prefixdir,
     'sysconfdir':       sysconfdir,
     'sbindir':          sbindir,
+    'libexecdir':       libexecdir,
     'datadir':          datadir,
     'mandir':           mandir,
     'udevrulesdir':     udevrulesdir,
@@ -952,9 +976,11 @@ wanted_dict = {
     'nvme':             want_nvme,
     'libnvme':          want_libnvme,
     'fabrics':          want_fabrics,
+    'privsep':          want_privsep,
     'nvme-discoverd':   want_discoverd,
     'mdns':             want_mdns,
     'nvme-keysd':       want_keysd,
+    'kmip':             want_kmip,
     'nvmf-autoconnect': want_nvmf_autoconnect,
     'deprecated-cmds':  want_deprecated_cmds,
     'python bindings ': want_python,

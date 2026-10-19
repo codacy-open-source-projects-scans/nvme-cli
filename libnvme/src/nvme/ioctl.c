@@ -6,6 +6,8 @@
  * Authors: Keith Busch <keith.busch@wdc.com>
  * 	    Chaitanya Kulkarni <chaitanya.kulkarni@wdc.com>
  */
+#include <libnvme.h>
+
 #include "private.h"
 
 void *__libnvme_submit_entry(struct libnvme_transport_handle *hdl,
@@ -23,4 +25,29 @@ bool __libnvme_decide_retry(struct libnvme_transport_handle *hdl,
 		struct libnvme_passthru_cmd *cmd, int err)
 {
 	return false;
+}
+
+/*
+ * In dry-run mode an operation which changes the device is skipped and
+ * succeeds. It only shows up in the debug log, like the passthru commands
+ * which are skipped.
+ */
+bool __libnvme_dry_run(struct libnvme_transport_handle *hdl, const char *op)
+{
+	if (!hdl->ctx->dry_run)
+		return false;
+
+	libnvme_msg(hdl->ctx, LIBNVME_LOG_DEBUG, "dry-run: %s skipped\n", op);
+	return true;
+}
+
+int __libnvme_exec_dry_run(struct libnvme_transport_handle *hdl,
+		struct libnvme_passthru_cmd *cmd)
+{
+	void *user_data;
+
+	user_data = hdl->submit_entry(hdl, cmd);
+	hdl->submit_exit(hdl, cmd, 0, user_data);
+
+	return 0;
 }

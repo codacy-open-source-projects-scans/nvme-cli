@@ -106,9 +106,44 @@ if python3.found()
              env: cli_test_env,
              depends: [nvme_exe, mock_nvme_lib])
 
-        # Not on big-endian hosts yet: the test times out on s390x.
+        if 'id' in selected_plugins
+            test('nvme-cli - usage-cli',
+                 python3,
+                 args: [files('nvme_usage_test.py'), nvme_exe],
+                 depends: nvme_exe)
+        endif
+
+        test('nvme-cli - dry-run-cli',
+             python3,
+             args: [files('nvme_dry_run_test.py'), nvme_exe, mock_nvme_lib],
+             env: cli_test_env,
+             depends: [nvme_exe, mock_nvme_lib])
+
+        test('nvme-cli - sel-cli',
+             python3,
+             args: [files('nvme_sel_test.py'), nvme_exe, mock_nvme_lib],
+             env: cli_test_env,
+             depends: [nvme_exe, mock_nvme_lib])
+
+        test('nvme-cli - host-metadata-cli',
+             python3,
+             args: [files('nvme_host_metadata_test.py'), nvme_exe,
+                    mock_nvme_lib],
+             env: cli_test_env,
+             depends: [nvme_exe, mock_nvme_lib])
+
+        # The host and AVE discovery printers need the fabrics code.
+        if want_fabrics and json_c_dep.found() and 'log' in selected_plugins
+            test('nvme-cli - discovery-logs-cli',
+                 python3,
+                 args: [files('nvme_discovery_logs_test.py'), nvme_exe,
+                        mock_nvme_lib],
+                 env: cli_test_env,
+                 depends: [nvme_exe, mock_nvme_lib])
+        endif
+
         if 'id' in selected_plugins and 'log' in selected_plugins and \
-           'feat' in selected_plugins and host_machine.endian() == 'little'
+           'feat' in selected_plugins
             print_test_env = environment()
             print_test_env.prepend('PYTHONPATH', meson.project_source_root())
             print_test_env.set('NVME_TEST_JSON', json_c_dep.found() ? '1' : '0')
@@ -148,5 +183,9 @@ if python3.found()
 
     if 'samsung' in selected_plugins
         subdir('samsung')
+    endif
+
+    if 'seagate' in selected_plugins
+        subdir('seagate')
     endif
 endif

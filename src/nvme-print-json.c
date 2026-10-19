@@ -19,6 +19,7 @@
 #include <ccan/minmax/minmax.h>
 #include <shared/mmio-util.h>
 #include <shared/string-util.h>
+#include <shared/unaligned-util.h>
 
 #include "cleanup.h"
 #include "nvme-json.h"
@@ -45,7 +46,7 @@
 #define obj_add_nprix64 json_object_add_nprix64
 #define obj_add_uint_0nx json_object_add_uint_0nx
 #define obj_add_0nprix64 json_object_add_0nprix64
-#define obj_add_str json_object_add_string
+#define obj_add_str json_object_add_value_string
 
 #define json_prop_cap(r, fld, val, ...) \
 	json_prop_field(r, prop_cap[fld][0], prop_cap[fld][1], val, \
@@ -111,6 +112,14 @@ static void obj_add_prix64(struct json_object *o, const char *k, uint64_t v)
 
 	sprintf(str, "%"PRIx64"", v);
 	obj_add_str(o, k, str);
+}
+
+static void obj_add_ctrl_address(struct json_object *o, struct libnvme_ctrl *c)
+{
+	const char *address = libnvme_ctrl_get_address(c);
+
+	/* controllers without an address, e.g. loop, don't report one */
+	obj_add_str(o, "Address", address ? address : "");
 }
 
 static void obj_add_ctrl_address_details(struct json_object *o, const char *k,
@@ -281,14 +290,15 @@ static void json_nvme_id_ns_lbaf(struct nvme_id_ns *ns, int i, struct json_objec
 
 	if (verbose_mode()) {
 		obj_add_int(lbaf, "LBA Format", i);
-		obj_add_str(lbaf, "Metadata Size", "%d bytes",
-			    le16_to_cpu(ns->lbaf[i].ms));
-		obj_add_str(lbaf, "Data Size", "%d bytes", 1 << ns->lbaf[i].ds);
-		obj_add_str(lbaf, "Relative Performance", "0x%x %s",
-			    ns->lbaf[i].rp,
-			    ns->lbaf[i].rp == 3 ? "Degraded" :
-			    ns->lbaf[i].rp == 2 ? "Good" :
-			    ns->lbaf[i].rp == 1 ? "Better" : "Best");
+		json_object_add_string(lbaf, "Metadata Size", "%d bytes",
+				       le16_to_cpu(ns->lbaf[i].ms));
+		json_object_add_string(lbaf, "Data Size", "%u bytes",
+				       nvme_lbaf_data_size(ns->lbaf[i].ds));
+		json_object_add_string(lbaf, "Relative Performance", "0x%x %s",
+				       ns->lbaf[i].rp,
+				       ns->lbaf[i].rp == 3 ? "Degraded" :
+				       ns->lbaf[i].rp == 2 ? "Good" :
+				       ns->lbaf[i].rp == 1 ? "Better" : "Best");
 		obj_add_str(lbaf, "in use", i == flbas ? "yes" : "no");
 	} else {
 		obj_add_int(lbaf, "lbaf", i);
@@ -383,7 +393,7 @@ static void json_nvme_id_ns(struct nvme_id_ns *ns, unsigned int nsid,
 
 	obj_add_array(r, "lbafs", lbafs);
 
-	for (i = 0; i <= ns->nlbaf + ns->nulbaf; i++)
+	for (i = 0; i < nvme_id_ns_nr_lbaf(ns); i++)
 		json_nvme_id_ns_lbaf(ns, i, lbafs);
 
 	d_json(ns->vs, strnlen((const char *)ns->vs, sizeof(ns->vs)), 16, 1, vs);
@@ -543,7 +553,7 @@ void json_nvme_id_ctrl(struct nvme_id_ctrl *ctrl, const char *product_name,
 
 	obj_add_array(r, "psds", psds);
 
-	for (i = 0; i <= ctrl->npss; i++) {
+	for (i = 0; i < nvme_id_ctrl_nr_psd(ctrl); i++) {
 		struct json_object *psd = json_create_object();
 
 		obj_add_int(psd, "max_power", le16_to_cpu(ctrl->psd[i].mp));
@@ -714,7 +724,7 @@ void json_fw_log(struct nvme_firmware_slot *fw_log, const char *devname)
 void json_changed_ns_list_log(struct nvme_ns_list *log, const char *devname, bool alloc)
 {
 	struct json_object *r = json_r;
-	struct json_object *nsi = json_create_object();
+	struct json_object *nsi;
 	char fmt[32];
 	char str[32];
 	__u32 nsid;
@@ -724,6 +734,8 @@ void json_changed_ns_list_log(struct nvme_ns_list *log, const char *devname, boo
 
 	if (log->ns[0] == cpu_to_le32(0xffffffff))
 		return;
+
+	nsi = json_create_object();
 
 	if (asprintf(&k, "Changed %s Namespace List Log", alloc ? "Allocated" : "Attached") > 0)
 		obj_add_str(r, k, devname);
@@ -1954,7 +1966,13 @@ static void json_pel_vs_event_data(struct json_object *valid_attrs, void *vsed,
 		obj_d(vs_data, "binary_data", (unsigned char *)vsed, vsedl, 16, 1);
 		break;
 	case NVME_PEL_VSEDT_SIGNED_INT:
-		obj_add_int(vs_data, "signed_integer_data", *(int64_t *)vsed);
+		if (vsedl < sizeof(__le64)) {
+			obj_d(vs_data, "binary_data", (unsigned char *)vsed,
+			      vsedl, 16, 1);
+			break;
+		}
+		obj_add_int(vs_data, "signed_integer_data",
+			    (int64_t)shr_get_unaligned_le64(vsed));
 		break;
 	default:
 		obj_d(vs_data, "reserved_data_type_bin", (unsigned char *)vsed, vsedl, 16, 1);
@@ -1971,26 +1989,34 @@ void nvme_json_pel_vendor_specific_event(void *pevent_log_info, __u32 offset,
 	__u32 progress = 0;
 	__u16 vsedl;
 	__u32 i;
-	struct nvme_vs_event_desc *vs_desc;
+	struct nvme_vs_event_desc vs_desc;
 	struct json_object *vs_events = json_create_array();
 
-	for (i = 0; progress < event_data_len; i++) {
-		struct json_object *vs_event = json_create_object();
+	for (i = 0; progress + sizeof(vs_desc) <= event_data_len; i++) {
+		void *p = pevent_log_info + offset + progress;
+		struct json_object *vs_event;
 
-		vs_desc = pevent_log_info + offset + progress;
-		vsedl = le16_to_cpu(vs_desc->vsedl);
+		/* The descriptors are not aligned. */
+		memcpy(&vs_desc, p, sizeof(vs_desc));
+		vsedl = le16_to_cpu(vs_desc.vsedl);
+		if (vsedl > event_data_len - progress - sizeof(vs_desc))
+			break;
+
+		vs_event = json_create_object();
 
 		obj_add_uint(vs_event, "vs_event_descriptor_number", i);
-		obj_add_uint(vs_event, "vs_event_code", le16_to_cpu(vs_desc->vsec));
-		obj_add_uint(vs_event, "vs_event_data_type", vs_desc->vsedt);
-		obj_add_uint(vs_event, "vs_event_uuid_index", vs_desc->uidx);
+		obj_add_uint(vs_event, "vs_event_code",
+			     le16_to_cpu(vs_desc.vsec));
+		obj_add_uint(vs_event, "vs_event_data_type", vs_desc.vsedt);
+		obj_add_uint(vs_event, "vs_event_uuid_index", vs_desc.uidx);
 		obj_add_uint(vs_event, "vs_event_data_len", vsedl);
 
 		if (vsedl)
-			json_pel_vs_event_data(vs_event, vs_desc + 1, vs_desc->vsedt, vsedl);
+			json_pel_vs_event_data(vs_event, p + sizeof(vs_desc),
+					       vs_desc.vsedt, vsedl);
 
 		array_add_obj(vs_events, vs_event);
-		progress += sizeof(*vs_desc) + vsedl;
+		progress += sizeof(vs_desc) + vsedl;
 	}
 
 	obj_add_array(valid_attrs, "vs_event_entry", vs_events);
@@ -2001,20 +2027,21 @@ static void json_pevent_entry(void *pevent_log_info, __u8 action, __u32 size, co
 {
 	int i;
 	__u16 vsil, el;
+	__u32 data_len;
 	struct nvme_persistent_event_log *pevent_log_head = pevent_log_info;
 	struct nvme_persistent_event_entry *pevent_entry_head;
 	struct json_object *valid_attrs;
 
 	for (i = 0; i < le32_to_cpu(pevent_log_head->tnev); i++) {
-		if (offset + sizeof(*pevent_entry_head) >= size)
+		if (offset + sizeof(*pevent_entry_head) > size)
 			break;
 
 		pevent_entry_head = pevent_log_info + offset;
 		vsil = le16_to_cpu(pevent_entry_head->vsil);
 		el = le16_to_cpu(pevent_entry_head->el);
 
-		if (offset + pevent_entry_head->ehl + 3 + el >=
-		    size)
+		if (vsil > el ||
+		    offset + pevent_entry_head->ehl + 3 + el > size)
 			break;
 
 		valid_attrs = json_create_object();
@@ -2038,58 +2065,64 @@ static void json_pevent_entry(void *pevent_log_info, __u8 action, __u32 size, co
 
 		offset += pevent_entry_head->ehl + vsil + 3;
 
+		__cleanup_free void *data =
+			nvme_pel_event_data(pevent_log_info, offset,
+					    el - vsil, &data_len);
+
+		if (!data) {
+			array_add_obj(valid, valid_attrs);
+			break;
+		}
+
 		switch (pevent_entry_head->etype) {
 		case NVME_PEL_SMART_HEALTH_EVENT:
-			nvme_json_pel_smart_health(pevent_log_info, offset, valid_attrs);
+			nvme_json_pel_smart_health(data, 0, valid_attrs);
 			break;
 		case NVME_PEL_FW_COMMIT_EVENT:
-			nvme_json_pel_fw_commit(pevent_log_info, offset, valid_attrs);
+			nvme_json_pel_fw_commit(data, 0, valid_attrs);
 			break;
 		case NVME_PEL_TIMESTAMP_EVENT:
-			nvme_json_pel_timestamp(pevent_log_info, offset, valid_attrs);
+			nvme_json_pel_timestamp(data, 0, valid_attrs);
 			break;
 		case NVME_PEL_POWER_ON_RESET_EVENT:
-			nvme_json_pel_power_on_reset(pevent_log_info,
-						     offset, valid_attrs,
+			nvme_json_pel_power_on_reset(data, 0, valid_attrs,
 						     pevent_entry_head->vsil,
 						     pevent_entry_head->el,
-						     size);
+						     data_len);
 			break;
 		case NVME_PEL_NSS_HW_ERROR_EVENT:
-			nvme_json_pel_nss_hw_error(pevent_log_info, offset, valid_attrs);
+			nvme_json_pel_nss_hw_error(data, 0, valid_attrs);
 			break;
 		case NVME_PEL_CHANGE_NS_EVENT:
-			nvme_json_pel_change_ns(pevent_log_info, offset, valid_attrs);
+			nvme_json_pel_change_ns(data, 0, valid_attrs);
 			break;
 		case NVME_PEL_FORMAT_START_EVENT:
-			nvme_json_pel_format_start(pevent_log_info, offset, valid_attrs);
+			nvme_json_pel_format_start(data, 0, valid_attrs);
 			break;
 		case NVME_PEL_FORMAT_COMPLETION_EVENT:
-			nvme_json_pel_format_completion(pevent_log_info, offset, valid_attrs);
+			nvme_json_pel_format_completion(data, 0, valid_attrs);
 			break;
 		case NVME_PEL_SANITIZE_START_EVENT:
-			nvme_json_pel_sanitize_start(pevent_log_info, offset, valid_attrs);
+			nvme_json_pel_sanitize_start(data, 0, valid_attrs);
 			break;
 		case NVME_PEL_SANITIZE_COMPLETION_EVENT:
-			nvme_json_pel_sanitize_completion(pevent_log_info, offset, valid_attrs);
+			nvme_json_pel_sanitize_completion(data, 0, valid_attrs);
 			break;
 		case NVME_PEL_SET_FEATURE_EVENT:
-			nvme_json_pel_set_feature(pevent_log_info,
-						  offset, valid_attrs,
+			nvme_json_pel_set_feature(data, 0, valid_attrs,
 						  pevent_entry_head->el,
-						  size);
+						  data_len);
 			break;
 		case NVME_PEL_TELEMETRY_CRT:
-			nvme_json_pel_telemetry_crt(pevent_log_info,
-						    offset, valid_attrs,
+			nvme_json_pel_telemetry_crt(data, 0, valid_attrs,
 						    pevent_entry_head->el,
-						    size);
+						    data_len);
 			break;
 		case NVME_PEL_THERMAL_EXCURSION_EVENT:
-			nvme_json_pel_thermal_excursion(pevent_log_info, offset, valid_attrs);
+			nvme_json_pel_thermal_excursion(data, 0, valid_attrs);
 			break;
 		case NVME_PEL_VENDOR_SPECIFIC_EVENT:
-			nvme_json_pel_vendor_specific_event(pevent_log_info, offset, el - vsil,
+			nvme_json_pel_vendor_specific_event(data, 0, el - vsil,
 							    valid_attrs);
 			break;
 		default:
@@ -2097,7 +2130,7 @@ static void json_pevent_entry(void *pevent_log_info, __u8 action, __u32 size, co
 		}
 
 		array_add_obj(valid, valid_attrs);
-		offset += le16_to_cpu(pevent_entry_head->el);
+		offset += el - vsil;
 	}
 }
 
@@ -2105,10 +2138,11 @@ static void json_persistent_event_log(void *pevent_log_info, __u8 action,
 				      __u32 size, const char *devname)
 {
 	struct json_object *r = json_r;
-	struct json_object *valid = json_create_array();
+	struct json_object *valid;
 	__u32 offset = sizeof(struct nvme_persistent_event_log);
 
 	if (size >= offset) {
+		valid = json_create_array();
 		nvme_json_pevent_log_head(pevent_log_info, r);
 		json_pevent_entry(pevent_log_info, action, size, devname, offset, valid);
 		obj_add_array(r, "list_of_event_entries", valid);
@@ -2190,7 +2224,7 @@ static void json_lba_status_log(void *lba_status, __u32 size, const char *devnam
 	struct json_object *desc;
 	struct json_object *element;
 	struct json_object *desc_list;
-	struct json_object *elements_list = json_create_array();
+	struct json_object *elements_list;
 	struct nvme_lba_status_log *hdr = lba_status;
 	struct nvme_lbas_ns_element *ns_element;
 	struct nvme_lba_rd *range_desc;
@@ -2203,6 +2237,7 @@ static void json_lba_status_log(void *lba_status, __u32 size, const char *devnam
 	if (size < sizeof(*hdr))
 		return;
 
+	elements_list = json_create_array();
 	num_elements = le32_to_cpu(hdr->nlslne);
 
 	obj_add_uint(r, "lslplen", le32_to_cpu(hdr->lslplen));
@@ -2225,8 +2260,11 @@ static void json_lba_status_log(void *lba_status, __u32 size, const char *devnam
 
 		if (num_lba_desc != 0xffffffff) {
 			if (num_lba_desc >
-			    (size - offset) / sizeof(*range_desc))
+			    (size - offset) / sizeof(*range_desc)) {
+				json_free_object(desc_list);
+				json_free_object(element);
 				break;
+			}
 			for (i = 0; i < num_lba_desc; i++) {
 				range_desc = lba_status + offset;
 				desc = json_create_object();
@@ -2499,28 +2537,47 @@ static void json_phy_rx_eom_log(struct nvme_phy_rx_eom_log *log, __u16 controlle
 	}
 }
 
-static void json_media_unit_stat_log(struct nvme_media_unit_stat_log *mus)
+static void json_media_unit_stat_log(struct nvme_media_unit_stat_log *mus,
+		size_t len)
 {
 	struct json_object *r = json_r;
 	struct json_object *entries = json_create_array();
-	struct json_object *entry;
-	int i;
+	struct nvme_media_unit_stat_desc desc;
+	struct mus_desc_iter it;
+
+	if (len < sizeof(*mus)) {
+		obj_add_array(r, "mus_list", entries);
+		return;
+	}
 
 	obj_add_uint(r, "nmu", le16_to_cpu(mus->nmu));
 	obj_add_uint(r, "cchans", le16_to_cpu(mus->cchans));
 	obj_add_uint(r, "sel_config", le16_to_cpu(mus->sel_config));
 
-	for (i = 0; i < mus->nmu; i++) {
-		entry = json_create_object();
-		obj_add_uint(entry, "muid", le16_to_cpu(mus->mus_desc[i].muid));
-		obj_add_uint(entry, "domainid", le16_to_cpu(mus->mus_desc[i].domainid));
-		obj_add_uint(entry, "endgid", le16_to_cpu(mus->mus_desc[i].endgid));
-		obj_add_uint(entry, "nvmsetid", le16_to_cpu(mus->mus_desc[i].nvmsetid));
-		obj_add_uint(entry, "cap_adj_fctr", le16_to_cpu(mus->mus_desc[i].cap_adj_fctr));
-		obj_add_uint(entry, "avl_spare", mus->mus_desc[i].avl_spare);
-		obj_add_uint(entry, "percent_used", mus->mus_desc[i].percent_used);
-		obj_add_uint(entry, "mucs", mus->mus_desc[i].mucs);
-		obj_add_uint(entry, "cio", mus->mus_desc[i].cio);
+	mus_desc_iter_init(&it, mus, len);
+	while (mus_desc_iter_next(&it, &desc)) {
+		struct json_object *entry = json_create_object();
+		struct json_object *chans = json_create_array();
+
+		obj_add_uint(entry, "muid", le16_to_cpu(desc.muid));
+		obj_add_uint(entry, "domainid", le16_to_cpu(desc.domainid));
+		obj_add_uint(entry, "endgid", le16_to_cpu(desc.endgid));
+		obj_add_uint(entry, "nvmsetid", le16_to_cpu(desc.nvmsetid));
+		obj_add_uint(entry, "cap_adj_fctr",
+			     le16_to_cpu(desc.cap_adj_fctr));
+		obj_add_uint(entry, "avl_spare", desc.avl_spare);
+		obj_add_uint(entry, "percent_used", desc.percent_used);
+		obj_add_uint(entry, "mucs", desc.mucs);
+		obj_add_uint(entry, "cio", desc.cio);
+
+		for (int k = 0; k < desc.mucs; k++) {
+			struct json_object *chan = json_create_object();
+
+			obj_add_uint(chan, "chanid",
+				     mus_desc_iter_chan(&it, k));
+			array_add_obj(chans, chan);
+		}
+		obj_add_array(entry, "chanids", chans);
 		array_add_obj(entries, entry);
 	}
 
@@ -2729,6 +2786,7 @@ static void json_nvme_fdp_configs(struct nvme_fdp_config_log *log, size_t len)
 			array_add_obj(obj_ruhs, obj_ruh);
 		}
 
+		obj_add_array(obj_config, "ruhs", obj_ruhs);
 		array_add_obj(obj_configs, obj_config);
 
 		p += size;
@@ -2749,6 +2807,8 @@ static void json_nvme_fdp_usage(struct nvme_fdp_ruhu_log *log, size_t len)
 
 	obj_add_uint(r, "nruh", nruh);
 
+	nruh = nvme_log_nr_entries(nruh, len, sizeof(*log),
+				   sizeof(log->ruhus[0]));
 	for (int i = 0; i < nruh; i++) {
 		struct nvme_fdp_ruhu_desc *ruhu = &log->ruhus[i];
 
@@ -2783,7 +2843,7 @@ static void json_nvme_fdp_events(struct nvme_fdp_events_log *log)
 
 	obj_add_uint(r, "n", n);
 
-	for (unsigned int i = 0; i < n; i++) {
+	for (unsigned int i = 0; i < n && i < ARRAY_SIZE(log->events); i++) {
 		struct nvme_fdp_event *event = &log->events[i];
 
 		struct json_object *obj_event = json_create_object();
@@ -2791,7 +2851,8 @@ static void json_nvme_fdp_events(struct nvme_fdp_events_log *log)
 		obj_add_uint(obj_event, "type", event->type);
 		obj_add_uint(obj_event, "fdpef", event->flags);
 		obj_add_uint(obj_event, "pid", le16_to_cpu(event->pid));
-		obj_add_uint64(obj_event, "timestamp", le64_to_cpu(*(uint64_t *)&event->ts));
+		obj_add_uint64(obj_event, "timestamp",
+			       int48_to_long(event->ts.timestamp));
 		obj_add_uint(obj_event, "nsid", le32_to_cpu(event->nsid));
 
 		if (event->type == NVME_FDP_EVENT_REALLOC) {
@@ -2823,6 +2884,8 @@ static void json_nvme_fdp_ruh_status(struct nvme_fdp_ruh_status *status, size_t 
 
 	obj_add_uint(r, "nruhsd", nruhsd);
 
+	nruhsd = nvme_log_nr_entries(nruhsd, len, sizeof(*status),
+				     sizeof(status->ruhss[0]));
 	for (unsigned int i = 0; i < nruhsd; i++) {
 		struct nvme_fdp_ruh_status_desc *ruhs = &status->ruhss[i];
 
@@ -2858,7 +2921,7 @@ static unsigned int json_print_nvme_subsystem_multipath(struct libnvme_subsystem
 		path_attrs = json_create_object();
 		obj_add_str(path_attrs, "Name", libnvme_ctrl_get_name(c));
 		obj_add_str(path_attrs, "Transport", libnvme_ctrl_get_transport(c));
-		obj_add_str(path_attrs, "Address", libnvme_ctrl_get_address(c));
+		obj_add_ctrl_address(path_attrs, c);
 		obj_add_ctrl_address_details(path_attrs, "AddressDetails", c);
 		obj_add_str(path_attrs, "State", libnvme_ctrl_get_state(c));
 		obj_add_str(path_attrs, "ANAState", ana_state);
@@ -2880,7 +2943,7 @@ static void json_print_nvme_subsystem_ctrls(struct libnvme_subsystem *s,
 		path_attrs = json_create_object();
 		obj_add_str(path_attrs, "Name", libnvme_ctrl_get_name(c));
 		obj_add_str(path_attrs, "Transport", libnvme_ctrl_get_transport(c));
-		obj_add_str(path_attrs, "Address", libnvme_ctrl_get_address(c));
+		obj_add_ctrl_address(path_attrs, c);
 		obj_add_ctrl_address_details(path_attrs, "AddressDetails", c);
 		obj_add_str(path_attrs, "State", libnvme_ctrl_get_state(c));
 		array_add_obj(paths, path_attrs);
@@ -3543,7 +3606,7 @@ static void json_nvme_nvm_id_ns(struct nvme_nvm_id_ns *nvm_ns,
 
 	obj_add_array(r, "elbafs", elbafs);
 
-	for (i = 0; i <= ns->nlbaf + ns->nulbaf; i++) {
+	for (i = 0; i < nvme_id_ns_nr_lbaf(ns); i++) {
 		struct json_object *elbaf = json_create_object();
 		unsigned int elbaf_val = le32_to_cpu(nvm_ns->elbaf[i]);
 
@@ -3597,7 +3660,7 @@ static void json_nvme_zns_id_ns(struct nvme_zns_id_ns *ns,
 
 	obj_add_array(r, "lbafe", lbafs);
 
-	for (i = 0; i <= id_ns->nlbaf; i++) {
+	for (i = 0; i <= id_ns->nlbaf && i < ARRAY_SIZE(ns->lbafe); i++) {
 		struct json_object *lbaf = json_create_object();
 
 		obj_add_uint64(lbaf, "zsze", le64_to_cpu(ns->lbafe[i].zsze));
@@ -3641,7 +3704,7 @@ static void json_zns_changed(struct nvme_zns_changed_zone_log *log)
 		obj_add_result(r, "Too many zones have changed to fit into the log. Use report zones for changes.");
 	} else {
 		obj_add_uint(r, "nrzid", nrzid);
-		for (i = 0; i < nrzid; i++) {
+		for (i = 0; i < nrzid && i < ARRAY_SIZE(log->zid); i++) {
 			sprintf(json_str, "zid %03d", i);
 			obj_add_uint64(r, json_str, (uint64_t)le64_to_cpu(log->zid[i]));
 		}
@@ -4153,6 +4216,7 @@ static void json_host_metadata(struct json_object *r, enum nvme_features_id fid,
 			       struct nvme_host_metadata *data)
 {
 	struct nvme_metadata_element_desc *desc = &data->descs[0];
+	__u8 *end = (__u8 *)data + sizeof(*data);
 	int i;
 	char val[VAL_LEN];
 	__u16 len;
@@ -4165,12 +4229,16 @@ static void json_host_metadata(struct json_object *r, enum nvme_features_id fid,
 	obj_add_array(r, "Metadata Element Descriptors", desca);
 
 	for (i = 0; i < data->ndesc; i++) {
+		/* the descriptors and their values end with the structure */
+		if (desc->val > end)
+			break;
+
 		desce = json_create_object();
 		array_add_obj(desca, desce);
 
 		obj_add_int(desce, "Element", i);
 
-		sprintf(json_str, "0x%02x", desc->type);
+		snprintf(json_str, sizeof(json_str), "0x%02x", desc->type);
 		obj_add_str(desce, "Type", json_str);
 
 		obj_add_str(desce, "Type definition",
@@ -4178,13 +4246,13 @@ static void json_host_metadata(struct json_object *r, enum nvme_features_id fid,
 
 		obj_add_int(desce, "Revision", desc->rev);
 
-		len = le16_to_cpu(desc->len);
-		obj_add_int(desce, "Length", len);
+		obj_add_int(desce, "Length", le16_to_cpu(desc->len));
 
-		strncpy(val, (char *)desc->val, min(sizeof(val) - 1, len));
+		len = min_t(size_t, le16_to_cpu(desc->len), end - desc->val);
+		snprintf(val, sizeof(val), "%.*s", len, (char *)desc->val);
 		obj_add_str(desce, "Value", val);
 
-		desc = (struct nvme_metadata_element_desc *)&desc->val[desc->len];
+		desc = (struct nvme_metadata_element_desc *)&desc->val[len];
 	}
 }
 
@@ -4251,7 +4319,8 @@ static void json_feature_show_fields_fdp_events(struct json_object *r, unsigned 
 	struct nvme_fdp_supported_event_desc *d;
 	char json_str[STR_LEN];
 
-	for (i = 0; i < result; i++) {
+	// NOET is in bits 7:0; bits 31:8 are reserved.
+	for (i = 0; i < (result & 0xff); i++) {
 		d = &((struct nvme_fdp_supported_event_desc *)buf)[i];
 		sprintf(json_str, "%s", d->evta & 0x1 ? "Enabled" : "Not enabled");
 		obj_add_str(r, nvme_fdp_event_to_string(d->evt), json_str);
@@ -4650,7 +4719,7 @@ static void json_nvme_id_nvmset(struct nvme_id_nvmset_list *nvmset,
 
 	obj_add_int(r, "nid", nent);
 
-	for (i = 0; i < nent; i++) {
+	for (i = 0; i < nent && i < ARRAY_SIZE(nvmset->ent); i++) {
 		struct json_object *entry = json_create_object();
 
 		obj_add_int(entry, "nvmset_id", le16_to_cpu(nvmset->ent[i].nvmsetid));
@@ -4726,7 +4795,8 @@ static void json_nvme_id_ns_granularity_list(
 	obj_add_int(r, "attributes", glist->attributes);
 	obj_add_int(r, "num-descriptors", glist->num_descriptors);
 
-	for (i = 0; i <= glist->num_descriptors; i++) {
+	for (i = 0; i <= glist->num_descriptors && i < ARRAY_SIZE(glist->entry);
+	     i++) {
 		struct json_object *entry = json_create_object();
 
 		obj_add_uint64(entry, "namespace-size-granularity",
@@ -4747,11 +4817,12 @@ static void json_nvme_id_uuid_list(const struct nvme_id_uuid_list *uuid_list)
 
 	for (i = 0; i < NVME_ID_UUID_LIST_MAX; i++) {
 		__u8 uuid[NVME_UUID_LEN];
-		struct json_object *entry = json_create_object();
+		struct json_object *entry;
 
 		/* The list is terminated by a zero UUID value */
 		if (memcmp(uuid_list->entry[i].uuid, zero_uuid, sizeof(zero_uuid)) == 0)
 			break;
+		entry = json_create_object();
 		memcpy(&uuid, uuid_list->entry[i].uuid, sizeof(uuid));
 		obj_add_int(entry, "association",
 			uuid_list->entry[i].header & 0x3);
@@ -4773,7 +4844,8 @@ static void json_id_domain_list(struct nvme_id_domain_list *id_dom)
 
 	obj_add_uint(r, "num_dom_entries", id_dom->num);
 
-	for (i = 0; i < id_dom->num; i++) {
+	for (i = 0; i < id_dom->num && i < ARRAY_SIZE(id_dom->domain_attr);
+	     i++) {
 		entry = json_create_object();
 		dom_cap = le128_to_cpu(id_dom->domain_attr[i].dom_cap);
 		unalloc_dom_cap = le128_to_cpu(id_dom->domain_attr[i].unalloc_dom_cap);
@@ -4889,7 +4961,7 @@ static void json_print_detail_list_multipath(struct libnvme_subsystem *s,
 			obj_add_str(jpath, "ModelNumber", model);
 			obj_add_str(jpath, "Firmware", firmware);
 			obj_add_str(jpath, "Transport", libnvme_ctrl_get_transport(c));
-			obj_add_str(jpath, "Address", libnvme_ctrl_get_address(c));
+			obj_add_ctrl_address(jpath, c);
 			obj_add_ctrl_address_details(jpath, "AddressDetails", c);
 			obj_add_str(jpath, "Slot", slot ? slot : "");
 
@@ -4929,7 +5001,7 @@ static void json_print_detail_list(struct libnvme_subsystem *s, struct json_obje
 		obj_add_str(jctrl, "ModelNumber", model);
 		obj_add_str(jctrl, "Firmware", firmware);
 		obj_add_str(jctrl, "Transport", libnvme_ctrl_get_transport(c));
-		obj_add_str(jctrl, "Address", libnvme_ctrl_get_address(c));
+		obj_add_ctrl_address(jctrl, c);
 		obj_add_ctrl_address_details(jctrl, "AddressDetails", c);
 		obj_add_str(jctrl, "Slot", slot ? slot : "");
 
@@ -5052,7 +5124,7 @@ static void json_detail_list(struct libnvme_global_ctx *ctx)
 				obj_add_str(jctrl, "ModelNumber", model);
 				obj_add_str(jctrl, "Firmware", firmware);
 				obj_add_str(jctrl, "Transport", libnvme_ctrl_get_transport(c));
-				obj_add_str(jctrl, "Address", libnvme_ctrl_get_address(c));
+				obj_add_ctrl_address(jctrl, c);
 				obj_add_ctrl_address_details(jctrl, "AddressDetails", c);
 				obj_add_str(jctrl, "Slot", slot);
 
@@ -5261,7 +5333,7 @@ static unsigned int json_subsystem_topology_multipath(struct libnvme_subsystem *
 			ctrl_attrs = json_create_object();
 			obj_add_str(ctrl_attrs, "Name", libnvme_ctrl_get_name(c));
 			obj_add_str(ctrl_attrs, "Transport", libnvme_ctrl_get_transport(c));
-			obj_add_str(ctrl_attrs, "Address", libnvme_ctrl_get_address(c));
+			obj_add_ctrl_address(ctrl_attrs, c);
 			obj_add_ctrl_address_details(ctrl_attrs, "AddressDetails", c);
 			obj_add_str(ctrl_attrs, "State", libnvme_ctrl_get_state(c));
 			array_add_obj(ctrls, ctrl_attrs);
@@ -5299,8 +5371,7 @@ static void json_print_nvme_subsystem_topology(struct libnvme_subsystem *s,
 						     libnvme_ctrl_get_name(c));
 			obj_add_str(ctrl_attrs, "Transport",
 						     libnvme_ctrl_get_transport(c));
-			obj_add_str(ctrl_attrs, "Address",
-						     libnvme_ctrl_get_address(c));
+			obj_add_ctrl_address(ctrl_attrs, c);
 			obj_add_ctrl_address_details(ctrl_attrs, "AddressDetails", c);
 			obj_add_str(ctrl_attrs, "State",
 						     libnvme_ctrl_get_state(c));
@@ -5411,32 +5482,41 @@ static void json_directive_show_fields_identify(__u8 doper, __u8 *field, struct 
 	}
 }
 
-static void json_directive_show_fields_streams(__u8 doper, unsigned int result, __u16 *field,
+static void json_directive_show_fields_streams(__u8 doper,
+					       unsigned int result, __u8 *field,
 					       struct json_object *r)
 {
+	struct nvme_streams_directive_params *params = (void *)field;
+	struct nvme_streams_directive_status *status = (void *)field;
 	int count;
 	int i;
 	char json_str[STR_LEN];
 
 	switch (doper) {
 	case NVME_DIRECTIVE_RECEIVE_STREAMS_DOPER_PARAM:
-		obj_add_uint(r, "Max Streams Limit (MSL)", le16_to_cpu(*field));
-		obj_add_uint(r, "NVM Subsystem Streams Available (NSSA)", le16_to_cpu(*(field + 2)));
-		obj_add_uint(r, "NVM Subsystem Streams Open (NSSO)", le16_to_cpu(*(field + 4)));
-		obj_add_uint(r, "NVM Subsystem Stream Capability (NSSC)", le16_to_cpu(*(field + 6)));
+		obj_add_uint(r, "Max Streams Limit (MSL)",
+			     le16_to_cpu(params->msl));
+		obj_add_uint(r, "NVM Subsystem Streams Available (NSSA)",
+			     le16_to_cpu(params->nssa));
+		obj_add_uint(r, "NVM Subsystem Streams Open (NSSO)",
+			     le16_to_cpu(params->nsso));
+		obj_add_uint(r, "NVM Subsystem Stream Capability (NSSC)",
+			     params->nssc);
 		obj_add_uint(r, "Stream Write Size (in unit of LB size) (SWS)",
-			     le16_to_cpu(*(__u32 *)(field + 16)));
+			     le32_to_cpu(params->sws));
 		obj_add_uint(r, "Stream Granularity Size (in unit of SWS) (SGS)",
-			     le16_to_cpu(*(field + 20)));
-		obj_add_uint(r, "Namespace Streams Allocated (NSA)", le16_to_cpu(*(field + 22)));
-		obj_add_uint(r, "Namespace Streams Open (NSO)", le16_to_cpu(*(field + 24)));
+			     le16_to_cpu(params->sgs));
+		obj_add_uint(r, "Namespace Streams Allocated (NSA)",
+			     le16_to_cpu(params->nsa));
+		obj_add_uint(r, "Namespace Streams Open (NSO)",
+			     le16_to_cpu(params->nso));
 		break;
 	case NVME_DIRECTIVE_RECEIVE_STREAMS_DOPER_STATUS:
-		count = *field;
-		obj_add_uint(r, "Open Stream Count", le16_to_cpu(*field));
+		count = le16_to_cpu(status->osc);
+		obj_add_uint(r, "Open Stream Count", count);
 		for (i = 0; i < count; i++) {
 			sprintf(json_str, "Stream Identifier %.6u", i + 1);
-			obj_add_uint(r, json_str, le16_to_cpu(*(field + (i + 1) * 2)));
+			obj_add_uint(r, json_str, le16_to_cpu(status->sid[i]));
 		}
 		break;
 	case NVME_DIRECTIVE_RECEIVE_STREAMS_DOPER_RESOURCE:
@@ -5457,7 +5537,7 @@ static void json_directive_show_fields(__u8 dtype, __u8 doper, unsigned int resu
 		json_directive_show_fields_identify(doper, field, r);
 		break;
 	case NVME_DIRECTIVE_DTYPE_STREAMS:
-		json_directive_show_fields_streams(doper, result, (__u16 *)field, r);
+		json_directive_show_fields_streams(doper, result, field, r);
 		break;
 	default:
 		obj_add_str(r, "Error", "invalid directive type");
@@ -5866,17 +5946,19 @@ static void json_rotational_media_info_log(struct nvme_rotational_media_info_log
 	obj_add_uint(r, "fldc", le32_to_cpu(info->fldc));
 }
 
-static void json_dispersed_ns_psub_log(struct nvme_dispersed_ns_participating_nss_log *log)
+static void json_dispersed_ns_psub_log(
+		struct nvme_dispersed_ns_participating_nss_log *log, __u64 len)
 {
 	struct json_object *r = json_r;
 	__u64 numpsub = le64_to_cpu(log->numpsub);
-	__u64 i;
+	__u64 i, n;
 	char json_str[STR_LEN];
 	char psub[NVME_NQN_LENGTH + 1];
 
 	obj_add_uint64(r, "genctr", le64_to_cpu(log->genctr));
 	obj_add_uint64(r, "numpsub", numpsub);
-	for (i = 0; i < numpsub; i++) {
+	n = nvme_log_nr_entries(numpsub, len, sizeof(*log), NVME_NQN_LENGTH);
+	for (i = 0; i < n; i++) {
 		snprintf(json_str, sizeof(json_str), "participating_nss %"PRIu64"", (uint64_t)i);
 		snprintf(psub, sizeof(psub), "%-.*s", NVME_NQN_LENGTH,
 			 &log->participating_nss[i * NVME_NQN_LENGTH]);
@@ -5884,60 +5966,85 @@ static void json_dispersed_ns_psub_log(struct nvme_dispersed_ns_participating_ns
 	}
 }
 
-static void json_reachability_groups_log(struct nvme_reachability_groups_log *log, __u64 len UNUSED)
+static void json_reachability_groups_log(
+		struct nvme_reachability_groups_log *log, __u64 len)
 {
 	struct json_object *r = json_r;
+	struct nvme_reachability_group_desc desc;
+	__u64 off = sizeof(*log);
+	__le32 *nsid;
 	__u16 i;
 	__u32 j;
 	char json_str[STR_LEN];
-	struct json_object *rgd;
+	struct json_object *rgd, *nsids;
 
 	obj_add_uint64(r, "chngc", le64_to_cpu(log->chngc));
 	obj_add_uint(r, "nrgd", le16_to_cpu(log->nrgd));
 
-	for (i = 0; i < le16_to_cpu(log->nrgd); i++) {
-		snprintf(json_str, sizeof(json_str), "rgid: %u", le32_to_cpu(log->rgd[i].rgid));
+	for (i = 0; i < le16_to_cpu(log->nrgd) &&
+	     nvme_reachability_group(log, len, off, &desc); i++) {
+		snprintf(json_str, sizeof(json_str), "rgid: %u",
+			 le32_to_cpu(desc.rgid));
 		rgd = json_create_object();
-		obj_add_uint(rgd, "nnid", le32_to_cpu(log->rgd[i].nnid));
-		obj_add_uint64(rgd, "chngc", le64_to_cpu(log->rgd[i].chngc));
-		for (j = 0; j < le32_to_cpu(log->rgd[i].nnid); j++)
-			obj_add_uint(rgd, "nnid", le32_to_cpu(log->rgd[i].nsid[j]));
+		obj_add_uint(rgd, "nnid", le32_to_cpu(desc.nnid));
+		obj_add_uint64(rgd, "chngc", le64_to_cpu(desc.chngc));
+		nsids = json_create_array();
+		nsid = nvme_reachability_ids(log, off, sizeof(desc));
+		for (j = 0; j < le32_to_cpu(desc.nnid); j++)
+			json_object_array_add(nsids,
+				json_object_new_uint64(le32_to_cpu(nsid[j])));
+		obj_add_array(rgd, "nsid", nsids);
 		obj_add_obj(r, json_str, rgd);
+		off = nvme_reachability_group_next(&desc, off);
 	}
 }
 
 static void json_reachability_associations_log(struct nvme_reachability_associations_log *log,
-					       __u64 len UNUSED)
+					       __u64 len)
 {
 	struct json_object *r = json_r;
+	struct nvme_reachability_association_desc desc;
+	__u64 off = sizeof(*log);
+	__le32 *rgid;
 	__u16 i;
 	__u32 j;
 	char json_str[STR_LEN];
-	struct json_object *rad;
+	struct json_object *rad, *rgids;
 
 	obj_add_uint64(r, "chngc", le64_to_cpu(log->chngc));
 	obj_add_uint(r, "nrad", le16_to_cpu(log->nrad));
 
-	for (i = 0; i < le16_to_cpu(log->nrad); i++) {
-		snprintf(json_str, sizeof(json_str), "rasid: %u", le32_to_cpu(log->rad[i].rasid));
+	for (i = 0; i < le16_to_cpu(log->nrad) &&
+	     nvme_reachability_association(log, len, off, &desc); i++) {
+		snprintf(json_str, sizeof(json_str), "rasid: %u",
+			 le32_to_cpu(desc.rasid));
 		rad = json_create_object();
-		obj_add_uint(rad, "nrid", le32_to_cpu(log->rad[i].nrid));
-		obj_add_uint64(rad, "chngc", le64_to_cpu(log->rad[i].chngc));
-		obj_add_uint(rad, "rac", log->rad[i].rac);
-		for (j = 0; j < le32_to_cpu(log->rad[i].nrid); j++)
-			obj_add_uint(rad, "rgid", le32_to_cpu(log->rad[i].rgid[j]));
+		obj_add_uint(rad, "nrid", le32_to_cpu(desc.nrid));
+		obj_add_uint64(rad, "chngc", le64_to_cpu(desc.chngc));
+		obj_add_uint(rad, "rac", desc.rac);
+		rgids = json_create_array();
+		rgid = nvme_reachability_ids(log, off, sizeof(desc));
+		for (j = 0; j < le32_to_cpu(desc.nrid); j++)
+			json_object_array_add(rgids,
+				json_object_new_uint64(le32_to_cpu(rgid[j])));
+		obj_add_array(rad, "rgid", rgids);
 		obj_add_obj(r, json_str, rad);
+		off = nvme_reachability_association_next(&desc, off);
 	}
 }
 
 #ifdef CONFIG_FABRICS
-static void json_host_discovery_log(struct nvme_host_discovery_log *log)
+static void json_host_discovery_log(struct nvme_host_discovery_log *log,
+				    __u64 len)
 {
 	struct json_object *r = json_r;
-	__u32 i;
+	__u64 i;
 	__u16 j;
 	struct nvme_host_ext_discovery_log *hedlpe;
 	struct nvmf_ext_attr *exat;
+	void *p;
+	char hostnqn[sizeof(hedlpe->hostnqn) + 1];
+	char traddr[sizeof(hedlpe->traddr) + 1];
 	__u32 thdlpl = le32_to_cpu(log->thdlpl);
 	__u32 tel;
 	__u16 numexat;
@@ -5953,17 +6060,21 @@ static void json_host_discovery_log(struct nvme_host_discovery_log *log)
 	obj_add_uint_02x(r, "hdlpf", log->hdlpf);
 	obj_add_uint(r, "thdlpl", thdlpl);
 
-	for (i = sizeof(*log); i < le32_to_cpu(log->thdlpl); i += tel) {
+	for (i = sizeof(*log);
+	     (hedlpe = nvme_host_discovery_record(log, len, i)); i += tel) {
 		hedlpe_o = json_create_object();
-		hedlpe = (void *)log + i;
 		tel = le32_to_cpu(hedlpe->tel);
 		numexat = le16_to_cpu(hedlpe->numexat);
+		snprintf(hostnqn, sizeof(hostnqn), "%-.*s",
+			 (int)sizeof(hedlpe->hostnqn), hedlpe->hostnqn);
+		snprintf(traddr, sizeof(traddr), "%-.*s",
+			 (int)sizeof(hedlpe->traddr), hedlpe->traddr);
 		obj_add_str(hedlpe_o, "trtype", libnvmf_trtype_str(hedlpe->trtype));
-		obj_add_str(hedlpe_o, "adrfam",
-			    strlen(hedlpe->traddr) ? libnvmf_adrfam_str(hedlpe->adrfam) : "");
+		obj_add_str(hedlpe_o, "adrfam", traddr[0] ?
+			    libnvmf_adrfam_str(hedlpe->adrfam) : "");
 		obj_add_str(hedlpe_o, "eflags", libnvmf_eflags_str(le16_to_cpu(hedlpe->eflags)));
-		obj_add_str(hedlpe_o, "hostnqn", hedlpe->hostnqn);
-		obj_add_str(hedlpe_o, "traddr", hedlpe->traddr);
+		obj_add_str(hedlpe_o, "hostnqn", hostnqn);
+		obj_add_str(hedlpe_o, "traddr", traddr);
 		tsas_o = json_create_object();
 		switch (hedlpe->trtype) {
 		case NVMF_TRTYPE_RDMA:
@@ -5984,8 +6095,9 @@ static void json_host_discovery_log(struct nvme_host_discovery_log *log)
 		obj_add_uint(hedlpe_o, "tel", tel);
 		obj_add_uint(hedlpe_o, "numexat", numexat);
 
-		exat = hedlpe->exat;
-		for (j = 0; j < numexat; j++) {
+		p = hedlpe->exat;
+		for (j = 0; j < numexat &&
+		     (exat = nvme_host_discovery_exat(hedlpe, p)); j++) {
 			exat_o = json_create_object();
 			snprintf(json_str, sizeof(json_str), "exat: %d", j);
 			obj_add_uint(exat_o, "exattype", le16_to_cpu(exat->exattype));
@@ -5993,7 +6105,7 @@ static void json_host_discovery_log(struct nvme_host_discovery_log *log)
 			obj_d(exat_o, "exatval", (unsigned char *)exat->exatval,
 			      le16_to_cpu(exat->exatlen), 16, 1);
 			obj_add_obj(hedlpe_o, json_str, exat_o);
-			exat = libnvmf_exat_ptr_next(exat);
+			p = libnvmf_exat_ptr_next(exat);
 		}
 		snprintf(json_str, sizeof(json_str), "hedlpe: %d", n++);
 		obj_add_obj(r, json_str, hedlpe_o);
@@ -6021,12 +6133,14 @@ static void obj_add_traddr(struct json_object *o, const char *k, __u8 adrfam, __
 		obj_add_str(o, k, dst);
 }
 
-static void json_ave_discovery_log(struct nvme_ave_discovery_log *log)
+static void json_ave_discovery_log(struct nvme_ave_discovery_log *log,
+				   __u64 len)
 {
 	struct json_object *r = json_r;
-	__u32 i;
+	__u64 i;
 	__u8 j;
 	struct nvme_ave_discovery_log_entry *adlpe;
+	char avenqn[sizeof(adlpe->avenqn) + 1];
 	struct nvme_ave_tr_record *atr;
 	__u32 tadlpl = le32_to_cpu(log->tadlpl);
 	__u32 tel;
@@ -6041,15 +6155,20 @@ static void json_ave_discovery_log(struct nvme_ave_discovery_log *log)
 	obj_add_uint(r, "recfmt", le16_to_cpu(log->recfmt));
 	obj_add_uint(r, "thdlpl", tadlpl);
 
-	for (i = sizeof(*log); i < le32_to_cpu(log->tadlpl); i += tel) {
+	for (i = sizeof(*log);
+	     (adlpe = nvme_ave_discovery_record(log, len, i)); i += tel) {
 		adlpe_o = json_create_object();
-		adlpe = (void *)log + i;
 		tel = le32_to_cpu(adlpe->tel);
 		numatr = adlpe->numatr;
+		snprintf(avenqn, sizeof(avenqn), "%-.*s",
+			 (int)sizeof(adlpe->avenqn), adlpe->avenqn);
 		obj_add_uint(adlpe_o, "tel", tel);
-		obj_add_str(adlpe_o, "avenqn", adlpe->avenqn);
+		obj_add_str(adlpe_o, "avenqn", avenqn);
 		obj_add_uint(adlpe_o, "numatr", numatr);
 
+		/* the transport records must fit the record */
+		numatr = nvme_log_nr_entries(numatr, tel, sizeof(*adlpe),
+					     sizeof(*atr));
 		atr = adlpe->atr;
 		for (j = 0; j < numatr; j++) {
 			atr_o = json_create_object();
@@ -6065,22 +6184,30 @@ static void json_ave_discovery_log(struct nvme_ave_discovery_log *log)
 	}
 }
 #else
-static void json_host_discovery_log(struct nvme_host_discovery_log *log) {}
-static void json_ave_discovery_log(struct nvme_ave_discovery_log *log) {}
+static void json_host_discovery_log(struct nvme_host_discovery_log *log,
+				    __u64 len)
+{
+}
+
+static void json_ave_discovery_log(struct nvme_ave_discovery_log *log,
+				   __u64 len)
+{
+}
 #endif
 
-static void json_pull_model_ddc_req_log(struct nvme_pull_model_ddc_req_log *log)
+static void json_pull_model_ddc_req_log(struct nvme_pull_model_ddc_req_log *log,
+					__u64 len)
 {
 	struct json_object *r = json_r;
 	__u32 tpdrpl = le32_to_cpu(log->tpdrpl);
-	__u32 osp_len = tpdrpl - offsetof(struct nvme_pull_model_ddc_req_log, osp);
+	__u32 osp_len = nvme_pull_model_ddc_req_osp_len(log, len);
 
 	obj_add_uint(r, "ori", log->ori);
 	obj_add_uint(r, "tpdrpl", tpdrpl);
 	obj_d(r, "osp", (unsigned char *)log->osp, osp_len, 16, 1);
 }
 
-static void json_power_meas_log(struct nvme_power_meas_log *log, __u32 size UNUSED)
+static void json_power_meas_log(struct nvme_power_meas_log *log, __u32 size)
 {
 	struct json_object *r = json_r;
 	struct json_object *descs;
@@ -6124,6 +6251,9 @@ static void json_power_meas_log(struct nvme_power_meas_log *log, __u32 size UNUS
 
 	obj_add_uint(r, "ipwrpe", log->ipwrpe);
 
+	/* the descriptors the buffer holds */
+	nphd = nvme_log_nr_entries(nphd, size, sizeof(*log),
+				   sizeof(log->descs[0]));
 	descs = json_create_array();
 	for (i = 0; i < nphd; i++) {
 		struct json_object *desc = json_create_object();

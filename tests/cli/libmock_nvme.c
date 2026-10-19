@@ -15,6 +15,11 @@
  * char device). This lets any nvme-cli command run against a fake target,
  * with no kernel nvme-fabrics module, no real hardware, and no root.
  *
+ * Also intercepts the host network queries the default --nr-io-queues
+ * computation makes: the NETLINK_ROUTE egress route lookup, the
+ * ETHTOOL_GCHANNELS ioctl() and get_nprocs(). So the test, not the host
+ * running it, decides the NIC and CPU setup.
+ *
  * Every intercepted write() (fabrics connect args) or ioctl() goes over a
  * Unix socket to a Python IPC server. Admin and I/O passthru commands are
  * decoded here, so the server sees the command fields. Any other ioctl()
@@ -42,11 +47,17 @@
 #define _GNU_SOURCE
 #endif
 
+#include <arpa/inet.h>
 #include <dlfcn.h>
 #include <endian.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <linux/ethtool.h>
+#include <linux/netlink.h>
+#include <linux/rtnetlink.h>
+#include <linux/sockios.h>
 #include <linux/types.h>
+#include <net/if.h>
 #include <stdarg.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -56,6 +67,7 @@
 #include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/sysinfo.h>
 #include <sys/types.h>
 #include <sys/un.h>
 #include <unistd.h>
@@ -115,6 +127,9 @@ enum ipc_type {
 	IPC_TYPE_IOCTL		= 2,	/* admin or I/O passthru ioctl() */
 	IPC_TYPE_RAW_IOCTL	= 3,	/* other ioctl() on a mocked device */
 	IPC_TYPE_GETPASS	= 4,	/* getpass(), payload is the prompt */
+	IPC_TYPE_ROUTE		= 5,	/* route lookup, "daddr\0saddr" */
+	IPC_TYPE_NIC_QUEUES	= 6,	/* ETHTOOL_GCHANNELS, the ifname */
+	IPC_TYPE_NPROCS		= 7,	/* get_nprocs() */
 };
 
 /* Direction of a raw ioctl, independent of the arch's _IOC_* values. */
@@ -156,6 +171,7 @@ struct __attribute__((packed)) ipc_response {
 	uint32_t data_len;	/* payload length (follows immediately) */
 };
 
+#ifndef MOCK_FUZZ
 /*
  * This process may be running as real target-arch code (a cross build
  * under qemu-user), while nvme_mock_ipc.py on the other end of the socket
@@ -190,6 +206,7 @@ static void ipc_response_decode(struct ipc_response *r)
 	r->result    = le32toh(r->result);
 	r->data_len  = le32toh(r->data_len);
 }
+#endif
 
 typedef int (*orig_open_t)(const char *pathname, int flags, ...);
 typedef int (*orig_open64_t)(const char *pathname, int flags, ...);
@@ -203,13 +220,20 @@ typedef int (*orig_fstat_t)(int fd, struct stat *buf);
 typedef int (*orig_fstat64_t)(int fd, struct stat64 *buf);
 typedef int (*orig_fstat64_time64_t)(int fd, void *buf);
 typedef char *(*orig_getpass_t)(const char *prompt);
+typedef int (*orig_socket_t)(int domain, int type, int protocol);
+typedef ssize_t (*orig_sendmsg_t)(int fd, const struct msghdr *msg, int flags);
+typedef ssize_t (*orig_recvmsg_t)(int fd, struct msghdr *msg, int flags);
+typedef char *(*orig_if_indextoname_t)(unsigned int ifindex, char *ifname);
+typedef int (*orig_get_nprocs_t)(void);
 
 static orig_open_t orig_open;
 static orig_open64_t orig_open64;
 static orig_openat_t orig_openat;
 static orig_openat64_t orig_openat64;
 static orig_write_t orig_write;
+#ifndef MOCK_FUZZ
 static orig_read_t orig_read;
+#endif
 static orig_ioctl_t orig_ioctl;
 static orig_ioctl_t orig_ioctl_time64;
 static orig_close_t orig_close;
@@ -217,6 +241,13 @@ static orig_fstat_t orig_fstat;
 static orig_fstat64_t orig_fstat64;
 static orig_fstat64_time64_t orig_fstat64_time64;
 static orig_getpass_t orig_getpass;
+static orig_socket_t orig_socket;
+static orig_sendmsg_t orig_sendmsg;
+static orig_sendmsg_t orig_sendmsg64;
+static orig_recvmsg_t orig_recvmsg;
+static orig_recvmsg_t orig_recvmsg64;
+static orig_if_indextoname_t orig_if_indextoname;
+static orig_get_nprocs_t orig_get_nprocs;
 
 static int mock_fabrics_fd = -1;
 static int mock_fabrics_manager_fd = -1;
@@ -229,6 +260,21 @@ static struct {
 	bool is_block;
 } mock_ctrl_fds[MAX_MOCK_CTRLS];
 static int num_mock_ctrls;
+
+/*
+ * The route lookup reply: the egress interface the IPC server picked,
+ * or the errno it failed with. The interface gets a made-up ifindex,
+ * which if_indextoname() maps back to the name.
+ */
+#define MOCK_IFINDEX 0x4d4f434b
+static int mock_netlink_fd = -1;
+static struct {
+	bool pending;
+	struct nlmsghdr req;
+	unsigned char family;
+	int error;
+} mock_route_reply;
+static char mock_ifname[IF_NAMESIZE];
 
 #define mock_dbg(fmt, ...) \
 	do { \
@@ -253,7 +299,9 @@ static void init_orig_functions(void)
 	orig_openat = (orig_openat_t)dlsym(RTLD_NEXT, "openat");
 	orig_openat64 = (orig_openat64_t)dlsym(RTLD_NEXT, "openat64");
 	orig_write = (orig_write_t)dlsym(RTLD_NEXT, "write");
+#ifndef MOCK_FUZZ
 	orig_read = (orig_read_t)dlsym(RTLD_NEXT, "read");
+#endif
 	orig_ioctl = (orig_ioctl_t)dlsym(RTLD_NEXT, "ioctl");
 	orig_ioctl_time64 = (orig_ioctl_t)dlsym(RTLD_NEXT, "__ioctl_time64");
 	orig_close = (orig_close_t)dlsym(RTLD_NEXT, "close");
@@ -261,8 +309,27 @@ static void init_orig_functions(void)
 	orig_fstat64 = (orig_fstat64_t)dlsym(RTLD_NEXT, "fstat64");
 	orig_fstat64_time64 = (orig_fstat64_time64_t)dlsym(RTLD_NEXT, "__fstat64_time64");
 	orig_getpass = (orig_getpass_t)dlsym(RTLD_NEXT, "getpass");
+	orig_socket = (orig_socket_t)dlsym(RTLD_NEXT, "socket");
+	orig_sendmsg = (orig_sendmsg_t)dlsym(RTLD_NEXT, "sendmsg");
+	orig_sendmsg64 = (orig_sendmsg_t)dlsym(RTLD_NEXT, "__sendmsg64");
+	orig_recvmsg = (orig_recvmsg_t)dlsym(RTLD_NEXT, "recvmsg");
+	orig_recvmsg64 = (orig_recvmsg_t)dlsym(RTLD_NEXT, "__recvmsg64");
+	orig_if_indextoname = (orig_if_indextoname_t)dlsym(RTLD_NEXT,
+							   "if_indextoname");
+	orig_get_nprocs = (orig_get_nprocs_t)dlsym(RTLD_NEXT, "get_nprocs");
 }
 
+#ifdef MOCK_FUZZ
+/*
+ * Built into a fuzz target (tests/fuzz/fuzz-device.c), the shim has no
+ * IPC server: the fuzz input answers every command instead. A "socket"
+ * is a /dev/null fd, so the callers can close it as usual.
+ */
+static int connect_ipc_socket(void)
+{
+	return orig_open("/dev/null", O_RDWR);
+}
+#else
 static int connect_ipc_socket(void)
 {
 	const char *sock_path = getenv("MOCK_IPC_SOCK");
@@ -274,7 +341,7 @@ static int connect_ipc_socket(void)
 		return -1;
 	}
 
-	fd = socket(AF_UNIX, SOCK_STREAM, 0);
+	fd = orig_socket(AF_UNIX, SOCK_STREAM, 0);
 	if (fd < 0) {
 		mock_dbg("failed to create socket: %s\n", strerror(errno));
 		return -1;
@@ -292,6 +359,7 @@ static int connect_ipc_socket(void)
 
 	return fd;
 }
+#endif
 
 const char *default_opts =
 	"instance,cntlid,concat,ctrl_loss_tmo,data_digest,"
@@ -494,6 +562,109 @@ int __openat64_2(int dirfd, const char *pathname, int flags)
 	return orig_openat64(dirfd, pathname, flags, 0);
 }
 
+#ifdef MOCK_FUZZ
+/*
+ * The kernel rejects a transfer larger than the controller takes. And a
+ * fuzzed log length must not have the mock serve, and nvme-cli print,
+ * gigabytes: the data of all commands of a run is limited too.
+ */
+#define FUZZ_MAX_TRANSFER	(2 * 1024 * 1024)
+#define FUZZ_MAX_TOTAL		(8 * 1024 * 1024)
+
+static const uint8_t *fuzz_data;
+static size_t fuzz_size;
+static size_t fuzz_total;
+
+/* The bytes the following commands get their answers from */
+void mock_fuzz_input(const uint8_t *data, size_t size)
+{
+	fuzz_data = data;
+	fuzz_size = size;
+	fuzz_total = 0;
+}
+
+/* The next bytes of the input, zeros once it is used up */
+static void fuzz_read(void *buf, size_t len)
+{
+	size_t n = len < fuzz_size ? len : fuzz_size;
+
+	memcpy(buf, fuzz_data, n);
+	memset((uint8_t *)buf + n, 0, len - n);
+	fuzz_data += n;
+	fuzz_size -= n;
+}
+
+/*
+ * Answer a command from the fuzz input: a control byte, the result
+ * dword, and then the data the command reads. Most control bytes mean
+ * success, the rest an NVMe status (from the next two bytes) or a
+ * failed ioctl(). Everything that is no device command fails, so the
+ * real function takes over where there is one.
+ */
+static void *ipc_call(int ipc_fd, struct ipc_request *req, const void *data,
+		      struct ipc_response *resp)
+{
+	uint8_t ctl;
+	uint16_t sc;
+	void *buf;
+
+	(void)ipc_fd;
+	(void)data;
+	memset(resp, 0, sizeof(*resp));
+
+	switch (req->type) {
+	case IPC_TYPE_IOCTL:
+		resp->data_len = req->req_len;
+		break;
+	case IPC_TYPE_RAW_IOCTL:
+		if (req->ioc_dir & IPC_IOC_READ)
+			resp->data_len = req->ioc_size;
+		break;
+	default:
+		resp->status = -1;
+		resp->errno_val = EOPNOTSUPP;
+		return NULL;
+	}
+
+	if (resp->data_len > FUZZ_MAX_TRANSFER) {
+		resp->status = -1;
+		resp->errno_val = EINVAL;
+		return NULL;
+	}
+	if (resp->data_len > FUZZ_MAX_TOTAL - fuzz_total) {
+		resp->status = -1;
+		resp->errno_val = EIO;
+		return NULL;
+	}
+	fuzz_total += resp->data_len;
+
+	fuzz_read(&ctl, sizeof(ctl));
+	fuzz_read(&resp->result, sizeof(resp->result));
+	resp->result = le32toh(resp->result);
+	if (ctl >= 0xf8) {
+		resp->status = -1;
+		resp->errno_val = EIO;
+		return NULL;
+	}
+	if (ctl >= 0xe0) {
+		fuzz_read(&sc, sizeof(sc));
+		resp->sc_status = le16toh(sc) & 0x7fff;
+		return NULL;
+	}
+
+	if (!resp->data_len)
+		return NULL;
+	buf = malloc(resp->data_len);
+	if (!buf) {
+		resp->status = -1;
+		resp->errno_val = ENOMEM;
+		return NULL;
+	}
+	fuzz_read(buf, resp->data_len);
+
+	return buf;
+}
+#else
 static bool read_full(int fd, void *buf, size_t len)
 {
 	size_t total_read = 0;
@@ -580,6 +751,7 @@ static void *ipc_call(int ipc_fd, struct ipc_request *req, const void *data,
 
 	return read_ipc_response(ipc_fd, resp);
 }
+#endif
 
 ssize_t write(int fd, const void *buf, size_t count)
 {
@@ -656,6 +828,7 @@ static int handle_passthru_ioctl(int instance, unsigned long request,
 	mock_dbg("ioctl intercepted on instance %d (request 0x%lx)\n",
 		instance, request);
 
+
 	ipc_fd = connect_ipc_socket();
 	if (ipc_fd < 0) {
 		mock_dbg("ioctl could not connect to IPC socket\n");
@@ -699,7 +872,8 @@ static int handle_passthru_ioctl(int instance, unsigned long request,
 		cmd->result = resp.result;
 	}
 
-	if (resp_data) {
+	/* like the kernel, which transfers no data without a buffer */
+	if (resp_data && cmd->addr) {
 		if (resp.data_len > cmd->data_len) {
 			mock_dbg("ioctl response data_len %u exceeds caller buffer %u, truncating\n",
 				 resp.data_len, cmd->data_len);
@@ -774,10 +948,65 @@ static int handle_raw_ioctl(int instance, unsigned long request, void *argp)
 	return resp.sc_status;
 }
 
+/*
+ * Ask the IPC server for the h/w queues of the interface in an
+ * ETHTOOL_GCHANNELS request. Any other ethtool command goes to the real
+ * ioctl().
+ */
+static int handle_ethtool_ioctl(struct ifreq *ifr)
+{
+	struct ethtool_channels *chan = (void *)ifr->ifr_data;
+	struct ipc_response resp;
+	uint32_t *counts;
+	int ipc_fd;
+
+	if (!chan || chan->cmd != ETHTOOL_GCHANNELS)
+		return -2;
+
+	ipc_fd = connect_ipc_socket();
+	if (ipc_fd < 0)
+		return -2;
+
+	mock_dbg("ETHTOOL_GCHANNELS intercepted on %s\n", ifr->ifr_name);
+
+	struct ipc_request req = {
+		.type = IPC_TYPE_NIC_QUEUES,
+		.data_len = strnlen(ifr->ifr_name, sizeof(ifr->ifr_name)),
+	};
+
+	counts = ipc_call(ipc_fd, &req, ifr->ifr_name, &resp);
+	orig_close(ipc_fd);
+
+	if (resp.status == -1) {
+		free(counts);
+		errno = resp.errno_val;
+		return -1;
+	}
+
+	if (!counts || resp.data_len < 3 * sizeof(*counts)) {
+		free(counts);
+		errno = EIO;
+		return -1;
+	}
+
+	chan->combined_count = le32toh(counts[0]);
+	chan->tx_count = le32toh(counts[1]);
+	chan->rx_count = le32toh(counts[2]);
+	free(counts);
+
+	return 0;
+}
+
 static int mock_ioctl(int fd, unsigned long request, void *argp, orig_ioctl_t fallback)
 {
 	int instance = mock_ctrl_instance(fd);
 	int ret;
+
+	if (request == SIOCETHTOOL && argp) {
+		ret = handle_ethtool_ioctl(argp);
+		if (ret != -2)
+			return ret;
+	}
 
 	if (instance < 0)
 		return fallback(fd, request, argp);
@@ -843,6 +1072,10 @@ int close(int fd)
 		mock_fabrics_fd = -1;
 	if (fd == mock_fabrics_manager_fd)
 		mock_fabrics_manager_fd = -1;
+	if (fd == mock_netlink_fd) {
+		mock_netlink_fd = -1;
+		mock_route_reply.pending = false;
+	}
 
 	for (int i = 0; i < num_mock_ctrls; i++) {
 		if (mock_ctrl_fds[i].fd != fd)
@@ -948,4 +1181,257 @@ char *getpass(const char *prompt)
 	free(resp_data);
 
 	return pass;
+}
+
+/*
+ * Fake the NETLINK_ROUTE socket the egress route lookup uses. The fd is
+ * a real (unconnected) socket, so close() and friends still work, but
+ * sendmsg()/recvmsg() on it never reach the kernel.
+ */
+int socket(int domain, int type, int protocol)
+{
+	int fd;
+
+	init_orig_functions();
+
+	if (domain != AF_NETLINK || protocol != NETLINK_ROUTE ||
+	    !getenv("MOCK_IPC_SOCK"))
+		return orig_socket(domain, type, protocol);
+
+	fd = orig_socket(AF_UNIX, SOCK_DGRAM, 0);
+	if (fd < 0)
+		return fd;
+
+	mock_netlink_fd = fd;
+	mock_route_reply.pending = false;
+	mock_dbg("intercepted NETLINK_ROUTE socket (mapped to fd %d)\n", fd);
+
+	return fd;
+}
+
+static void rtattr_addr_to_str(struct rtattr *rta, unsigned char family,
+			       char *buf, size_t len)
+{
+	size_t alen = family == AF_INET ? sizeof(struct in_addr) :
+					  sizeof(struct in6_addr);
+
+	if (RTA_PAYLOAD(rta) < alen ||
+	    !inet_ntop(family, RTA_DATA(rta), buf, len))
+		buf[0] = '\0';
+}
+
+/*
+ * Decode an RTM_GETROUTE request and ask the IPC server for the egress
+ * interface. Its answer is returned by the next recvmsg().
+ */
+static ssize_t mock_route_sendmsg(const struct msghdr *msg)
+{
+	char daddr[INET6_ADDRSTRLEN] = "", saddr[INET6_ADDRSTRLEN] = "";
+	char payload[2 * INET6_ADDRSTRLEN];
+	struct ipc_response resp;
+	struct nlmsghdr *nlh;
+	struct rtmsg *rtm;
+	struct rtattr *rta;
+	char *ifname;
+	int attrlen, ipc_fd;
+	size_t len;
+
+	if (!msg->msg_iovlen ||
+	    msg->msg_iov[0].iov_len < NLMSG_LENGTH(sizeof(*rtm))) {
+		errno = EINVAL;
+		return -1;
+	}
+
+	nlh = msg->msg_iov[0].iov_base;
+	if (nlh->nlmsg_type != RTM_GETROUTE ||
+	    nlh->nlmsg_len > msg->msg_iov[0].iov_len) {
+		errno = EOPNOTSUPP;
+		return -1;
+	}
+
+	rtm = NLMSG_DATA(nlh);
+	rta = RTM_RTA(rtm);
+	attrlen = RTM_PAYLOAD(nlh);
+	for (; RTA_OK(rta, attrlen); rta = RTA_NEXT(rta, attrlen)) {
+		if (rta->rta_type == RTA_DST)
+			rtattr_addr_to_str(rta, rtm->rtm_family, daddr,
+					   sizeof(daddr));
+		else if (rta->rta_type == RTA_SRC)
+			rtattr_addr_to_str(rta, rtm->rtm_family, saddr,
+					   sizeof(saddr));
+	}
+
+	mock_dbg("route lookup intercepted, daddr '%s', saddr '%s'\n",
+		 daddr, saddr);
+
+	mock_route_reply.req = *nlh;
+	mock_route_reply.family = rtm->rtm_family;
+	mock_route_reply.error = 0;
+	mock_route_reply.pending = true;
+
+	ipc_fd = connect_ipc_socket();
+	if (ipc_fd < 0) {
+		mock_route_reply.error = EIO;
+		return nlh->nlmsg_len;
+	}
+
+	len = strlen(daddr) + 1;
+	memcpy(payload, daddr, len);
+	memcpy(payload + len, saddr, strlen(saddr));
+	len += strlen(saddr);
+
+	struct ipc_request req = {
+		.type = IPC_TYPE_ROUTE,
+		.data_len = len,
+	};
+
+	ifname = ipc_call(ipc_fd, &req, payload, &resp);
+	orig_close(ipc_fd);
+
+	if (resp.status == -1) {
+		mock_route_reply.error = resp.errno_val;
+	} else if (!ifname || !resp.data_len ||
+		   resp.data_len >= sizeof(mock_ifname)) {
+		mock_route_reply.error = EIO;
+	} else {
+		memcpy(mock_ifname, ifname, resp.data_len);
+		mock_ifname[resp.data_len] = '\0';
+	}
+	free(ifname);
+
+	return nlh->nlmsg_len;
+}
+
+/*
+ * Build the kernel's answer to the pending RTM_GETROUTE request: an
+ * RTM_NEWROUTE with the egress interface in RTA_OIF, or an NLMSG_ERROR.
+ */
+static ssize_t mock_route_recvmsg(struct msghdr *msg)
+{
+	struct nlmsghdr *nlh;
+	size_t len;
+
+	if (!mock_route_reply.pending) {
+		errno = EAGAIN;
+		return -1;
+	}
+	mock_route_reply.pending = false;
+
+	if (mock_route_reply.error)
+		len = NLMSG_LENGTH(sizeof(struct nlmsgerr));
+	else
+		len = NLMSG_LENGTH(sizeof(struct rtmsg)) +
+		      RTA_SPACE(sizeof(int));
+
+	if (!msg->msg_iovlen || msg->msg_iov[0].iov_len < len) {
+		errno = ENOBUFS;
+		return -1;
+	}
+
+	nlh = msg->msg_iov[0].iov_base;
+	memset(nlh, 0, len);
+	nlh->nlmsg_len = len;
+	nlh->nlmsg_seq = mock_route_reply.req.nlmsg_seq;
+
+	if (mock_route_reply.error) {
+		struct nlmsgerr *err = NLMSG_DATA(nlh);
+
+		nlh->nlmsg_type = NLMSG_ERROR;
+		err->error = -mock_route_reply.error;
+		err->msg = mock_route_reply.req;
+	} else {
+		struct rtmsg *rtm = NLMSG_DATA(nlh);
+		struct rtattr *rta = RTM_RTA(rtm);
+		int ifindex = MOCK_IFINDEX;
+
+		nlh->nlmsg_type = RTM_NEWROUTE;
+		rtm->rtm_family = mock_route_reply.family;
+		rta->rta_type = RTA_OIF;
+		rta->rta_len = RTA_LENGTH(sizeof(ifindex));
+		memcpy(RTA_DATA(rta), &ifindex, sizeof(ifindex));
+	}
+
+	return len;
+}
+
+ssize_t sendmsg(int fd, const struct msghdr *msg, int flags)
+{
+	init_orig_functions();
+
+	if (fd == mock_netlink_fd)
+		return mock_route_sendmsg(msg);
+
+	return orig_sendmsg(fd, msg, flags);
+}
+
+ssize_t __sendmsg64(int fd, const struct msghdr *msg, int flags)
+{
+	init_orig_functions();
+
+	if (fd == mock_netlink_fd)
+		return mock_route_sendmsg(msg);
+
+	return orig_sendmsg64(fd, msg, flags);
+}
+
+ssize_t recvmsg(int fd, struct msghdr *msg, int flags)
+{
+	init_orig_functions();
+
+	if (fd == mock_netlink_fd)
+		return mock_route_recvmsg(msg);
+
+	return orig_recvmsg(fd, msg, flags);
+}
+
+ssize_t __recvmsg64(int fd, struct msghdr *msg, int flags)
+{
+	init_orig_functions();
+
+	if (fd == mock_netlink_fd)
+		return mock_route_recvmsg(msg);
+
+	return orig_recvmsg64(fd, msg, flags);
+}
+
+char *if_indextoname(unsigned int ifindex, char ifname[IF_NAMESIZE])
+{
+	init_orig_functions();
+
+	if (ifindex != MOCK_IFINDEX || !mock_ifname[0])
+		return orig_if_indextoname(ifindex, ifname);
+
+	memcpy(ifname, mock_ifname, sizeof(mock_ifname));
+
+	return ifname;
+}
+
+/*
+ * Ask the IPC server for the number of online CPUs. Without an IPC
+ * server, or if it doesn't set one, fall back to the real get_nprocs().
+ */
+int get_nprocs(void)
+{
+	struct ipc_response resp;
+	void *resp_data;
+	int ipc_fd;
+
+	init_orig_functions();
+
+	ipc_fd = connect_ipc_socket();
+	if (ipc_fd < 0)
+		return orig_get_nprocs();
+
+	struct ipc_request req = {
+		.type = IPC_TYPE_NPROCS,
+	};
+
+	resp_data = ipc_call(ipc_fd, &req, NULL, &resp);
+	orig_close(ipc_fd);
+	free(resp_data);
+
+	if (resp.status == -1)
+		return orig_get_nprocs();
+
+	return resp.result;
 }

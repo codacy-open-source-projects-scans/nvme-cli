@@ -48,10 +48,10 @@ _OPC_IDENTIFY = 0x06
 _OPC_IO_MGMT_RECV = 0x12
 _OPC_RESV_REPORT = 0x0e
 _OPC_DIR_RECV = 0x1a
+_DIR_STREAMS_PARAM = 0x0101      # directive type 1, operation 1
 _DIR_STREAMS_STATUS = 0x0102     # directive type 1, operation 2
-_OPC_GET_FEATURES = 0x0a
-_FID_FDP_EVENTS = 0x1e
 _LID_PERSISTENT_EVENT = 0x0d
+_LID_MEDIA_UNIT_STATUS = 0x10
 _LID_SUPPORTED_CAP_CONFIG = 0x11
 _CNS_CTRL = 0x01
 _NVME_IOCTL_ID = 0x40
@@ -68,7 +68,7 @@ _FIXUPS = {
     0x0c: [('<H', 8, 1), ('<I', 20, 2)],        # ANA: ngrps, nnsids
     0x0d: [('<I', 4, 0), ('<Q', 8, None)],      # persistent event: tnev, tll
     0x0e: [('<I', 0, 16), ('<I', 4, 0)],        # LBA status: lslplen, nlslne
-    0x10: [('<H', 0, 0)],                       # media unit status: nmu
+    0x10: [('<H', 0, 2)],                       # media unit status: nmu
     0x11: [('<B', 0, 1), ('<H', 20, 1),         # capacity config: sccn,
            ('<H', 128, 1), ('<H', 132, 1),      # egcn, egsets, egchans,
            ('<H', 136, 1), ('<H', 144, 0)],     # chmus, mudl
@@ -77,13 +77,11 @@ _FIXUPS = {
     0x20: [('<H', 0, 0), ('<I', 4, 88),         # FDP configs: n, size,
            ('<H', 16, 72), ('<H', 24, 2)],      # config size, nruh
     0x21: [('<H', 0, 2)],                       # FDP RUH usage: nruh
-    0x23: [('<I', 0, 2)],                       # FDP events: n
     0x1b: [('<H', 8, 0)],                       # reachability assoc.: nrad
     0x25: [('<I', 4, None), ('<H', 12, 0)],     # power measurement: sze, nphd
     0x71: [('<Q', 8, 0), ('<I', 20, 1024)],     # host discovery: numrec, thdlpl
     0x72: [('<Q', 8, 0), ('<I', 20, 1024)],     # AVE discovery: numrec, tadlpl
     0x73: [('<I', 4, 8)],                       # pull model DDC: tpdrpl
-    0xbf: [('<H', 0, 2)],                       # changed zones: nrzid
 }
 
 
@@ -101,6 +99,8 @@ class PrintMockIPCServer(MockIPCServer):
         self.seed = 0
         self.header_len = {}
         self.logs = {}
+        self.id_ctrl = {}
+        self.dir_data = {}
 
     def handle_ioctl(self, conn, fd, request, opcode, nsid,
                      cdw10, cdw11, cdw12, cdw13, cdw14, cdw15, lpo, req_len):
@@ -120,15 +120,17 @@ class PrintMockIPCServer(MockIPCServer):
         elif opcode == _OPC_IDENTIFY and cdw10 & 0xff == _CNS_CTRL:
             for fmt, offset, value in _ID_CTRL_FIXUPS:
                 _put(buf, fmt, offset, value)
+            for offset, value in self.id_ctrl.items():
+                buf[offset:offset + len(value)] = value
         elif opcode == _OPC_IO_MGMT_RECV:
             _put(buf, '<H', 14, 2)      # reclaim unit handle status: nruhsd
         elif opcode == _OPC_RESV_REPORT:
             _put(buf, '<H', 5, 2)       # number of registered controllers
+        elif opcode == _OPC_DIR_RECV and cdw11 & 0xffff in self.dir_data:
+            buf = bytearray(self.dir_data[cdw11 & 0xffff].ljust(req_len, b'\0'))
         elif (opcode == _OPC_DIR_RECV and
               cdw11 & 0xffff == _DIR_STREAMS_STATUS):
             _put(buf, '<H', 0, 2)       # open stream count
-        elif opcode == _OPC_GET_FEATURES and cdw10 & 0xff == _FID_FDP_EVENTS:
-            result &= 0xff  # bits 31:8 are reserved
 
         self.send_response(conn, 0, result=result, payload=bytes(buf))
 
@@ -200,6 +202,9 @@ class PrintCLITest(unittest.TestCase):
         self.server.shutdown()
         self.server.join()
         shutil.rmtree(self.tmp_dir, ignore_errors=True)
+        if self.server.errors:
+            self.fail('the mock server failed:\n' +
+                      ''.join(self.server.errors))
 
     def _run_all(self, commands):
         for seed in _SEEDS:
@@ -214,6 +219,9 @@ class PrintCLITest(unittest.TestCase):
         result = run_nvme(_NVME_BIN, self.env, self.sysfs_dir,
                           self.base_dir, *args,
                           encoding=None if binary else 'utf-8')
+        errors, self.server.errors = self.server.errors, []
+        if errors:
+            self.fail('the mock server failed:\n' + ''.join(errors))
         # A signal or a sanitizer abort, not an NVMe error status.
         self.assertGreaterEqual(result.returncode, 0)
         self.assertLess(result.returncode, 128)
@@ -269,6 +277,106 @@ class PrintCLITest(unittest.TestCase):
 
         for fmt in _FORMATS:
             self._run(['log', 'persistent-event', self.CTRL] + fmt)
+
+    def test_id_ctrl_strings(self):
+        # A '%' in a device string is not a format directive.
+        mn = '%s%s%s%s%s%s%s%s'
+        self.server.id_ctrl[24] = mn.encode().ljust(40)
+        result = run_nvme(_NVME_BIN, self.env, self.sysfs_dir, self.base_dir,
+                          'id-ctrl', self.CTRL)
+        self.assertEqual(result.returncode, 0)
+        self.assertIn(mn, result.stdout)
+
+        if not _HAVE_JSON:
+            return
+        result = run_nvme(_NVME_BIN, self.env, self.sysfs_dir, self.base_dir,
+                          'id-ctrl', self.CTRL, '-o', 'json')
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(json.loads(result.stdout)['mn'], mn)
+
+    def test_persistent_event_entries(self):
+        # Three Timestamp Change events. The first one has Vendor Specific
+        # Information, which EL includes. The last one ends at TLL.
+        vsi = b'\xaa' * 4
+        events = b''
+        for i, info in enumerate((vsi, b'', b'')):
+            data = info + struct.pack('<QQ', 0x1000 + i, 0)
+            # etype, etype_rev, ehl, ehai, cntlid, ets, pelpid, vsil, el
+            events += struct.pack('<BBBBHQH4xHH', 0x03, 0, 21, 0, 1, 0, 0,
+                                  len(info), len(data))
+            events += data
+        header = bytearray(512)
+        struct.pack_into('<B3xIQ', header, 0, _LID_PERSISTENT_EVENT, 3,
+                         len(header) + len(events))
+        self.server.logs[_LID_PERSISTENT_EVENT] = bytes(header) + events
+
+        result = run_nvme(_NVME_BIN, self.env, self.sysfs_dir, self.base_dir,
+                          'log', 'persistent-event', self.CTRL)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout.count('Event Number'), 3)
+
+        if not _HAVE_JSON:
+            return
+        result = run_nvme(_NVME_BIN, self.env, self.sysfs_dir, self.base_dir,
+                          'log', 'persistent-event', self.CTRL, '-o', 'json')
+        self.assertEqual(result.returncode, 0)
+        entries = json.loads(result.stdout)['list_of_event_entries']
+        self.assertEqual([e['prev_ts'] for e in entries],
+                         [0x1000, 0x1001, 0x1002])
+
+    def test_persistent_event_vendor_specific(self):
+        # An Event Name with an odd length leaves the next descriptor
+        # and its signed integer unaligned.
+        descs = (struct.pack('<HBBH', 0x10, 1, 0, 3) + b'abc' +
+                 struct.pack('<HBBHq', 0x11, 4, 0, 8, -2))
+        # etype, etype_rev, ehl, ehai, cntlid, ets, pelpid, vsil, el
+        events = struct.pack('<BBBBHQH4xHH', 0xde, 0, 21, 0, 1, 0, 0, 0,
+                             len(descs)) + descs
+        header = bytearray(512)
+        struct.pack_into('<B3xIQ', header, 0, _LID_PERSISTENT_EVENT, 1,
+                         len(header) + len(events))
+        self.server.logs[_LID_PERSISTENT_EVENT] = bytes(header) + events
+
+        result = run_nvme(_NVME_BIN, self.env, self.sysfs_dir, self.base_dir,
+                          'log', 'persistent-event', self.CTRL)
+        self.assertEqual(result.returncode, 0)
+        self.assertRegex(result.stdout, r'Signed Integer Data\s*:?\s*-2\b')
+
+        if not _HAVE_JSON:
+            return
+        result = run_nvme(_NVME_BIN, self.env, self.sysfs_dir, self.base_dir,
+                          'log', 'persistent-event', self.CTRL, '-o', 'json')
+        self.assertEqual(result.returncode, 0)
+        self.assertIn('"signed_integer_data":-2', result.stdout.replace(' ', ''))
+
+    def test_streams_directive(self):
+        # msl, nssa, nsso, nssc, sws, sgs, nsa, nso
+        self.server.dir_data[_DIR_STREAMS_PARAM] = struct.pack(
+            '<HHHB9xIHHH6x', 1, 2, 3, 4, 0x10005, 6, 7, 8)
+        # osc, sid[]
+        self.server.dir_data[_DIR_STREAMS_STATUS] = struct.pack(
+            '<4H', 3, 11, 12, 13)
+        params = [1, 2, 3, 4, 0x10005, 6, 7, 8]
+        status = [3, 11, 12, 13]
+
+        def values(oper, *fmt):
+            result = run_nvme(_NVME_BIN, self.env, self.sysfs_dir,
+                              self.base_dir, 'dir', 'receive', self.NS,
+                              '-D', '1', '-O', oper, '-l', '64', '-v', *fmt)
+            self.assertEqual(result.returncode, 0)
+            if fmt:
+                obj = json.loads(result.stdout)
+                return [v for k, v in obj.items() if '(' in k or 'Stream' in k]
+            return [int(line.split(':')[1]) for line in
+                    result.stdout.splitlines()[1:] if ':' in line]
+
+        self.assertEqual(values('1'), params)
+        self.assertEqual(values('2'), status)
+
+        if not _HAVE_JSON:
+            return
+        self.assertEqual(values('1', '-o', 'json'), params)
+        self.assertEqual(values('2', '-o', 'json'), status)
 
     def test_supported_cap_config(self):
         def media_units(*muids):
@@ -326,6 +434,47 @@ class PrintCLITest(unittest.TestCase):
         chans = caps[0]['Endurance Descriptor'][0]['Channel Descriptor']
         self.assertEqual(len(chans), 1000)
         self.assertEqual(chans[999]['Media Descriptor'][0]['muid'], 999)
+
+    def test_media_unit_stat(self):
+        def desc(muid, cio, chans):
+            return (struct.pack('<5H4B', muid, 0, 1, 1, 0, 90, 5,
+                                len(chans), cio).ljust(cio, b'\0') +
+                    b''.join(struct.pack('<H', c) for c in chans))
+
+        def media_units(log):
+            self.server.logs[_LID_MEDIA_UNIT_STATUS] = log
+            result = run_nvme(_NVME_BIN, self.env, self.sysfs_dir,
+                              self.base_dir, 'log', 'media-unit-stat',
+                              self.CTRL, '-o', 'json')
+            self.assertEqual(result.returncode, 0)
+            return json.loads(result.stdout)['mus_list']
+
+        log = (struct.pack('<3H10x', 3, 4, 1) + desc(0, 16, [0, 1]) +
+               desc(1, 32, []) + desc(2, 16, [2, 3, 1]))
+        self.server.logs[_LID_MEDIA_UNIT_STATUS] = log
+
+        for fmt in _FORMATS:
+            self._run(['log', 'media-unit-stat', self.CTRL] + fmt)
+
+        # The checks below read the JSON output.
+        if not _HAVE_JSON:
+            return
+
+        mus = media_units(log)
+        self.assertEqual([m['muid'] for m in mus], [0, 1, 2])
+        self.assertEqual([[c['chanid'] for c in m['chanids']] for m in mus],
+                         [[0, 1], [], [2, 3, 1]])
+
+        # Longer than the first read of 4 KiB.
+        mus = media_units(struct.pack('<H14x', 300) +
+                          b''.join(desc(m, 16, range(8)) for m in range(300)))
+        self.assertEqual(len(mus), 300)
+        self.assertEqual(mus[299]['muid'], 299)
+
+        # A CIO inside the descriptor header ends the list.
+        mus = media_units(struct.pack('<H14x', 3) + desc(0, 16, [0]) +
+                          desc(1, 8, []) + desc(2, 16, []))
+        self.assertEqual([m['muid'] for m in mus], [0])
 
     def test_get_feature(self):
         self._run_all([['get-feature', self.CTRL, '-f', str(fid)]

@@ -1057,6 +1057,37 @@ static void merge_config(struct libnvme_ctrl *c,
 	MERGE_CFG_OPTION(&c->cfg, cfg, concat, false);
 }
 
+/*
+ * Like merge_config(): fill in only what @c does not have. The host and
+ * controller keys are one pair, so a host key on @c keeps fc's
+ * controller key out.
+ */
+static void ctrl_merge_keys(struct libnvme_ctrl *c,
+		const struct libnvme_ctrl *fc)
+{
+	const char *key;
+
+	if (libnvme_ctrl_get_kxchap_host_key(c, &key, NULL) &&
+	    !libnvme_ctrl_get_kxchap_host_key(fc, &key, NULL)) {
+		libnvme_ctrl_set_kxchap_host_key(c, key);
+		if (!libnvme_ctrl_get_kxchap_ctrl_key(fc, &key, NULL))
+			libnvme_ctrl_set_kxchap_ctrl_key(c, key);
+	}
+	if (libnvme_ctrl_get_keyring(c, &key, NULL) &&
+	    !libnvme_ctrl_get_keyring(fc, &key, NULL))
+		libnvme_ctrl_set_keyring(c, key);
+	if (!libnvme_ctrl_get_tls_key_identity(c)) {
+		key = libnvme_ctrl_get_tls_key_identity(fc);
+		if (key)
+			libnvme_ctrl_set_tls_key_identity(c, key);
+	}
+	if (!libnvme_ctrl_get_tls_key(c)) {
+		key = libnvme_ctrl_get_tls_key(fc);
+		if (key)
+			libnvme_ctrl_set_tls_key(c, key);
+	}
+}
+
 #define UPDATE_CFG_OPTION(c, n, o, d)			\
 	if ((n)->o != d) (c)->o = (n)->o
 static void update_config(struct libnvme_ctrl *c,
@@ -1459,9 +1490,9 @@ static int build_options(struct libnvme_host *h, struct libnvme_ctrl *c, char **
 
 	hostnqn = libnvme_host_get_hostnqn(h);
 	hostid = libnvme_host_get_hostid(h);
-	hostkey = libnvme_host_get_kxchap_host_key(h);
+	libnvme_ctrl_get_kxchap_host_key(c, &hostkey, NULL);
 	if (!hostkey)
-		libnvme_ctrl_get_kxchap_host_key(c, &hostkey, NULL);
+		hostkey = libnvme_host_get_kxchap_host_key(h);
 
 	if (hostkey)
 		libnvme_ctrl_get_kxchap_ctrl_key(c, &ctrlkey, NULL);
@@ -1590,13 +1621,54 @@ static int add_kernel_option(struct libnvme_global_ctx *ctx, size_t *count,
 }
 
 /*
+ * Writes @args, unless NULL, to /dev/nvme-fabrics and reads the response
+ * into @buf, which is NUL-terminated.
+ *
+ * Return: the length of the response or a negative errno. On failure,
+ * @step is the step which failed.
+ */
+static ssize_t nvmf_dev_xfer(struct libnvme_global_ctx *ctx,
+		const char *args, char *buf, size_t size,
+		enum libnvmf_dev_step *step)
+{
+	__cleanup_fd int fd = -1;
+	ssize_t len;
+
+	if (ctx->privsep)
+		return __libnvme_privsep_fabrics(ctx->privsep, args, buf, size,
+						 step);
+
+	*step = LIBNVMF_DEV_OPEN;
+	fd = open(nvmf_dev, args ? O_RDWR : O_RDONLY);
+	if (fd < 0)
+		return -errno;
+
+	if (args) {
+		*step = LIBNVMF_DEV_WRITE;
+		len = write(fd, args, strlen(args));
+		if (len < 0)
+			return -errno;
+		if ((size_t)len != strlen(args))
+			return -EIO;
+	}
+
+	*step = LIBNVMF_DEV_READ;
+	len = read(fd, buf, size - 1);
+	if (len < 0)
+		return -errno;
+	buf[len] = '\0';
+
+	return len;
+}
+
+/*
  * Read the options the kernel accepts from /dev/nvme-fabrics, once per
  * @ctx. A failed read is not cached, so the next call retries it.
  */
 static int __nvmf_supported_options(struct libnvme_global_ctx *ctx)
 {
 	char buf[0x1000], *options, *p, *v;
-	__cleanup_fd int fd = -1;
+	enum libnvmf_dev_step step;
 	size_t count = 0;
 	ssize_t len;
 	int err;
@@ -1608,18 +1680,16 @@ static int __nvmf_supported_options(struct libnvme_global_ctx *ctx)
 	if (!ctx->options)
 		return -ENOMEM;
 
-	fd = open(nvmf_dev, O_RDONLY);
-	if (fd < 0) {
+	len = nvmf_dev_xfer(ctx, NULL, buf, sizeof(buf), &step);
+	if (len < 0 && step == LIBNVMF_DEV_OPEN) {
 		libnvme_msg(ctx, LIBNVME_LOG_ERR, "Failed to open %s: %s\n",
-			 nvmf_dev, libnvme_strerror(errno));
+			 nvmf_dev, libnvme_strerror(-len));
 		err = -ENVME_CONNECT_OPEN;
 		goto out_free;
 	}
 
-	memset(buf, 0x0, sizeof(buf));
-	len = read(fd, buf, sizeof(buf) - 1);
 	if (len < 0) {
-		if (errno == EINVAL) {
+		if (len == -EINVAL) {
 			/*
 			 * Older Linux kernels don't allow reading from nvmf_dev
 			 * to get supported options, so use a default set
@@ -1632,20 +1702,19 @@ static int __nvmf_supported_options(struct libnvme_global_ctx *ctx)
 		}
 
 		libnvme_msg(ctx, LIBNVME_LOG_ERR, "Failed to read from %s: %s\n",
-			 nvmf_dev, libnvme_strerror(errno));
+			 nvmf_dev, libnvme_strerror(-len));
 		err = -ENVME_CONNECT_READ;
 		goto out_free;
 	}
 
-	buf[len] = '\0';
 	options = buf;
 
 	libnvme_msg(ctx, LIBNVME_LOG_DEBUG, "kernel supports: ");
 
-	while ((p = strsep(&options, ",\n")) != NULL) {
+	while ((p = shr_strsep(&options, ",\n")) != NULL) {
 		if (!*p)
 			continue;
-		v = strsep(&p, "= ");
+		v = shr_strsep(&p, "= ");
 		if (!v)
 			continue;
 		libnvme_msg(ctx, LIBNVME_LOG_DEBUG, "%s ", v);
@@ -1837,25 +1906,29 @@ static void registry_update_on_connect(struct libnvme_global_ctx *ctx,
 
 static int __nvmf_add_ctrl(struct libnvme_global_ctx *ctx, const char *argstr)
 {
-	__cleanup_fd int fd = -1;
-	int ret, len = strlen(argstr);
-	int instance;
 	char buf[0x1000], *options, *p;
+	enum libnvmf_dev_step step;
+	ssize_t len;
+	int instance;
 
-	fd = open(nvmf_dev, O_RDWR);
-	if (fd < 0) {
+	libnvme_msg(ctx, LIBNVME_LOG_DEBUG, "connect ctrl, '%.*s'\n",
+		 (int)strcspn(argstr, "\n"), argstr);
+	if (ctx->dry_run) {
+		libnvme_msg(ctx, LIBNVME_LOG_DEBUG,
+			    "dry-run: connect skipped\n");
+		return -ENVME_CONNECT_DRY_RUN;
+	}
+	len = nvmf_dev_xfer(ctx, argstr, buf, sizeof(buf), &step);
+	if (len < 0 && step == LIBNVMF_DEV_OPEN) {
 		libnvme_msg(ctx, LIBNVME_LOG_ERR, "Failed to open %s: %s\n",
-			 nvmf_dev, libnvme_strerror(errno));
+			 nvmf_dev, libnvme_strerror(-len));
 		return -ENVME_CONNECT_OPEN;
 	}
 
-	libnvme_msg(ctx, LIBNVME_LOG_DEBUG, "connect ctrl, '%.*s'\n",
-		 (int)strcspn(argstr,"\n"), argstr);
-	ret = write(fd, argstr, len);
-	if (ret != len) {
+	if (len < 0 && step == LIBNVMF_DEV_WRITE) {
 		libnvme_msg(ctx, LIBNVME_LOG_INFO, "Failed to write to %s: %s\n",
-			 nvmf_dev, libnvme_strerror(errno));
-		switch (errno) {
+			 nvmf_dev, libnvme_strerror(-len));
+		switch (-len) {
 		case EALREADY:
 			return -ENVME_CONNECT_ALREADY;
 		case EINVAL:
@@ -1877,18 +1950,15 @@ static int __nvmf_add_ctrl(struct libnvme_global_ctx *ctx, const char *argstr)
 		}
 	}
 
-	memset(buf, 0x0, sizeof(buf));
-	len = read(fd, buf, sizeof(buf) - 1);
 	if (len < 0) {
 		libnvme_msg(ctx, LIBNVME_LOG_ERR, "Failed to read from %s: %s\n",
-			 nvmf_dev, libnvme_strerror(errno));
+			 nvmf_dev, libnvme_strerror(-len));
 		return -ENVME_CONNECT_READ;
 	}
 	libnvme_msg(ctx, LIBNVME_LOG_DEBUG, "connect ctrl, response '%.*s'\n",
 		 (int)strcspn(buf, "\n"), buf);
-	buf[len] = '\0';
 	options = buf;
-	while ((p = strsep(&options, ",\n")) != NULL) {
+	while ((p = shr_strsep(&options, ",\n")) != NULL) {
 		if (!*p)
 			continue;
 		if (sscanf(p, "instance=%d", &instance) == 1) {
@@ -1993,28 +2063,8 @@ __shr_public int libnvmf_add_ctrl(struct libnvme_host *h, struct libnvme_ctrl *c
 
 		fc = libnvme_ctrl_find(s, &params, NULL);
 		if (fc) {
-			const char *key;
-
 			merge_config(c, &fc->cfg);
-			/*
-			 * An authentication key might already been set
-			 * in @cfg, so ensure to update @c with the correct
-			 * controller key.
-			 */
-			if (libnvme_ctrl_get_kxchap_host_key(fc, &key,
-							      NULL) == 0)
-				libnvme_ctrl_set_kxchap_host_key(c, key);
-			if (libnvme_ctrl_get_kxchap_ctrl_key(fc, &key,
-							      NULL) == 0)
-				libnvme_ctrl_set_kxchap_ctrl_key(c, key);
-			if (libnvme_ctrl_get_keyring(fc, &key, NULL) == 0)
-				libnvme_ctrl_set_keyring(c, key);
-			key = libnvme_ctrl_get_tls_key_identity(fc);
-			if (key)
-				libnvme_ctrl_set_tls_key_identity(c, key);
-			key = libnvme_ctrl_get_tls_key(fc);
-			if (key)
-				libnvme_ctrl_set_tls_key(c, key);
+			ctrl_merge_keys(c, fc);
 		}
 
 	}
@@ -2062,11 +2112,20 @@ __shr_public int libnvmf_disconnect_ctrl(struct libnvme_ctrl *c)
 	struct libnvme_global_ctx *ctx = c->s && c->s->h ? c->s->h->ctx : NULL;
 	int ret;
 
-	ret = libnvme_set_attr(libnvme_ctrl_get_sysfs_dir(c),
-			    "delete_controller", "1");
+	if (ctx && ctx->dry_run) {
+		libnvme_msg(ctx, LIBNVME_LOG_DEBUG,
+			    "dry-run: disconnect of %s skipped\n", c->name);
+		return 0;
+	}
+
+	if (ctx && ctx->privsep)
+		ret = __libnvme_privsep_delete_ctrl(ctx->privsep, c->name);
+	else
+		ret = libnvme_set_attr(libnvme_ctrl_get_sysfs_dir(c),
+				       "delete_controller", "1");
 	if (ret < 0) {
 		libnvme_msg(ctx, LIBNVME_LOG_ERR,
-			"%s: failed to disconnect, error %d\n", c->name, errno);
+			"%s: failed to disconnect, error %d\n", c->name, -ret);
 		return ret;
 	}
 	libnvme_msg(ctx, LIBNVME_LOG_INFO, "%s: %s disconnected\n",
@@ -2139,7 +2198,24 @@ static bool nvmf_excluded(struct libnvme_global_ctx *ctx,
 	return excluded;
 }
 
-static int nvmf_connect_disc_entry(struct libnvme_host *h,
+/*
+ * A discovered controller gets the host secret and the keyring of the DC
+ * that reported it. The controller secret and the TLS PSK belong to one
+ * (host, subsystem) pair, so they are not inherited.
+ */
+static void dc_inherit_keys(struct libnvmf_context *fctx,
+		struct libnvme_ctrl *dc, struct libnvme_ctrl *c)
+{
+	const char *key = fctx->hostkey;
+
+	if (key || !libnvme_ctrl_get_kxchap_host_key(dc, &key, NULL))
+		libnvme_ctrl_set_kxchap_host_key(c, key);
+	if (!libnvme_ctrl_get_keyring(dc, &key, NULL))
+		libnvme_ctrl_set_keyring(c, key);
+}
+
+static int nvmf_connect_disc_entry(struct libnvmf_context *fctx,
+		struct libnvme_host *h, struct libnvme_ctrl *dc,
 		struct nvmf_disc_log_entry *e,
 		struct libnvme_ctrl_params *params,
 		struct libnvme_ctrl **cp)
@@ -2236,6 +2312,8 @@ static int nvmf_connect_disc_entry(struct libnvme_host *h,
 
 	/* update tls or concat */
 	nvmf_update_tls_concat(e, c, h);
+
+	dc_inherit_keys(fctx, dc, c);
 
 	ret = libnvmf_add_ctrl(h, c);
 	if (!ret) {
@@ -3021,12 +3099,8 @@ __shr_public int libnvmf_get_owner_from_fctx(struct libnvme_global_ctx *ctx,
 	return ret;
 }
 
-static int setup_connection(struct libnvmf_context *fctx, struct libnvme_host *h,
-		bool discovery)
+static int setup_connection(struct libnvmf_context *fctx, bool discovery)
 {
-	if (fctx->hostkey)
-		libnvme_host_set_kxchap_host_key(h, fctx->hostkey);
-
 	if (!fctx->ctrl_params.trsvcid)
 		fctx->ctrl_params.trsvcid =
 			libnvmf_get_default_trsvcid(fctx->ctrl_params.transport,
@@ -3242,7 +3316,7 @@ static inline void free_libnvmf_tid(struct libnvmf_tid **tid)
  */
 static void dc_connect_leaf_entry(struct libnvme_global_ctx *ctx,
 		struct libnvmf_context *fctx, struct libnvme_host *h,
-		struct nvmf_disc_log_entry *e,
+		struct libnvme_ctrl *dc, struct nvmf_disc_log_entry *e,
 		struct libnvme_ctrl_params *params)
 {
 	struct dc_decision d = { 0 };
@@ -3261,7 +3335,7 @@ static void dc_connect_leaf_entry(struct libnvme_global_ctx *ctx,
 		 */
 		err = fctx->hooks.connect_leaf(ctx, fctx, h, e, params, &d.c);
 	} else {
-		err = nvmf_connect_disc_entry(h, e, params, &d.c);
+		err = nvmf_connect_disc_entry(fctx, h, dc, e, params, &d.c);
 		if (d.c && fctx->hooks.connected)
 			fctx->hooks.connected(fctx, d.c, fctx->hooks.user_data);
 	}
@@ -3288,7 +3362,7 @@ static int _nvmf_discover(struct libnvme_global_ctx *ctx,
  */
 static void dc_walk_referral(struct libnvme_global_ctx *ctx,
 		struct libnvmf_context *fctx, struct libnvme_host *h,
-		struct nvmf_disc_log_entry *e,
+		struct libnvme_ctrl *dc, struct nvmf_disc_log_entry *e,
 		struct libnvme_ctrl_params *params, int depth,
 		struct dc_visited *visited, __u16 eflags)
 {
@@ -3326,7 +3400,7 @@ static void dc_walk_referral(struct libnvme_global_ctx *ctx,
 	} else {
 		/* params also serves as the child DC's entries' parent. */
 		tmo = set_discovery_kato(fctx, params);
-		err = nvmf_connect_disc_entry(h, e, params, &d.c);
+		err = nvmf_connect_disc_entry(fctx, h, dc, e, params, &d.c);
 		params->cfg.keep_alive_tmo = tmo;
 		if (!d.c) {
 			if (err == -ENVME_CONNECT_ALREADY)
@@ -3592,12 +3666,12 @@ static int _nvmf_discover(struct libnvme_global_ctx *ctx,
 		eflags = le16_to_cpu(e->eflags);
 
 		if (e->subtype == NVME_NQN_NVME) {
-			dc_connect_leaf_entry(ctx, fctx, h, e, &params);
+			dc_connect_leaf_entry(ctx, fctx, h, c, e, &params);
 			continue;
 		}
 
 		/* NVME_NQN_DISC: a referral to another Discovery Service. */
-		dc_walk_referral(ctx, fctx, h, e, &params, depth, visited,
+		dc_walk_referral(ctx, fctx, h, c, e, &params, depth, visited,
 				  eflags);
 	}
 
@@ -3679,9 +3753,13 @@ static int __create_discovery_ctrl(struct libnvme_global_ctx *ctx,
 	libnvme_ctrl_set_unique_discovery_ctrl(c,
 		strcmp(params->subsysnqn, NVME_DISC_SUBSYS_NAME));
 
-	if (libnvme_ctrl_get_unique_discovery_ctrl(c) && fctx->hostkey) {
+	/*
+	 * TP8017: no bidirectional authentication with the well-known
+	 * discovery NQN.
+	 */
+	if (fctx->hostkey) {
 		libnvme_ctrl_set_kxchap_host_key(c, fctx->hostkey);
-		if (fctx->ctrlkey)
+		if (fctx->ctrlkey && libnvme_ctrl_get_unique_discovery_ctrl(c))
 			libnvme_ctrl_set_kxchap_ctrl_key(c, fctx->ctrlkey);
 	}
 
@@ -4226,7 +4304,7 @@ __shr_public int libnvmf_discover_nbft(struct libnvme_global_ctx *ctx,
 	if (ret)
 		return ret;
 
-	ret = setup_connection(fctx, h, false);
+	ret = setup_connection(fctx, false);
 	if (ret)
 		return ret;
 
@@ -4470,13 +4548,14 @@ __shr_public int libnvmf_discover(struct libnvme_global_ctx *ctx,
 	if (err)
 		return err;
 
-	err = setup_connection(fctx, h, true);
+	err = setup_connection(fctx, true);
 	if (err)
 		return err;
 
 	err = dc_open(ctx, fctx, h, &fctx->ctrl_params, true, &own, &c);
 	if (err) {
-		if (err != -ENVME_CONNECT_IGNORED)
+		if (err != -ENVME_CONNECT_IGNORED &&
+		    err != -ENVME_CONNECT_DRY_RUN)
 			libnvme_msg(ctx, LIBNVME_LOG_ERR,
 				"failed to add controller, error %s\n",
 				libnvme_strerror(-err));
@@ -4508,7 +4587,7 @@ __shr_public int libnvmf_connect(
 	if (err)
 		return err;
 
-	err = setup_connection(fctx, h, false);
+	err = setup_connection(fctx, false);
 	if (err)
 		return err;
 
@@ -4562,7 +4641,7 @@ __shr_public int libnvmf_connect(
 					fctx->ctrl_params.traddr,
 					fctx->ctrl_params.trsvcid,
 					fctx->hooks.user_data);
-		} else {
+		} else if (err != -ENVME_CONNECT_DRY_RUN) {
 			libnvme_msg(ctx, LIBNVME_LOG_ERR, "could not add new controller: %s\n",
 				libnvme_strerror(-err));
 		}
